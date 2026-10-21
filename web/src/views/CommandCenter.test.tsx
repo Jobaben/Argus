@@ -1,12 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import type { OverviewEntry, InstanceStatus, PhaseStatus, PhaseReview } from "../types";
+import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import type {
+  AttentionItem,
+  OverviewEntry,
+  InstanceStatus,
+  PhaseStatus,
+  PhaseReview,
+} from "../types";
 import type { MachineFacetState } from "../fleet/useMachineFacet";
 import CommandCenter from "./CommandCenter";
+import { UNREACHABLE } from "../live/loadError";
 
 const approve = vi.fn(() => new Promise<Response>(() => {})); // never resolves: lets us assert disabled-after-click
 const revise = vi.fn(() => new Promise<Response>(() => {}));
 const abort = vi.fn(() => Promise.resolve(new Response(null, { status: 200 })));
+const refresh = vi.fn(() => Promise.resolve());
 
 const mockAuth: { authenticated: boolean } = { authenticated: true };
 vi.mock("../useAuth", () => ({
@@ -64,7 +72,7 @@ const mockOverview: { overview: OverviewEntry[]; loading: boolean; error: string
 };
 
 vi.mock("../useOverview", () => ({
-  useOverview: () => ({ ...mockOverview, refresh: vi.fn(), approve, revise, abort }),
+  useOverview: () => ({ ...mockOverview, refresh, approve, revise, abort }),
 }));
 
 const mockActivity = new Map<string, { label: string; at: string }>();
@@ -135,6 +143,7 @@ beforeEach(() => {
   approve.mockClear();
   revise.mockClear();
   abort.mockClear();
+  refresh.mockClear();
   mockAuth.authenticated = true;
   resetTotals.mockClear();
   mockOverview.overview = [];
@@ -321,7 +330,7 @@ describe("CommandCenter", () => {
     });
   });
 
-  it("a failed pipeline gets a Review · Revise opener and a drawer without Approve", async () => {
+  it("a failed pipeline gets a Review opener that says what follows, and a drawer without Approve", async () => {
     mockOverview.overview = [entry("auth-refactor", "failed", ["succeeded", "failed"])];
     mockReview.review = review({
       status: "failed",
@@ -329,7 +338,11 @@ describe("CommandCenter", () => {
       payload: { reason: "exit code 1" },
     });
     render(<CommandCenter />);
-    expect(screen.getByTestId("gate-opener")).toHaveTextContent(/review · revise/i);
+    // "Review", as in "Needs you": the revise is decided in the drawer.
+    expect(screen.getByTestId("gate-opener")).toHaveTextContent(/^review$/i);
+    expect(
+      screen.getByText("This phase failed. Review what went wrong, then revise it."),
+    ).toBeInTheDocument();
     const dialog = await openDrawer();
     expect(within(dialog).queryByRole("button", { name: /^approve$/i })).toBeNull();
     expect(within(dialog).getByRole("button", { name: /^revise$/i })).toBeInTheDocument();
@@ -340,7 +353,7 @@ describe("CommandCenter", () => {
     window.location.hash = "#/command/auth-refactor-i1/ph1";
     const first = render(<CommandCenter />);
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /^esc$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^close$/i }));
     expect(window.location.hash).toBe("#/command");
     first.unmount();
 
@@ -407,7 +420,217 @@ describe("CommandCenter", () => {
     expect(screen.getByText("dev")).toBeInTheDocument();
     // one "Failed" pill on the row badge, one on the failed step tile
     expect(screen.getAllByText("Failed")).toHaveLength(2);
-    expect(screen.getByText(/exit code 1/i)).toBeInTheDocument();
+    // The reason is on the failed step's tile — and, once more, on the failure's
+    // line in "Needs you" above the board, which is checked on its own below.
+    const tile = screen.getByRole("button", { name: /^dev/ }).closest("article")!;
+    expect(within(tile).getByText(/exit code 1/i)).toBeInTheDocument();
+  });
+
+  describe("Needs you", () => {
+    it("lists every waiting gate and failure above the board, waiting ones first", () => {
+      mockOverview.overview = [
+        entry("broken", "failed", ["succeeded", "failed"]),
+        entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"]),
+      ];
+      render(<CommandCenter />);
+      const inbox = screen.getByRole("region", { name: /needs you/i });
+      const items = within(inbox).getAllByRole("listitem");
+      expect(items).toHaveLength(2);
+      expect(items[0]).toHaveTextContent("auth-refactor · Phase1");
+      // The words of the card's pill and the strip's chip, for the same state.
+      expect(items[0]).toHaveTextContent(/needs approval/i);
+      expect(items[1]).toHaveTextContent("broken · Phase1");
+      expect(inbox).toHaveTextContent("1 needs approval · 1 failed");
+      expect(within(inbox).getAllByRole("button", { name: "Review" })).toHaveLength(2);
+    });
+
+    it("is not drawn when nothing is waiting", () => {
+      mockOverview.overview = [entry("scheduler-prune", "running", ["succeeded", "running"])];
+      render(<CommandCenter />);
+      expect(screen.queryByRole("region", { name: /needs you/i })).toBeNull();
+    });
+
+    it("opens the same review drawer as the board's opener", async () => {
+      mockOverview.overview = [awaiting()];
+      render(<CommandCenter />);
+      const inbox = screen.getByRole("region", { name: /needs you/i });
+      fireEvent.click(within(inbox).getByRole("button", { name: /^review$/i }));
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: /^approve$/i }));
+      expect(approve).toHaveBeenCalledWith("auth-refactor-i1", { phaseId: "ph1" });
+    });
+
+    it("lists what the Briefing says needs you outside pipelines, minus what the board already shows", () => {
+      const briefingAttention: AttentionItem[] = [
+        {
+          kind: "issue-open",
+          id: "fp-broken",
+          title: "exit code 1",
+          // The same failure as the board's own "broken · Phase1" row.
+          detail: "2× across broken · Phase1",
+          at: "2026-06-30T10:00:00.000Z",
+        },
+        {
+          kind: "anomaly",
+          id: "schedule:s1|cost|r9",
+          title: "Cost report",
+          detail: "4.2× median cost",
+          at: "2026-06-30T09:00:00.000Z",
+        },
+        {
+          kind: "monitor-down",
+          id: "s2",
+          title: "Dependency audit",
+          detail: "expected a run, none arrived",
+          at: null,
+        },
+        {
+          kind: "issue-open",
+          id: "fp-disk",
+          title: "disk full",
+          detail: "3× across Nightly triage",
+          at: null,
+        },
+      ];
+      mockOverview.overview = [entry("broken", "failed", ["succeeded", "failed"])];
+      render(<CommandCenter attention={briefingAttention} />);
+      const inbox = screen.getByRole("region", { name: /needs you/i });
+      // The board's failure, then three from the Briefing — the issue that is
+      // the board's failure again is folded into its row rather than listed.
+      expect(within(inbox).getAllByRole("listitem")).toHaveLength(4);
+      expect(inbox).toHaveTextContent("1 failed · 3 outside pipelines");
+      expect(within(inbox).getByRole("heading", { name: "Outside pipelines" })).toBeInTheDocument();
+
+      const monitor = within(inbox).getByRole("link", { name: "Open monitor" });
+      expect(monitor).toHaveAttribute("href", "#/health");
+      expect(monitor.closest("li")).toHaveTextContent("Dependency audit");
+      expect(monitor.closest("li")).toHaveTextContent("Monitor down · expected a run");
+
+      // An anomaly opens the run it is about, named by the last part of its id.
+      const anomaly = within(inbox).getByRole("link", { name: "Inspect run" });
+      expect(anomaly).toHaveAttribute("href", "#/run/r9");
+      expect(anomaly.closest("li")).toHaveTextContent("Cost report");
+
+      // The one issue left is titled by where it happens.
+      const issues = within(inbox).getAllByRole("link", { name: "Triage issue" });
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toHaveAttribute("href", "#/issues");
+      expect(issues[0].closest("li")).toHaveTextContent("Nightly triage");
+      expect(issues[0].closest("li")).toHaveTextContent("Open issue · Disk full · 3×");
+      expect(within(inbox).queryByText(/exit code 1/)).toBeNull();
+    });
+
+    it("folds a failing monitor's issue into the monitor's row", () => {
+      const briefingAttention: AttentionItem[] = [
+        {
+          kind: "monitor-failing",
+          id: "s2",
+          title: "Dependency audit",
+          detail: "last completed run failed",
+          at: null,
+        },
+        {
+          kind: "issue-open",
+          id: "fp-exit",
+          title: "exit code 1",
+          detail: "3× across Dependency audit",
+          at: null,
+        },
+      ];
+      render(<CommandCenter attention={briefingAttention} />);
+      const inbox = screen.getByRole("region", { name: /needs you/i });
+      // One broken thing, one row: the issue adds what failed and how often.
+      expect(within(inbox).getAllByRole("listitem")).toHaveLength(1);
+      expect(within(inbox).getByRole("listitem")).toHaveTextContent(
+        "Monitor failing · last completed run failed · Exit code 1 · 3×",
+      );
+      expect(within(inbox).queryByRole("link", { name: "Triage issue" })).toBeNull();
+    });
+
+    it("says the list is missing the board's part while the board cannot load", () => {
+      mockOverview.error = "HTTP 500";
+      const briefingAttention: AttentionItem[] = [
+        {
+          kind: "issue-open",
+          id: "fp-broken",
+          title: "exit code 1",
+          detail: "2× across broken · Phase1",
+          at: null,
+        },
+      ];
+      render(<CommandCenter attention={briefingAttention} />);
+      const inbox = screen.getByRole("region", { name: /needs you/i });
+      expect(inbox).toHaveTextContent(
+        "Pipeline gates and failures are missing until the board loads.",
+      );
+      // Without the board, this may well be a pipeline's: not filed as outside one.
+      expect(within(inbox).queryByRole("heading", { name: "Outside pipelines" })).toBeNull();
+      expect(inbox).not.toHaveTextContent(/outside pipelines/i);
+    });
+
+    it("leaves a kind of attention it does not know to the Briefing", () => {
+      const unknown = {
+        kind: "budget-exceeded",
+        id: "b1",
+        title: "Daily limit",
+        detail: "over by $2",
+        at: null,
+      } as unknown as AttentionItem;
+      render(<CommandCenter attention={[unknown]} />);
+      expect(screen.queryByRole("region", { name: /needs you/i })).toBeNull();
+    });
+  });
+
+  describe("a failure reason with an outcome marker", () => {
+    function failedWith(reason: string): OverviewEntry {
+      const e = entry("broken", "failed", ["failed"]);
+      e.latest!.phases[0].steps = [{ name: "dev", runId: "r0", status: "failed" }];
+      e.latest!.phases[0].payload = { reason };
+      return e;
+    }
+
+    it("shows the agent's prose and never the marker line", () => {
+      mockOverview.overview = [
+        failedWith("The api tests are red\nTwo snapshots are stale\nARGUS_OUTCOME: failed tests"),
+      ];
+      render(<CommandCenter />);
+      expect(screen.queryByText(/ARGUS_OUTCOME/)).toBeNull();
+      // One line in "Needs you", the whole of it on the failed step's tile.
+      const inbox = screen.getByRole("region", { name: /needs you/i });
+      expect(within(inbox).getByText("The api tests are red")).toBeInTheDocument();
+      expect(inbox).not.toHaveTextContent(/stale/);
+      const tile = screen.getByRole("button", { name: /^dev/ }).closest("article")!;
+      expect(tile).toHaveTextContent(/The api tests are red\s*Two snapshots are stale/);
+    });
+
+    it("says the marker's reason when the marker is all there is", () => {
+      mockOverview.overview = [failedWith("ARGUS_OUTCOME: blocked the .NET SDK is missing")];
+      render(<CommandCenter />);
+      expect(screen.queryByText(/ARGUS_OUTCOME/)).toBeNull();
+      const inbox = screen.getByRole("region", { name: /needs you/i });
+      expect(within(inbox).getByText("The .NET SDK is missing")).toBeInTheDocument();
+      const tile = screen.getByRole("button", { name: /^dev/ }).closest("article")!;
+      expect(within(tile).getByText("The .NET SDK is missing")).toBeInTheDocument();
+    });
+  });
+
+  // The scheduler stores a reason as `<outcome>: <why>`. The drawers tell it
+  // as a sentence without the verdict the Failed pill already shows; the board
+  // says it the same way, in "Needs you" and on the failed tile alike.
+  it("tells a stored `failed: …` reason as a sentence, without the verdict", () => {
+    const e = entry("broken", "failed", ["failed"]);
+    e.latest!.phases[0].steps = [{ name: "dev", runId: "r0", status: "failed" }];
+    e.latest!.phases[0].payload = {
+      reason: "failed: could not reach advisory database (ETIMEDOUT)",
+    };
+    mockOverview.overview = [e];
+    render(<CommandCenter />);
+    const said = "Could not reach advisory database (ETIMEDOUT)";
+    const inbox = screen.getByRole("region", { name: /needs you/i });
+    expect(within(inbox).getByText(said)).toBeInTheDocument();
+    const tile = screen.getByRole("button", { name: /^dev/ }).closest("article")!;
+    expect(within(tile).getByText(said)).toBeInTheDocument();
+    expect(screen.queryByText(/failed:/i)).toBeNull();
   });
 
   it("surfaces an action error in the drawer and re-enables the gate", async () => {
@@ -448,8 +671,37 @@ describe("CommandCenter", () => {
     mockTotals.totals = null;
     mockOverview.overview = [entry("scheduler-prune", "running", ["running"])];
     render(<CommandCenter />);
-    expect(screen.queryByText("Total spend")).toBeNull();
+    expect(screen.queryByText("Completed runs")).toBeNull();
     expect(screen.queryByText(/run total/)).toBeNull();
+  });
+
+  it("calls the board total what it counts: spend across completed runs", () => {
+    render(<CommandCenter />);
+    expect(screen.getByText("Completed runs")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /reset total/i })).toBeInTheDocument();
+  });
+
+  it("offers no reset when the all-time total is zero", () => {
+    mockTotals.totals = { usd: 0, tokens: 0, since: "2026-07-01T00:00:00.000Z" };
+    render(<CommandCenter />);
+    expect(screen.getByText("Completed runs")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /reset total/i })).toBeNull();
+  });
+
+  it("keeps an open reset confirm until it is answered, even once the total reads zero", () => {
+    const { rerender } = render(<CommandCenter />);
+    fireEvent.click(screen.getByRole("button", { name: /reset total/i }));
+    // Reset from another tab: the figure drops to zero under an open confirm.
+    mockTotals.totals = { usd: 0, tokens: 0, since: "2026-07-02T00:00:00.000Z" };
+    rerender(<CommandCenter />);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("button", { name: /confirm reset/i })).toBeNull();
+    // Answered, so the next completed run brings back the icon, not the confirm.
+    mockTotals.totals = { usd: 0.4, tokens: 1200, since: "2026-07-02T00:00:00.000Z" };
+    rerender(<CommandCenter />);
+    expect(screen.getByRole("button", { name: /reset total/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /confirm reset/i })).toBeNull();
+    expect(resetTotals).not.toHaveBeenCalled();
   });
 
   it("announces attention transitions through the live region", () => {
@@ -478,10 +730,50 @@ describe("CommandCenter", () => {
     expect(screen.getByText(/no pipelines defined yet/i)).toBeInTheDocument();
   });
 
-  it("renders an error banner when the server is unreachable", () => {
-    mockOverview.error = "HTTP 500";
+  it("keeps one primary Launch a task: the empty board's, not the header's too", () => {
+    const primaries = () =>
+      screen
+        .getAllByRole("link", { name: "Launch a task" })
+        .filter((l) => /(^| )bg-ink( |$)/.test(l.className));
+    mockOverview.overview = [];
+    const first = render(<CommandCenter />);
+    expect(screen.getAllByRole("link", { name: "Launch a task" })).toHaveLength(2);
+    expect(primaries()).toHaveLength(1);
+    expect(first.container.querySelector("header")).not.toContainElement(primaries()[0]);
+    first.unmount();
+
+    // With pipelines on the board, the header's is the page's primary again.
+    mockOverview.overview = [entry("pipe", "running", ["running"])];
+    const second = render(<CommandCenter />);
+    expect(primaries()).toHaveLength(1);
+    expect(second.container.querySelector("header")).toContainElement(primaries()[0]);
+  });
+
+  it("says the board failed to load, and why, when the server answered with an error", () => {
+    mockOverview.error = "database is locked";
     render(<CommandCenter />);
-    expect(screen.getByText(/couldn't reach the argus server/i)).toBeInTheDocument();
+    // The server answered: the strip, rail and Live pill are still talking to
+    // it, so "couldn't reach" would be wrong about what happened.
+    expect(screen.getByText("Couldn't load the board: database is locked")).toBeInTheDocument();
+    expect(screen.queryByText(/couldn't reach/i)).toBeNull();
+  });
+
+  it("says the server could not be reached when the request never got an answer", () => {
+    mockOverview.error = UNREACHABLE;
+    render(<CommandCenter />);
+    expect(screen.getByText("Couldn't reach the Argus server")).toBeVisible();
+    expect(screen.getByText(/once argus is reachable/i)).toBeVisible();
+  });
+
+  it("holds the board's place, not the first-run board, while the overview cannot load", () => {
+    mockOverview.error = "HTTP 502";
+    render(<CommandCenter />);
+    // "No pipelines defined yet" under a connection error would tell a
+    // returning operator their pipelines were gone.
+    expect(screen.queryByText(/no pipelines defined yet/i)).toBeNull();
+    expect(screen.getByText("The board didn't load")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refresh).toHaveBeenCalledOnce();
   });
 
   it("shows the current activity line on a running step", () => {
@@ -522,7 +814,9 @@ describe("CommandCenter", () => {
     ];
     mockOverview.overview = [e];
     render(<CommandCenter />);
-    expect(screen.getByText(/04:12/)).toBeInTheDocument();
+    // On the step's own tile (the live rail beside the board runs the same clock).
+    const tile = screen.getByRole("button", { name: /^step-x/ }).closest("article")!;
+    expect(within(tile).getByText(/04:12/)).toBeInTheDocument();
     vi.useRealTimers();
   });
 
@@ -576,6 +870,44 @@ describe("CommandCenter", () => {
     expect(screen.queryByText(/▸/)).not.toBeInTheDocument();
   });
 
+  it("opens the reset confirm on Cancel and hands focus back to the icon", () => {
+    render(<CommandCenter />);
+    const icon = screen.getByRole("button", { name: /reset total/i });
+    fireEvent.click(icon);
+    expect(icon).toHaveAttribute("aria-expanded", "true");
+    // The safe answer has focus, so Enter cannot reset by accident.
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("group", { name: /reset the all-time total/i })).toBeNull();
+    expect(icon).toHaveFocus();
+
+    fireEvent.click(icon);
+    fireEvent.keyDown(screen.getByRole("button", { name: "Cancel" }), { key: "Escape" });
+    expect(screen.queryByRole("button", { name: /confirm reset/i })).toBeNull();
+    expect(icon).toHaveFocus();
+    expect(resetTotals).not.toHaveBeenCalled();
+  });
+
+  it("keeps the confirm open with the reason when the reset fails", async () => {
+    resetTotals.mockImplementationOnce(() => Promise.reject(new Error("HTTP 500")));
+    render(<CommandCenter />);
+    fireEvent.click(screen.getByRole("button", { name: /reset total/i }));
+    fireEvent.click(screen.getByRole("button", { name: /confirm reset/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't reset: HTTP 500");
+    expect(screen.getByRole("button", { name: /confirm reset/i })).toBeInTheDocument();
+  });
+
+  it("shows this machine's total only over this machine's board", () => {
+    mockFacet.peer = {
+      peer: { id: "m2", label: "other box", url: "http://other:7777", status: "ok", error: null },
+      summary: null,
+    } as unknown as MachineFacetState["peer"];
+    mockFacet.soloMode = false;
+    render(<CommandCenter />);
+    expect(screen.queryByText("Completed runs")).toBeNull();
+    expect(screen.queryByRole("button", { name: /reset total/i })).toBeNull();
+  });
+
   it("shows the all-time total and resets only after confirmation", async () => {
     render(<CommandCenter />);
     // The board meter shows the all-time figure from useTotals, not a row sum.
@@ -589,6 +921,21 @@ describe("CommandCenter", () => {
       expect(screen.queryByRole("button", { name: /confirm reset/i })).toBeNull(),
     );
   });
+
+  it("keeps focus on the total once a reset takes it to zero and the icon goes", async () => {
+    const { rerender } = render(<CommandCenter />);
+    fireEvent.click(screen.getByRole("button", { name: /reset total/i }));
+    fireEvent.click(screen.getByRole("button", { name: /confirm reset/i }));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /confirm reset/i })).toBeNull(),
+    );
+    mockTotals.totals = { usd: 0, tokens: 0, since: "2026-07-02T00:00:00.000Z" };
+    rerender(<CommandCenter />);
+    expect(screen.queryByRole("button", { name: /reset total/i })).toBeNull();
+    // Not dropped to the page: the next Tab carries on from the header.
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toHaveTextContent(/completed runs/i);
+  });
 });
 
 it("loads step details on selection and can close and reopen the drawer", async () => {
@@ -599,10 +946,49 @@ it("loads step details on selection and can close and reopen the drawer", async 
   fireEvent.click(opener);
   const dialog = await screen.findByRole("dialog");
   expect(within(dialog).getByText("step-x")).toBeInTheDocument();
-  fireEvent.click(within(dialog).getByRole("button", { name: /^esc$/i }));
+  fireEvent.click(within(dialog).getByRole("button", { name: /^close$/i }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   fireEvent.click(opener);
   expect(await screen.findByRole("dialog")).toHaveTextContent("step-x");
+});
+
+describe("opening a drawer", () => {
+  afterEach(() => {
+    // Unmounted first: the board cancels its idle callback on the way out.
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("fetches both drawers while the browser is idle once there is a board to open them from", async () => {
+    const idle = vi.fn<(cb: IdleRequestCallback) => number>(() => 1);
+    vi.stubGlobal("requestIdleCallback", idle);
+    vi.stubGlobal("cancelIdleCallback", vi.fn());
+    const { rerender } = render(<CommandCenter />);
+    // An empty board has nothing to open a drawer from.
+    expect(idle).not.toHaveBeenCalled();
+    mockOverview.overview = [entry("step-inspection", "running", ["running"])];
+    rerender(<CommandCenter />);
+    expect(idle).toHaveBeenCalledTimes(1);
+    idle.mock.calls[0][0]({ didTimeout: false, timeRemaining: () => 50 });
+    // The open is a transition: the board stays put until the drawer is in.
+    fireEvent.click(screen.getByText("step-x").closest("button")!);
+    expect(await screen.findByRole("dialog")).toHaveTextContent("step-x");
+    fireEvent.click(screen.getByRole("button", { name: /^close$/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("opens the review drawer from the board after a click, and gives focus back on close", async () => {
+    mockOverview.overview = [awaiting()];
+    render(<CommandCenter />);
+    const opener = screen.getByTestId("gate-opener");
+    opener.focus();
+    fireEvent.click(opener);
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("ready for eyes")).toBeInTheDocument();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
 });
 
 describe("an instance whose pipeline was deleted", () => {
@@ -613,13 +999,29 @@ describe("an instance whose pipeline was deleted", () => {
 
   it("is on the board, says so, and an admin can stop it", async () => {
     mockOverview.overview = [orphan()];
-    vi.stubGlobal("confirm", () => true);
     render(<CommandCenter />);
-    expect(screen.getByText("pipeline deleted")).toBeInTheDocument();
+    expect(screen.getByText("Pipeline deleted")).toBeInTheDocument();
     expect(screen.queryByTestId("gate-opener")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    // The Stop and its confirm are a chunk of their own, fetched with the card.
+    fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
+    expect(
+      screen.getByRole("group", { name: "Stop this instance of the deleted pipeline “gone”?" }),
+    ).toHaveAccessibleDescription("In-progress work will be discarded.");
+    expect(abort).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Stop instance" }));
     await waitFor(() => expect(abort).toHaveBeenCalledWith("gone-i1"));
-    vi.unstubAllGlobals();
+  });
+
+  it("asks before stopping, and Keep running leaves the instance alone", async () => {
+    mockOverview.overview = [orphan()];
+    render(<CommandCenter />);
+    const stop = await screen.findByRole("button", { name: "Stop" });
+    fireEvent.click(stop);
+    expect(screen.getByRole("button", { name: "Keep running" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Keep running" }));
+    expect(screen.queryByRole("group", { name: /stop this instance/i })).toBeNull();
+    expect(stop).toHaveFocus();
+    expect(abort).not.toHaveBeenCalled();
   });
 
   it("shows a failed stop under that instance's row only", async () => {
@@ -630,30 +1032,29 @@ describe("an instance whose pipeline was deleted", () => {
       { instance: second, cost: { usd: null, tokens: null } },
     ];
     mockOverview.overview = [e];
-    vi.stubGlobal("confirm", () => true);
     abort.mockRejectedValueOnce(new Error("held"));
     render(<CommandCenter />);
-    const stops = screen.getAllByRole("button", { name: "Stop" });
+    const stops = await screen.findAllByRole("button", { name: "Stop" });
     expect(stops).toHaveLength(2);
     fireEvent.click(stops[1]);
+    fireEvent.click(screen.getByRole("button", { name: "Stop instance" }));
     await waitFor(() => expect(screen.getAllByText("held")).toHaveLength(1));
     expect(abort).toHaveBeenCalledWith("gone-i2");
     expect(stops[1].parentElement).toHaveTextContent("held");
-    vi.unstubAllGlobals();
   });
 
   it("offers no stop control when signed out", () => {
     mockAuth.authenticated = false;
     mockOverview.overview = [orphan()];
     render(<CommandCenter />);
-    expect(screen.getByText("pipeline deleted")).toBeInTheDocument();
+    expect(screen.getByText("Pipeline deleted")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
   });
 
   it("an ordinary pipeline's card has no stop control", () => {
     mockOverview.overview = [awaiting()];
     render(<CommandCenter />);
-    expect(screen.queryByText("pipeline deleted")).toBeNull();
+    expect(screen.queryByText("Pipeline deleted")).toBeNull();
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
   });
 });

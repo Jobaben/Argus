@@ -67,7 +67,7 @@ describe("Issues", () => {
     mockState.issues = [issue()];
     mockState.summary = { open: 1, resolved: 0, ignored: 0 };
     render(<Issues />);
-    expect(screen.getByText("timeout after 42s")).toBeInTheDocument();
+    expect(screen.getByText("Timeout after 42s")).toBeInTheDocument();
     expect(screen.getByText("×7")).toBeInTheDocument();
     expect(screen.getByText("open")).toBeInTheDocument();
     expect(screen.getByText("Nightly triage")).toBeInTheDocument();
@@ -81,21 +81,31 @@ describe("Issues", () => {
     expect(screen.getByRole("button", { name: "Reopen" })).toBeInTheDocument();
   });
 
-  it("clicking Resolve calls triage with the fingerprint", () => {
+  it("clicking Resolve calls triage with the fingerprint", async () => {
     mockState.issues = [issue()];
     render(<Issues />);
-    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+    const button = screen.getByRole("button", { name: "Resolve" });
+    fireEvent.click(button);
     expect(triage).toHaveBeenCalledWith("abcdefabcdefabcd", "resolve");
+    // Available again once the triage settles.
+    await waitFor(() => expect(button).not.toHaveAttribute("aria-disabled"));
   });
 
   it("expanding an issue loads and shows its occurrences", async () => {
     mockState.issues = [issue()];
     render(<Issues />);
-    fireEvent.click(screen.getByRole("button", { name: /timeout after 42s/ }));
+    fireEvent.click(screen.getByRole("button", { name: /timeout after 42s/i }));
     await waitFor(() => {
       expect(loadOccurrences).toHaveBeenCalledWith("abcdefabcdefabcd");
-      expect(screen.getAllByText(/timeout after 42s/).length).toBeGreaterThan(1);
+      // The occurrence keeps the raw line as it was logged, in mono.
+      expect(screen.getByText("timeout after 42s")).toBeInTheDocument();
     });
+  });
+
+  it("starts a server-written title with a capital, as every other title", () => {
+    mockState.issues = [issue({ title: "exit code 1" })];
+    render(<Issues />);
+    expect(screen.getByRole("button", { name: "Exit code 1" })).toBeInTheDocument();
   });
 
   it("surfaces a fetch error", () => {
@@ -112,12 +122,69 @@ describe("Issues", () => {
     ];
     mockState.summary = { open: 1, resolved: 1, ignored: 0 };
     render(<Issues />);
-    expect(screen.getByText("was fixed")).toBeInTheDocument();
+    expect(screen.getByText("Was fixed")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "1 Open" }));
-    expect(screen.queryByText("was fixed")).not.toBeInTheDocument();
-    expect(screen.getByText("still broken")).toBeInTheDocument();
+    expect(screen.queryByText("Was fixed")).not.toBeInTheDocument();
+    expect(screen.getByText("Still broken")).toBeInTheDocument();
     expect(screen.getByText(/Showing 1 open of 2/)).toBeInTheDocument();
+  });
+
+  it("does not badge an open issue, and never colours its count as a status", () => {
+    mockState.issues = [issue(), issue({ fingerprint: "bbbbbbbbbbbbbbbb", state: "resolved" })];
+    mockState.summary = { open: 1, resolved: 1, ignored: 0 };
+    render(<Issues />);
+    // The resolved row is badged; the open one is open by default, said to a
+    // screen reader rather than as one more red pill.
+    expect(screen.getByText("resolved").className).toMatch(/text-ok/);
+    expect(screen.getByText("open").className).toMatch(/sr-only/);
+    for (const count of screen.getAllByText("×7")) {
+      expect(count.className).not.toMatch(/fail/);
+    }
+  });
+
+  it("strips the scheduler's outcome marker from an occurrence's error", async () => {
+    const user = userEvent.setup();
+    loadOccurrences.mockResolvedValueOnce([
+      {
+        runId: "r9",
+        scheduleId: "s1",
+        scheduleName: "Nightly triage",
+        at: "2026-07-10T06:00:00.000Z",
+        status: "failed" as const,
+        outcome: null,
+        error: "could not reach the database\nARGUS_OUTCOME: failed db timeout",
+      },
+    ]);
+    mockState.issues = [issue()];
+    render(<Issues />);
+    await user.click(screen.getByRole("button", { expanded: false }));
+    expect(await screen.findByText("could not reach the database")).toBeInTheDocument();
+    expect(screen.queryByText(/ARGUS_OUTCOME/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the marker's reason when the marker is the whole error", async () => {
+    const user = userEvent.setup();
+    loadOccurrences.mockResolvedValueOnce([
+      {
+        runId: "r9",
+        scheduleId: "s1",
+        scheduleName: "Nightly triage",
+        at: "2026-07-10T06:00:00.000Z",
+        status: "failed" as const,
+        outcome: null,
+        error: "ARGUS_OUTCOME: failed db timeout",
+      },
+    ]);
+    mockState.issues = [issue()];
+    render(<Issues />);
+    await user.click(screen.getByRole("button", { expanded: false }));
+    expect(await screen.findByText("db timeout")).toBeInTheDocument();
+  });
+
+  it("hides the counter row when there is nothing on record", () => {
+    render(<Issues />);
+    expect(screen.queryByRole("region", { name: "Issues by state" })).not.toBeInTheDocument();
   });
 
   it("leaves a zero counter inert", () => {
@@ -154,7 +221,10 @@ describe("Issues — Autopsy integration", () => {
     mockState.issues = [issue()];
     render(<Issues />);
     await user.click(screen.getByRole("button", { expanded: false }));
-    const link = await screen.findByRole("link", { name: /replay/i });
+    // "Open run", not "Replay": the link opens the recording, and "Replay" on
+    // a failure read as "run it again".
+    const link = await screen.findByRole("link", { name: /open run/i });
     expect(link).toHaveAttribute("href", "#/run/r9");
+    expect(link).toHaveAttribute("title", expect.stringMatching(/replay this run/i));
   });
 });

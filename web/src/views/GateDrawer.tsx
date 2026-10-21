@@ -1,8 +1,23 @@
 import { Drawer } from "../ds/Drawer";
-import { Fragment, useState } from "react";
-import { Skeleton, StatusPill, isMarkdown } from "../ds";
+import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  Button,
+  Icon,
+  Skeleton,
+  StatusPill,
+  TimeAgo,
+  chipClass,
+  fieldClass,
+  isMarkdown,
+  labelClass,
+  type DsStatus,
+} from "../ds";
 import { Markdown } from "../ds/Markdown";
 import { useArtifactContent, useGateReview } from "../useGateReview";
+import { splitOutcome } from "./outcome";
+import { reasonText, tellOnce } from "./failureReason";
+import { sentenceStart } from "./text";
+import { KIND_TERMS, TERMS, type TermId } from "./knowledgeGlossary";
 import type { GateActionOptions } from "../useOverview";
 import type {
   AcceptanceCriterion,
@@ -25,6 +40,7 @@ import type {
   RuleVerificationPreviewEntry,
   VerificationEvidence,
 } from "../types";
+import { loadError } from "../live/loadError";
 
 /**
  * The one place a human decides on a gate.
@@ -40,6 +56,10 @@ import type {
  * The review is read-only. Approve continues the pipeline with exactly what is
  * shown; Revise sends a note back and the phase runs again — the revision *is*
  * the note, so nothing here edits an artifact.
+ *
+ * It opens wide (`size="lg"`) because what it shows is mostly a document — a
+ * report, a changelog, a set of proposed rules — and a document squeezed into a
+ * sidebar's measure is one nobody reads to the end before approving it.
  */
 
 export interface GateSelection {
@@ -50,28 +70,53 @@ export interface GateSelection {
   originY?: number;
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+/** A section of the review: an eyebrow, an optional aside, the content. */
+function Block({
+  title,
+  aside,
+  children,
+}: {
+  title: string;
+  aside?: ReactNode;
+  children: ReactNode;
+}) {
   return (
-    <Fragment>
-      <dt className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">{label}</dt>
-      <dd className="min-w-0 break-words text-[12.5px] text-ink-dim">{children}</dd>
-    </Fragment>
+    <section className="flex min-w-0 flex-col gap-3">
+      <div className="flex min-h-5 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <h3 className="eyebrow">{title}</h3>
+        {aside && <div className="text-caption text-ink-faint">{aside}</div>}
+      </div>
+      {children}
+    </section>
   );
 }
 
-function Heading({ children }: { children: React.ReactNode }) {
+/** A heading inside a section — one rung below the eyebrow — with its count. */
+function GroupHeading({ label, count }: { label: string; count?: number }) {
   return (
-    <h3 className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-faint">
-      {children}
-    </h3>
+    <h4 className="flex items-center gap-2 text-small font-semibold text-ink-dim">
+      {label}
+      {count !== undefined && (
+        <span className="text-caption font-normal tabular-nums text-ink-faint">{count}</span>
+      )}
+    </h4>
   );
 }
+
+/** Rows of like things share one inset well rather than a box each. */
+const WELL = "overflow-hidden rounded-tile border border-line bg-ground-2/60";
+const ROWS = `divide-y divide-line ${WELL}`;
+/** The machine-text well: raw JSON, a log, a plain-text artifact. */
+const CODE =
+  "overflow-auto rounded-tile border border-line bg-ground-2/60 p-3.5 font-mono text-caption leading-relaxed text-ink-dim";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KiB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
 }
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /** The prose a payload carries, in the order it is shown, and the fields left
  *  once that prose is lifted out. `reason` is one sentence, so it stays plain
@@ -94,7 +139,7 @@ function splitPayload(value: Record<string, unknown>) {
 }
 
 /**
- * The agent's closing words.
+ * The agent's closing words, taken apart for display.
  *
  * A phase's payload is usually the whole event the runtime handed the Stop
  * hook — session id, transcript path, permission mode, background tasks — with
@@ -103,104 +148,262 @@ function splitPayload(value: Record<string, unknown>) {
  * the note; the rest is diagnostic, so it folds behind a toggle and only
  * comes forward when there is no prose to show instead. A bare string is
  * treated as the note itself.
+ *
+ * The reason leads the drawer, inside the "waiting on you" / "what went wrong"
+ * panel; the notes and the leftovers follow it.
  */
-function Payload({ value }: { value: unknown }) {
-  if (value == null) return null;
-  if (typeof value === "string") {
-    return <ClosingNote source={value} />;
-  }
-  if (typeof value !== "object" || Array.isArray(value)) {
-    return <RawPayload value={value} />;
-  }
+interface PayloadParts {
+  reason: string | null;
+  notes: Note[];
+  /** Whatever is left to show raw, or `undefined` for nothing. */
+  raw: unknown;
+  /** The raw part is bookkeeping beside prose, so it starts folded. */
+  folded: boolean;
+}
+
+/** One piece of the agent's own writing, named by where it came from. */
+interface Note {
+  label: string;
+  source: string;
+  /** The outcome its `ARGUS_OUTCOME` line reported, if it had one. */
+  outcome: string | null;
+}
+
+/** The agent's protocol line comes off its prose and is shown as a chip
+ *  instead; the payload itself is untouched. */
+function toNote(label: string, text: string): Note {
+  const { prose, outcome } = splitOutcome(text);
+  return { label, source: prose, outcome };
+}
+
+function payloadParts(value: unknown): PayloadParts {
+  const none: PayloadParts = { reason: null, notes: [], raw: undefined, folded: false };
+  if (value == null) return none;
+  if (typeof value === "string") return { ...none, notes: [toNote("Closing note", value)] };
+  if (typeof value !== "object" || Array.isArray(value)) return { ...none, raw: value };
   const { prose, rest } = splitPayload(value as Record<string, unknown>);
-  const hasProse = Object.keys(prose).length > 0;
-  const hasRest = Object.keys(rest).length > 0;
-  if (!hasProse) return <RawPayload value={value} />;
+  if (Object.keys(prose).length === 0) return { ...none, raw: value };
+  // The reason as a sentence, and each note without whatever opening line
+  // only tells it again: with the Failed pill, one error used to be told three
+  // times. A note that opens with the reason in fuller words lends that line
+  // to the lead, and goes when it had nothing else to say.
+  let reason = reasonText(prose.reason);
+  const notes: Note[] = [];
+  for (const [label, text] of [
+    ["Summary", prose.summary],
+    ["Agent's last message", prose.last_assistant_message],
+  ] as const) {
+    if (!text) continue;
+    const note = toNote(label, text);
+    const told = tellOnce(reason, note.source);
+    if (told.reason !== reason && /[`*_[<]/.test(told.reason)) {
+      // A line with Markdown in it reads properly only in the note, which
+      // keeps it; the lead gives up its shorter telling instead.
+      reason = "";
+      notes.push(note);
+      continue;
+    }
+    reason = told.reason;
+    if (told.message) notes.push({ ...note, source: told.message });
+  }
+  return {
+    reason: reason || null,
+    notes,
+    raw: Object.keys(rest).length > 0 ? rest : undefined,
+    folded: true,
+  };
+}
+
+/**
+ * Why the drawer is open, first and loudest: a gate waiting on a person reads
+ * in the waiting colour, a failure in the failing one, and the reason the
+ * agent gave sits inside that panel rather than below a heading of its own.
+ */
+function Lead({ status, reason }: { status: PhaseReview["status"]; reason: string | null }) {
+  const gated = status === "awaiting-approval";
+  // Spelled out rather than "not waiting, so failed": a state this drawer does
+  // not know about must not be announced as a failure.
+  const pill: DsStatus = gated ? "await" : status === "failed" ? "failed" : "idle";
   return (
-    <div className="flex flex-col gap-2">
-      {prose.reason && (
-        <p
-          data-testid="gate-reason"
-          className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-ink"
+    <div
+      className={`rounded-tile border px-4 py-4 sm:px-5 ${
+        gated ? "border-await/30 bg-await/[0.07]" : "border-fail/30 bg-fail/[0.07]"
+      }`}
+    >
+      <div className="flex items-start gap-3.5">
+        <span
+          aria-hidden="true"
+          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border ${
+            gated ? "border-await/40 bg-await/12 text-await" : "border-fail/40 bg-fail/12 text-fail"
+          }`}
         >
-          {prose.reason}
-        </p>
-      )}
-      {prose.summary && <ClosingNote source={prose.summary} />}
-      {prose.last_assistant_message && <ClosingNote source={prose.last_assistant_message} />}
-      {hasRest && (
-        <details>
-          <summary className="cursor-pointer select-none font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint hover:text-ink-dim">
-            Raw payload
-          </summary>
-          <div className="mt-2">
-            <RawPayload value={rest} />
+          <Icon name={gated ? "approve" : "x-circle"} size={20} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+            <h3 className="text-title font-semibold text-ink">
+              {gated ? "Waiting on you" : "What went wrong"}
+            </h3>
+            <StatusPill status={pill} />
           </div>
-        </details>
-      )}
+          {gated && (
+            <p className="mt-0.5 text-small text-ink-dim">
+              The pipeline is paused here until you decide.
+            </p>
+          )}
+          {reason && (
+            <p
+              data-testid="gate-reason"
+              className={`mt-3 whitespace-pre-wrap break-words text-body ${
+                gated ? "text-await-ink" : "text-fail-ink"
+              }`}
+            >
+              {reason}
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
-function ClosingNote({ source }: { source: string }) {
+function ClosingNote({ note }: { note: Note }) {
   return (
-    <div
-      data-testid="gate-closing-note"
-      className="rounded-lg border border-line bg-surface px-4 py-3"
-    >
-      <Markdown source={source} className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0" />
+    <div data-testid="gate-closing-note" className={`${WELL} px-4 py-3.5 sm:px-5`}>
+      {/* Whose words these are, and what the agent said of its own work — in
+          its words, never as a verdict: a marker is not verification. */}
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="eyebrow">{note.label}</span>
+        {note.outcome && (
+          <span className={chipClass("neutral")} title="The outcome the agent reported">
+            Reported {note.outcome}
+          </span>
+        )}
+      </div>
+      <Markdown
+        source={note.source}
+        className="!text-small leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+      />
     </div>
   );
 }
 
 function RawPayload({ value }: { value: unknown }) {
   return (
-    <pre
-      data-testid="gate-raw-payload"
-      className="max-h-[30vh] overflow-auto rounded-lg bg-black/30 p-3 font-mono text-[11px] leading-relaxed text-ink-dim"
-    >
+    <pre data-testid="gate-raw-payload" className={`max-h-[30vh] ${CODE}`}>
       {JSON.stringify(value, null, 2)}
     </pre>
   );
 }
 
+/** A disclosure in the drawer's own idiom: a chevron that turns, a quiet label. */
+const SUMMARY =
+  "inline-flex cursor-pointer list-none select-none items-center gap-1.5 rounded-control py-0.5 text-caption font-semibold text-ink-faint transition-colors duration-(--duration-quick) hover:text-ink-dim [&::-webkit-details-marker]:hidden";
+const SUMMARY_CHEVRON =
+  "transition-transform duration-(--duration-quick) ease-(--ease-out-expo) group-open:rotate-90";
+
+function PayloadDetails({ parts }: { parts: PayloadParts }) {
+  if (parts.raw === undefined) return null;
+  if (!parts.folded) return <RawPayload value={parts.raw} />;
+  return (
+    <details className="group">
+      <summary className={SUMMARY}>
+        <Icon name="chevron-right" size={14} className={SUMMARY_CHEVRON} />
+        Raw payload
+      </summary>
+      <div className="mt-2">
+        <RawPayload value={parts.raw} />
+      </div>
+    </details>
+  );
+}
+
+type Check = NonNullable<PhaseReview["verification"]>["checks"][number];
+
+function checkCounts(checks: Check[]) {
+  return {
+    passed: checks.filter((c) => c.status === "passed").length,
+    failed: checks.filter((c) => c.status === "failed").length,
+    notEvaluated: checks.filter((c) => c.status === "not-evaluated").length,
+    total: checks.length,
+  };
+}
+
+/**
+ * A check's outcome as a mark. Passed and failed are icons with an accessible
+ * name; a check that could not be evaluated is an en dash in the same ring —
+ * deliberately neither a tick nor a cross, because it is neither, and its row
+ * says "(not evaluated)" in words.
+ */
+function CheckMark({ status }: { status: Check["status"] }) {
+  if (status === "passed")
+    return <Icon name="check-circle" size={17} label="Passed" className="text-ok" />;
+  if (status === "failed")
+    return <Icon name="x-circle" size={17} label="Failed" className="text-fail" />;
+  if (status === "not-evaluated") {
+    return (
+      <span
+        aria-hidden="true"
+        className="flex h-[17px] w-[17px] shrink-0 items-center justify-center"
+      >
+        <span className="flex h-3 w-3 items-center justify-center rounded-full border border-ink-faint text-micro leading-none text-ink-faint">
+          –
+        </span>
+      </span>
+    );
+  }
+  return <Icon name="clock" size={17} label="Running" className="text-ink-faint" />;
+}
+
 function Verification({ report }: { report: NonNullable<PhaseReview["verification"]> }) {
   return (
-    <ul data-testid="gate-verification" className="flex flex-col gap-1">
+    <ul data-testid="gate-verification" className={ROWS}>
       {report.checks.map((c, i) => (
-        <li key={i} className="flex items-baseline gap-2 text-[12px]">
-          <span
-            aria-hidden="true"
-            className={
-              c.status === "passed"
-                ? "text-ok"
-                : c.status === "failed"
-                  ? "text-fail"
-                  : "text-ink-faint"
-            }
-          >
-            {c.status === "passed"
-              ? "✓"
-              : c.status === "failed"
-                ? "✗"
-                : c.status === "not-evaluated"
-                  ? "–"
-                  : "…"}
+        <li
+          key={i}
+          className={`flex items-start gap-3 px-3.5 py-2.5 ${c.status === "failed" ? "bg-fail/[0.06]" : ""}`}
+        >
+          <span className="mt-px">
+            <CheckMark status={c.status} />
           </span>
-          <span className="text-ink-dim">
-            {c.label}
-            {c.status === "not-evaluated" && " (not evaluated)"}
-          </span>
-          {c.detail && <span className="min-w-0 break-words text-ink-faint">— {c.detail}</span>}
+          <div className="min-w-0 flex-1">
+            <p className="break-words text-small text-ink">
+              {c.label}
+              {c.status === "not-evaluated" && (
+                <span className="text-ink-faint"> (not evaluated)</span>
+              )}
+            </p>
+            {c.detail && (
+              <p
+                className={`mt-0.5 break-words text-caption ${
+                  c.status === "failed" ? "text-fail-ink" : "text-ink-faint"
+                }`}
+              >
+                {c.detail}
+              </p>
+            )}
+          </div>
         </li>
       ))}
       {report.checks.length === 0 && (
-        <li className="text-[12px] text-ink-faint">
+        <li className="px-3.5 py-3 text-small text-ink-faint">
           {report.status === "running" ? "Checks still running." : "No checks declared."}
         </li>
       )}
     </ul>
   );
+}
+
+function checksAside(checks: Check[]): string | null {
+  const n = checkCounts(checks);
+  if (n.total === 0) return null;
+  return [
+    n.passed > 0 && `${n.passed} passed`,
+    n.failed > 0 && `${n.failed} failed`,
+    n.notEvaluated > 0 && `${n.notEvaluated} not evaluated`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /**
@@ -252,44 +455,85 @@ function describeSource(source: EvidenceSource): string {
   }
 }
 
+/** A cited source. Paths, hashes and ids are machine text, so mono; a
+ *  document's title and the person who said something are words, so they
+ *  stay in the reading face. */
+function SourceText({ source }: { source: EvidenceSource }) {
+  if (source.type === "document") {
+    return (
+      <span className="text-ink-dim">
+        {source.title && `${source.title} — `}
+        <span className="break-all font-mono">{source.uri}</span>
+      </span>
+    );
+  }
+  if (source.type === "human") return <span className="text-ink-dim">{source.who}</span>;
+  return <span className="break-all font-mono text-ink-dim">{describeSource(source)}</span>;
+}
+
+/** What kind of claim this is. A category, so a neutral chip: colour is kept
+ *  for outcomes, which are statuses. */
+/** A ledger value ("needs-input") as a label, for a value the glossary does
+ *  not name. */
+function asLabel(value: string): string {
+  const words = value.replace(/-/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** A claim's kind in the Knowledge view's words ("Business rule"), with its
+ *  definition on hover, rather than the ledger's key ("business-rule"). */
 function KindTag({ kind }: { kind: string }) {
-  const tone =
-    kind === "business-rule"
-      ? "border-ok/40 text-ok"
-      : kind === "assumption"
-        ? "border-await/40 text-await"
-        : "border-line text-ink-faint";
+  const term = KIND_TERMS[kind as keyof typeof KIND_TERMS];
   return (
-    <span
-      className={`rounded border px-1 font-mono text-[8.5px] uppercase tracking-[0.1em] ${tone}`}
-    >
-      {kind}
+    <span className={chipClass()} title={term?.definition}>
+      {term?.term ?? asLabel(kind)}
     </span>
   );
 }
 
+/** An id or a ref beside a chip: machine text, so mono, and quiet. */
+function Ref({ children, title }: { children: ReactNode; title?: string }) {
+  return (
+    <span className="min-w-0 break-all font-mono text-caption text-ink-faint" title={title}>
+      {children}
+    </span>
+  );
+}
+
+/** A row's head: its chips and refs on one wrapping line. */
+function RowHead({ children }: { children: ReactNode }) {
+  return <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">{children}</div>;
+}
+
+const STATEMENT = "mt-1.5 break-words text-small leading-relaxed text-ink";
+
 function EvidenceList({ evidence }: { evidence: PreviewEvidence[] }) {
   if (evidence.length === 0) {
     return (
-      <p className="mt-1 text-[11px] text-fail" data-testid="candidate-no-evidence">
+      // Nothing failed: a claim without support is something a person should
+      // weigh, so it reads in the waiting colour, like the warning about it.
+      <p
+        className="mt-1.5 flex items-center gap-1.5 text-caption text-await-ink"
+        data-testid="candidate-no-evidence"
+      >
+        <Icon name="alert" size={13} className="text-await" />
         No evidence attached.
       </p>
     );
   }
   return (
-    <ul className="mt-1 flex flex-col gap-0.5" aria-label="Evidence">
+    <ul className="mt-2 flex flex-col gap-1" aria-label="Evidence">
       {evidence.map((e, i) => (
-        <li key={i} className="flex min-w-0 items-baseline gap-2 text-[11px]">
-          <span
-            aria-hidden="true"
-            className={e.direction === "opposes" ? "text-fail" : "text-ink-faint"}
-          >
-            {e.direction === "opposes" ? "✗" : "→"}
+        <li key={i} className="flex min-w-0 items-start gap-2 text-caption">
+          {e.direction === "opposes" ? (
+            <Icon name="x-circle" size={13} label="Opposes" className="mt-px text-fail" />
+          ) : (
+            <Icon name="arrow-right" size={13} className="mt-px text-ink-faint" />
+          )}
+          <span className="min-w-0 break-words">
+            <SourceText source={e.source} />
+            {e.note && <span className="text-ink-faint"> — {e.note}</span>}
           </span>
-          <span className="min-w-0 break-words font-mono text-ink-dim">
-            {describeSource(e.source)}
-          </span>
-          {e.note && <span className="min-w-0 break-words text-ink-faint">— {e.note}</span>}
         </li>
       ))}
     </ul>
@@ -299,11 +543,16 @@ function EvidenceList({ evidence }: { evidence: PreviewEvidence[] }) {
 function JustificationList({ justifications }: { justifications: PreviewJustification[] }) {
   if (justifications.length === 0) return null;
   return (
-    <ul className="mt-1 flex flex-col gap-0.5" aria-label="Justifications">
+    <ul className="mt-1.5 flex flex-col gap-0.5" aria-label="Justifications">
       {justifications.map((j, i) => (
-        <li key={i} className="min-w-0 break-words font-mono text-[11px] text-ink-faint">
-          {j.direction === "opposes" ? "opposed by" : "from"}{" "}
-          {j.premises.map((p) => p.display).join(" + ")}
+        <li key={i} className="min-w-0 break-words text-caption text-ink-faint">
+          {j.direction === "opposes" ? "Opposed by" : "From"}{" "}
+          {j.premises.map((p, k) => (
+            <Fragment key={k}>
+              {k > 0 && " + "}
+              <span className="break-all font-mono">{p.display}</span>
+            </Fragment>
+          ))}
           {j.note ? ` — ${j.note}` : ""}
         </li>
       ))}
@@ -313,12 +562,12 @@ function JustificationList({ justifications }: { justifications: PreviewJustific
 
 function CandidateClaim({ claim }: { claim: PreviewClaim }) {
   return (
-    <li className="rounded-lg border border-line bg-surface px-3 py-2">
-      <div className="flex flex-wrap items-baseline gap-2">
+    <li className="px-3.5 py-3">
+      <RowHead>
         <KindTag kind={claim.kind} />
-        <span className="font-mono text-[10px] text-ink-faint">{claim.ref.display}</span>
-      </div>
-      <p className="mt-1 text-[12.5px] leading-relaxed text-ink">{claim.statement}</p>
+        <Ref>{claim.ref.display}</Ref>
+      </RowHead>
+      <p className={STATEMENT}>{claim.statement}</p>
       <EvidenceList evidence={claim.evidence} />
       <JustificationList justifications={claim.justifications} />
     </li>
@@ -327,26 +576,35 @@ function CandidateClaim({ claim }: { claim: PreviewClaim }) {
 
 function CandidateRevision({ revision }: { revision: PreviewRevision }) {
   return (
-    <li className="rounded-lg border border-line bg-surface px-3 py-2">
-      <div className="flex flex-wrap items-baseline gap-2">
+    <li className="px-3.5 py-3">
+      <RowHead>
         {revision.kind && <KindTag kind={revision.kind} />}
-        <span className="font-mono text-[10px] text-ink-faint">
+        <Ref>
           {revision.claimId} v{revision.expectedRevision} → v{revision.expectedRevision + 1}
-        </span>
+        </Ref>
         {revision.stale && (
-          <span className="rounded border border-fail/40 px-1 font-mono text-[8.5px] uppercase tracking-[0.1em] text-fail">
-            stale
+          <span
+            className={chipClass("fail")}
+            title="The ledger has moved past the revision this expects, so the commit will refuse it."
+          >
+            Stale
           </span>
         )}
-      </div>
+      </RowHead>
       {revision.current && (
-        <p className="mt-1 text-[12px] leading-relaxed text-ink-faint line-through">
+        <p className="mt-1.5 break-words text-small leading-relaxed text-ink-faint line-through decoration-ink-faint/60">
           {revision.current.statement}
         </p>
       )}
-      <p className="mt-0.5 text-[12.5px] leading-relaxed text-ink">{revision.statement}</p>
+      <p
+        className={
+          revision.current ? "mt-0.5 break-words text-small leading-relaxed text-ink" : STATEMENT
+        }
+      >
+        {revision.statement}
+      </p>
       {revision.revisionNote && (
-        <p className="mt-0.5 text-[11px] text-ink-faint">{revision.revisionNote}</p>
+        <p className="mt-1 text-caption text-ink-faint">{revision.revisionNote}</p>
       )}
       <EvidenceList evidence={revision.evidence} />
       <JustificationList justifications={revision.justifications} />
@@ -354,19 +612,58 @@ function CandidateRevision({ revision }: { revision: PreviewRevision }) {
   );
 }
 
-function Warnings({ warnings }: { warnings: KnowledgeDeltaWarning[] }) {
-  if (warnings.length === 0) return null;
+/**
+ * A warning as the drawer says it. The server writes them as clauses opening
+ * on a ledger word ("assumption \"…\" carries neither…"), the one lower-case
+ * line in the panel: the opening word is set in sentence case, and a claim
+ * kind in the Knowledge view's words. One that opens on an id or a path
+ * ("local:x", "RULE-17") is machine text and stays exactly as written.
+ */
+function warningText(message: string): string {
+  const m = /^([a-z][a-z-]*)(\s[\s\S]*)$/.exec(message);
+  if (!m) return message;
+  const kind = KIND_TERMS[m[1] as keyof typeof KIND_TERMS] as
+    (typeof KIND_TERMS)[keyof typeof KIND_TERMS] | undefined;
+  return (kind?.term ?? sentenceStart(m[1])) + m[2];
+}
+
+/** Things Argus already knows are questionable, in the colour of "a person
+ *  should look at this". */
+function WarningList({ messages, testId }: { messages: string[]; testId: string }) {
+  if (messages.length === 0) return null;
   return (
-    <ul data-testid="candidate-warnings" className="mt-2 flex flex-col gap-1" aria-label="Warnings">
-      {warnings.map((w, i) => (
-        <li key={i} className="flex min-w-0 items-baseline gap-2 text-[11.5px] text-await">
-          <span aria-hidden="true">!</span>
-          <span className="min-w-0 break-words">{w.message}</span>
+    <ul data-testid={testId} className="flex flex-col gap-1.5" aria-label="Warnings">
+      {messages.map((m, i) => (
+        <li
+          key={i}
+          className="flex min-w-0 items-start gap-2 rounded-control border border-await/25 bg-await/[0.06] px-3 py-2 text-small text-await-ink"
+        >
+          <Icon name="alert" size={15} className="mt-0.5 text-await" />
+          <span className="min-w-0 break-words">{warningText(m)}</span>
         </li>
       ))}
     </ul>
   );
 }
+
+function Warnings({ warnings }: { warnings: KnowledgeDeltaWarning[] }) {
+  return <WarningList testId="candidate-warnings" messages={warnings.map((w) => w.message)} />;
+}
+
+/** A missing outcome, or a missing set of criteria: something the agent was
+ *  meant to submit and did not. Nothing has failed yet — a person has to
+ *  decide whether the gap matters — so it reads in the waiting colour. */
+function Missing({ testId, children }: { testId?: string; children: ReactNode }) {
+  return (
+    <p data-testid={testId} className="flex items-start gap-2 text-small text-await-ink">
+      <Icon name="alert" size={15} className="mt-0.5 text-await" />
+      <span className="min-w-0 break-words">{children}</span>
+    </p>
+  );
+}
+
+/** The one-sentence summary that opens each structured panel. */
+const LEDE = "text-small leading-relaxed text-ink-dim";
 
 function CandidateKnowledge({
   previews,
@@ -384,8 +681,8 @@ function CandidateKnowledge({
   const warnings = previews.flatMap((p) => p.warnings);
   const consumed = previews.flatMap((p) => p.consumed);
   return (
-    <div data-testid="gate-candidate-knowledge" className="flex flex-col gap-2">
-      <p className="text-[12px] text-ink-faint">
+    <div data-testid="gate-candidate-knowledge" className="flex flex-col gap-3">
+      <p className={LEDE}>
         {discovery
           ? `${discovery.candidates} candidate${discovery.candidates === 1 ? "" : "s"} · ${discovery.newRules} new rule${discovery.newRules === 1 ? "" : "s"} · ${discovery.revisions} revision${discovery.revisions === 1 ? "" : "s"} · ${discovery.assumptions} assumption${discovery.assumptions === 1 ? "" : "s"}`
           : `${claims.length + revisions.length} proposed claim${claims.length + revisions.length === 1 ? "" : "s"}`}
@@ -396,22 +693,22 @@ function CandidateKnowledge({
       </p>
       <Warnings warnings={warnings} />
       {revisions.length > 0 && (
-        <ul className="flex flex-col gap-1.5" aria-label="Proposed revisions">
+        <ul className={ROWS} aria-label="Proposed revisions">
           {revisions.map((r, i) => (
             <CandidateRevision key={`${r.claimId}-${i}`} revision={r} />
           ))}
         </ul>
       )}
       {claims.length > 0 && (
-        <ul className="flex flex-col gap-1.5" aria-label="Proposed claims">
+        <ul className={ROWS} aria-label="Proposed claims">
           {claims.map((c, i) => (
             <CandidateClaim key={`${c.ref.display}-${i}`} claim={c} />
           ))}
         </ul>
       )}
       {consumed.length > 0 && (
-        <p className="font-mono text-[10.5px] text-ink-faint">
-          consumed: {consumed.map((c) => c.ref).join(", ")}
+        <p className="break-words text-caption text-ink-faint">
+          Consumed: <span className="font-mono">{consumed.map((c) => c.ref).join(", ")}</span>
         </p>
       )}
     </div>
@@ -449,30 +746,56 @@ function describeVerificationEvidence(e: VerificationEvidence): string {
   }
 }
 
-const OUTCOME_TONE: Record<string, string> = {
-  holds: "border-ok/40 text-ok",
-  satisfied: "border-ok/40 text-ok",
-  violated: "border-fail/40 text-fail",
-  unverifiable: "border-await/40 text-await",
+/** Outcomes *are* statuses, so they carry status colour: holding is done,
+ *  violated is failing, and unverifiable is a question only a person can
+ *  settle. */
+const OUTCOME_TONE: Record<string, Parameters<typeof chipClass>[0]> = {
+  holds: "ok",
+  satisfied: "ok",
+  violated: "fail",
+  unverifiable: "await",
 };
+
+function OutcomeTag({ outcome }: { outcome: string }) {
+  const term = TERMS[outcome as TermId] as (typeof TERMS)[TermId] | undefined;
+  return (
+    <span className={chipClass(OUTCOME_TONE[outcome] ?? "neutral")} title={term?.definition}>
+      {term?.term ?? asLabel(outcome)}
+    </span>
+  );
+}
 
 function VerificationEvidenceList({ evidence }: { evidence: VerificationEvidence[] }) {
   if (evidence.length === 0) return null;
   return (
-    <ul className="mt-1 flex flex-col gap-0.5" aria-label="Conformance evidence">
+    <ul className="mt-2 flex flex-col gap-1" aria-label="Conformance evidence">
       {evidence.map((e, i) => {
+        // A tick is earned by a check Argus saw pass; a cited file or an
+        // observation is a pointer, not a verdict, so it gets an arrow.
         const failed = e.type === "check" && e.status === "failed";
+        const passed = e.type === "check" && e.status === "passed";
         return (
-          <li key={i} className="flex min-w-0 items-baseline gap-2 text-[11px]">
-            <span aria-hidden="true" className={failed ? "text-fail" : "text-ok"}>
-              {failed ? "✗" : "✓"}
-            </span>
-            <span className="min-w-0 break-words font-mono text-ink-dim">
-              {describeVerificationEvidence(e)}
-            </span>
-            {"note" in e && e.note && e.type !== "observation" && (
-              <span className="min-w-0 break-words text-ink-faint">— {e.note}</span>
+          <li key={i} className="flex min-w-0 items-start gap-2 text-caption">
+            {failed ? (
+              <Icon name="x-circle" size={13} label="Failed" className="mt-px text-fail" />
+            ) : passed ? (
+              <Icon name="check" size={13} label="Passed" className="mt-px text-ok" />
+            ) : (
+              <Icon name="arrow-right" size={13} className="mt-px text-ink-faint" />
             )}
+            <span className="min-w-0 break-words">
+              {/* An observation is the verifier's own sentence, not machine text. */}
+              <span
+                className={
+                  e.type === "observation" ? "text-ink-dim" : "break-all font-mono text-ink-dim"
+                }
+              >
+                {describeVerificationEvidence(e)}
+              </span>
+              {"note" in e && e.note && e.type !== "observation" && (
+                <span className="text-ink-faint"> — {e.note}</span>
+              )}
+            </span>
           </li>
         );
       })}
@@ -480,32 +803,52 @@ function VerificationEvidenceList({ evidence }: { evidence: VerificationEvidence
   );
 }
 
+/**
+ * One axis of a rule's state, in words: "Rule supported", "Implementation
+ * violated". The ledger's `rule: supported` and `impl: violated` sat in mono
+ * beside chips that had already been put into words. The two axes stay side
+ * by side and separately named, because reading them as one is the mistake
+ * this panel exists to prevent.
+ */
+function RuleState({
+  axis,
+  value,
+  title,
+  tone = "text-ink-faint",
+  children,
+}: {
+  axis: "Rule" | "Implementation";
+  value: string;
+  title: string;
+  tone?: string;
+  children?: ReactNode;
+}) {
+  const term = TERMS[value as TermId] as (typeof TERMS)[TermId] | undefined;
+  return (
+    <span className={`text-caption ${tone}`} title={title}>
+      {axis} {(term?.term ?? asLabel(value)).toLowerCase()}
+      {children}
+    </span>
+  );
+}
+
 function VerificationRow({ entry }: { entry: RuleVerificationPreviewEntry }) {
   return (
-    <li className="rounded-lg border border-line bg-surface px-3 py-2">
-      <div className="flex flex-wrap items-baseline gap-2">
-        <span
-          className={`rounded border px-1 font-mono text-[8.5px] uppercase tracking-[0.1em] ${
-            OUTCOME_TONE[entry.outcome] ?? "border-line text-ink-faint"
-          }`}
-        >
-          {entry.outcome}
-        </span>
-        <span className="font-mono text-[10px] text-ink-faint">{entry.ref}</span>
+    <li className="px-3.5 py-3">
+      <RowHead>
+        <OutcomeTag outcome={entry.outcome} />
+        <Ref>{entry.ref}</Ref>
         {entry.support && (
-          <span
-            className="font-mono text-[9.5px] text-ink-faint"
+          <RuleState
+            axis="Rule"
+            value={entry.support}
             title="The rule's own support. Independent of whether the code conforms."
-          >
-            rule: {entry.support}
-          </span>
+          />
         )}
-      </div>
-      {entry.statement && (
-        <p className="mt-1 text-[12.5px] leading-relaxed text-ink">{entry.statement}</p>
-      )}
-      {entry.reason && <p className="mt-0.5 text-[11.5px] text-await">{entry.reason}</p>}
-      {entry.note && <p className="mt-0.5 text-[11px] text-ink-faint">{entry.note}</p>}
+      </RowHead>
+      {entry.statement && <p className={STATEMENT}>{entry.statement}</p>}
+      {entry.reason && <p className="mt-1 text-caption text-await">{entry.reason}</p>}
+      {entry.note && <p className="mt-1 text-caption text-ink-faint">{entry.note}</p>}
       <VerificationEvidenceList evidence={entry.evidence} />
     </li>
   );
@@ -520,11 +863,9 @@ function VerificationGroup({
 }) {
   if (entries.length === 0) return null;
   return (
-    <div className="flex flex-col gap-1">
-      <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
-        {label} ({entries.length})
-      </p>
-      <ul className="flex flex-col gap-1.5" aria-label={label}>
+    <div className="flex flex-col gap-2">
+      <GroupHeading label={label} count={entries.length} />
+      <ul className={ROWS} aria-label={label}>
         {entries.map((e) => (
           <VerificationRow key={`${e.ref}-${e.outcome}`} entry={e} />
         ))}
@@ -548,8 +889,8 @@ function RuleVerification({
   const missing = previews.flatMap((p) => p.missing);
   const head = previews.find((p) => p.gitHead);
   return (
-    <div data-testid="gate-rule-verification" className="flex flex-col gap-2">
-      <p className="text-[12px] text-ink-faint">
+    <div data-testid="gate-rule-verification" className="flex flex-col gap-4">
+      <p className={LEDE}>
         {`${summary?.holds ?? holds.length} holds · ${summary?.violated ?? violated.length} violated · ${
           summary?.unverifiable ?? unverifiable.length
         } unverifiable`}
@@ -559,15 +900,15 @@ function RuleVerification({
           : "None of this became durable: the phase did not reach its commit."}
       </p>
       {missing.length > 0 && (
-        <p data-testid="gate-verification-missing" className="text-[11.5px] text-fail">
+        <Missing testId="gate-verification-missing">
           No outcome submitted for {missing.join(", ")}.
-        </p>
+        </Missing>
       )}
-      <VerificationGroup label="Holds" entries={holds} />
       <VerificationGroup label="Violated" entries={violated} />
       <VerificationGroup label="Unverifiable" entries={unverifiable} />
+      <VerificationGroup label="Holds" entries={holds} />
       {previews.some((p) => p.summary) && (
-        <p className="text-[11.5px] text-ink-faint">
+        <p className="text-caption text-ink-faint">
           {previews
             .map((p) => p.summary)
             .filter(Boolean)
@@ -591,9 +932,9 @@ function RuleVerification({
  */
 function RealizationHeader({ realization }: { realization: PhaseRealizationRef }) {
   return (
-    <p data-testid="gate-realization" className="text-[12px] text-ink-faint">
-      Realizing <span className="font-mono text-ink-dim">{realization.proposalId}</span> ·{" "}
-      <span className="font-mono text-ink-dim">{realization.id}</span> · {realization.kind} attempt{" "}
+    <p data-testid="gate-realization" className={LEDE}>
+      Realizing <span className="font-mono text-ink">{realization.proposalId}</span> ·{" "}
+      <span className="font-mono text-ink">{realization.id}</span> · {realization.kind} attempt{" "}
       {realization.attempt} of {realization.maxAttempts}.{" "}
       {realization.repository?.gitHead
         ? `The implementation left ${realization.repository.gitHead.slice(0, 8)}${
@@ -625,31 +966,22 @@ function RealizationHeader({ realization }: { realization: PhaseRealizationRef }
  */
 function AcceptanceRow({ entry }: { entry: AcceptanceVerificationPreviewEntry }) {
   return (
-    <li className="rounded-lg border border-line bg-surface px-3 py-2">
-      <div className="flex flex-wrap items-baseline gap-2">
-        <span
-          className={`rounded border px-1 font-mono text-[8.5px] uppercase tracking-[0.1em] ${
-            OUTCOME_TONE[entry.outcome] ?? "border-line text-ink-faint"
-          }`}
-        >
-          {entry.outcome}
-        </span>
-        <span className="font-mono text-[10px] text-ink-faint">{entry.ref}</span>
-        <span className="font-mono text-[9.5px] text-ink-faint">{entry.kind}</span>
+    <li className="px-3.5 py-3">
+      <RowHead>
+        <OutcomeTag outcome={entry.outcome} />
+        <Ref>{entry.ref}</Ref>
+        <KindTag kind={entry.kind} />
         {entry.relatesTo.length > 0 && (
-          <span
-            className="font-mono text-[9.5px] text-ink-faint"
-            title="The exact revisions this criterion is evidence for."
-          >
+          <Ref title="The exact revisions this criterion is evidence for.">
             {entry.relatesTo
               .map((r: { id: string; revision: number }) => `${r.id}:v${r.revision}`)
               .join(", ")}
-          </span>
+          </Ref>
         )}
-      </div>
-      <p className="mt-1 text-[12.5px] leading-relaxed text-ink">{entry.statement}</p>
-      {entry.reason && <p className="mt-0.5 text-[11.5px] text-await">{entry.reason}</p>}
-      {entry.note && <p className="mt-0.5 text-[11px] text-ink-faint">{entry.note}</p>}
+      </RowHead>
+      <p className={STATEMENT}>{entry.statement}</p>
+      {entry.reason && <p className="mt-1 text-caption text-await">{entry.reason}</p>}
+      {entry.note && <p className="mt-1 text-caption text-ink-faint">{entry.note}</p>}
       <VerificationEvidenceList evidence={entry.evidence} />
     </li>
   );
@@ -664,11 +996,9 @@ function AcceptanceGroup({
 }) {
   if (entries.length === 0) return null;
   return (
-    <div className="flex flex-col gap-1">
-      <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
-        {label} ({entries.length})
-      </p>
-      <ul className="flex flex-col gap-1.5" aria-label={label}>
+    <div className="flex flex-col gap-2">
+      <GroupHeading label={label} count={entries.length} />
+      <ul className={ROWS} aria-label={label}>
         {entries.map((e) => (
           <AcceptanceRow key={`${e.ref}-${e.outcome}`} entry={e} />
         ))}
@@ -693,8 +1023,8 @@ function AcceptanceVerification({
   const state = previews.find((p) => p.repository)?.repository;
   const proposalId = summary?.proposalId ?? previews[0]?.proposalId;
   return (
-    <div data-testid="gate-acceptance-verification" className="flex flex-col gap-2">
-      <p className="text-[12px] text-ink-faint">
+    <div data-testid="gate-acceptance-verification" className="flex flex-col gap-4">
+      <p className={LEDE}>
         {`${summary?.satisfied ?? satisfied.length} satisfied · ${
           summary?.violated ?? violated.length
         } violated · ${summary?.unverifiable ?? unverifiable.length} unverifiable`}
@@ -706,15 +1036,15 @@ function AcceptanceVerification({
           : "None of this became durable: the phase did not reach its commit."}
       </p>
       {missing.length > 0 && (
-        <p data-testid="gate-acceptance-missing" className="text-[11.5px] text-fail">
+        <Missing testId="gate-acceptance-missing">
           No outcome submitted for {missing.join(", ")}.
-        </p>
+        </Missing>
       )}
-      <AcceptanceGroup label="Satisfied" entries={satisfied} />
       <AcceptanceGroup label="Violated" entries={violated} />
       <AcceptanceGroup label="Unverifiable" entries={unverifiable} />
+      <AcceptanceGroup label="Satisfied" entries={satisfied} />
       {previews.some((p) => p.summary) && (
-        <p className="text-[11.5px] text-ink-faint">
+        <p className="text-caption text-ink-faint">
           {previews
             .map((p) => p.summary)
             .filter(Boolean)
@@ -752,16 +1082,14 @@ function ReadinessTag({ readiness }: { readiness: ChangeProposalPreview["readine
   return (
     <span
       data-testid="change-readiness"
-      className={`rounded border px-1 font-mono text-[8.5px] uppercase tracking-[0.1em] ${
-        ready ? "border-ok/40 text-ok" : "border-await/40 text-await"
-      }`}
+      className={chipClass(ready ? "ok" : "await")}
       title={
         ready
           ? "Every relevant rule is accounted for and nothing is unresolved."
           : "Unresolved questions or uncovered rule changes: this proposal cannot drive an implementation."
       }
     >
-      {readiness}
+      {asLabel(readiness)}
     </span>
   );
 }
@@ -775,58 +1103,63 @@ const CONFORMANCE_TONE: Record<string, string> = {
 
 function CurrentRule({ rule }: { rule: ChangeRuleState }) {
   return (
-    <li className="rounded-lg border border-line bg-surface px-3 py-2">
-      <div className="flex flex-wrap items-baseline gap-2">
+    <li className="px-3.5 py-3">
+      <RowHead>
         <KindTag kind={rule.kind} />
-        <span className="font-mono text-[10px] text-ink-faint">{rule.ref}</span>
-        <span className="font-mono text-[9.5px] text-ink-faint" title="The rule's own support.">
-          rule: {rule.support}
-        </span>
-        <span
-          className={`font-mono text-[9.5px] ${CONFORMANCE_TONE[rule.conformance] ?? "text-ink-faint"}`}
+        <Ref>{rule.ref}</Ref>
+        <RuleState axis="Rule" value={rule.support} title="The rule's own support." />
+        <RuleState
+          axis="Implementation"
+          value={rule.conformance}
+          tone={CONFORMANCE_TONE[rule.conformance]}
           title="What the implementation does. Independent of whether the rule is well founded."
         >
-          impl: {rule.conformance}
-          {rule.conformanceAt ? ` @${rule.conformanceAt.slice(0, 8)}` : ""}
-        </span>
-      </div>
-      <p className="mt-1 text-[12.5px] leading-relaxed text-ink">{rule.statement}</p>
+          {rule.conformanceAt && (
+            <>
+              {" at "}
+              <span className="font-mono">{rule.conformanceAt.slice(0, 8)}</span>
+            </>
+          )}
+        </RuleState>
+      </RowHead>
+      <p className={STATEMENT}>{rule.statement}</p>
     </li>
   );
 }
 
 function ChangeWarnings({ warnings }: { warnings: ChangeProposalWarning[] }) {
-  if (warnings.length === 0) return null;
-  return (
-    <ul data-testid="change-warnings" className="mt-1 flex flex-col gap-1" aria-label="Warnings">
-      {warnings.map((w, i) => (
-        <li key={i} className="flex min-w-0 items-baseline gap-2 text-[11.5px] text-await">
-          <span aria-hidden="true">!</span>
-          <span className="min-w-0 break-words">{w.message}</span>
-        </li>
-      ))}
-    </ul>
-  );
+  return <WarningList testId="change-warnings" messages={warnings.map((w) => w.message)} />;
 }
 
 function AcceptanceCriteria({ criteria }: { criteria: AcceptanceCriterion[] }) {
   if (criteria.length === 0) return null;
   return (
-    <ol
-      data-testid="change-acceptance-criteria"
-      className="flex flex-col gap-1"
-      aria-label="Acceptance criteria"
-    >
+    <ol data-testid="change-acceptance-criteria" className={ROWS} aria-label="Acceptance criteria">
       {criteria.map((c) => (
-        <li key={c.id} className="flex min-w-0 items-baseline gap-2 text-[12px]">
-          <span className="font-mono text-[10px] text-ink-faint">{c.id}</span>
-          <span className="rounded border border-line px-1 font-mono text-[8.5px] uppercase tracking-[0.1em] text-ink-faint">
-            {c.kind}
+        <li
+          key={c.id}
+          className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1 px-3.5 py-2.5"
+        >
+          <span className="shrink-0 whitespace-nowrap font-mono text-caption text-ink-faint">
+            {c.id}
           </span>
-          <span className="min-w-0 break-words text-ink">{c.statement}</span>
+          <KindTag kind={c.kind} />
+          <span className="min-w-0 basis-full break-words text-small text-ink sm:basis-0 sm:flex-1">
+            {c.statement}
+          </span>
         </li>
       ))}
     </ol>
+  );
+}
+
+/** One labelled part of a change proposal: Current, Proposed, Preserved… */
+function Part({ label, count, children }: { label: string; count?: number; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <GroupHeading label={label} count={count} />
+      {children}
+    </div>
   );
 }
 
@@ -840,25 +1173,32 @@ function ChangeProposalPanel({
   canApprove: boolean;
 }) {
   return (
-    <div data-testid="gate-change-proposal" className="flex flex-col gap-3">
+    <div data-testid="gate-change-proposal" className="flex flex-col gap-6">
       {previews.map((p) => {
         const revisions = p.semantic?.proposedRevisions ?? [];
         const claims = p.semantic?.proposedClaims ?? [];
         const decisions = claims.filter((c) => c.kind === "decision");
         const others = claims.filter((c) => c.kind !== "decision");
         return (
-          <div key={p.proposalId} className="flex flex-col gap-2">
-            <div className="flex flex-wrap items-baseline gap-2">
-              <ReadinessTag readiness={p.readiness} />
-              <span className="font-mono text-[10px] text-ink-faint">{p.request.id}</span>
+          <div key={p.proposalId} className="flex flex-col gap-4">
+            <div className={`${WELL} px-4 py-3.5`}>
+              <RowHead>
+                <ReadinessTag readiness={p.readiness} />
+                <Ref>{p.request.id}</Ref>
+              </RowHead>
+              <p
+                data-testid="change-request"
+                className="mt-2 break-words text-body leading-relaxed text-ink"
+              >
+                {p.request.summary}
+              </p>
+              {p.request.details && (
+                <p className="mt-1 break-words text-small leading-relaxed text-ink-dim">
+                  {p.request.details}
+                </p>
+              )}
             </div>
-            <p data-testid="change-request" className="text-[12.5px] leading-relaxed text-ink">
-              {p.request.summary}
-            </p>
-            {p.request.details && (
-              <p className="text-[11.5px] leading-relaxed text-ink-faint">{p.request.details}</p>
-            )}
-            <p className="text-[12px] text-ink-faint">
+            <p className={LEDE}>
               {`${summary?.revised ?? revisions.length} revision${(summary?.revised ?? revisions.length) === 1 ? "" : "s"} · ${summary?.created ?? claims.length} new claim${(summary?.created ?? claims.length) === 1 ? "" : "s"} · ${summary?.preserved ?? p.preserved.length} preserved · ${p.acceptanceCriteria.length} criteri${p.acceptanceCriteria.length === 1 ? "on" : "a"}`}
               .{" "}
               {canApprove
@@ -871,110 +1211,146 @@ function ChangeProposalPanel({
             )}
 
             {p.current.length > 0 && (
-              <div className="flex flex-col gap-1">
-                <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
-                  Current ({p.current.length})
-                </p>
-                <ul className="flex flex-col gap-1.5" aria-label="Current rules">
+              <Part label="Current" count={p.current.length}>
+                <ul className={ROWS} aria-label="Current rules">
                   {p.current.map((r) => (
                     <CurrentRule key={r.ref} rule={r} />
                   ))}
                 </ul>
-              </div>
+              </Part>
             )}
 
             {(revisions.length > 0 || others.length > 0) && (
-              <div className="flex flex-col gap-1">
-                <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
-                  Proposed ({revisions.length + others.length})
-                </p>
+              <Part label="Proposed" count={revisions.length + others.length}>
                 {revisions.length > 0 && (
-                  <ul className="flex flex-col gap-1.5" aria-label="Proposed revisions">
+                  <ul className={ROWS} aria-label="Proposed revisions">
                     {revisions.map((r, i) => (
                       <CandidateRevision key={`${r.claimId}-${i}`} revision={r} />
                     ))}
                   </ul>
                 )}
                 {others.length > 0 && (
-                  <ul className="flex flex-col gap-1.5" aria-label="Proposed claims">
+                  <ul className={ROWS} aria-label="Proposed claims">
                     {others.map((c, i) => (
                       <CandidateClaim key={`${c.ref.display}-${i}`} claim={c} />
                     ))}
                   </ul>
                 )}
-              </div>
+              </Part>
             )}
 
             {p.preserved.length > 0 && (
-              <div className="flex flex-col gap-1">
-                <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
-                  Preserved ({p.preserved.length})
-                </p>
-                <ul data-testid="change-preserved" className="flex flex-col gap-0.5">
+              <Part label="Preserved" count={p.preserved.length}>
+                <ul data-testid="change-preserved" className={ROWS}>
                   {p.preserved.map((c) => (
-                    <li key={c.ref} className="flex min-w-0 items-baseline gap-2 text-[11.5px]">
-                      <span aria-hidden="true" className="text-ok">
-                        ✓
+                    <li key={c.ref} className="flex min-w-0 items-start gap-2.5 px-3.5 py-2.5">
+                      <Icon name="check" size={14} className="mt-0.5 text-ok" />
+                      <span className="min-w-0 break-words text-small text-ink-dim">
+                        <span className="whitespace-nowrap font-mono text-caption text-ink-faint">
+                          {c.ref}
+                        </span>{" "}
+                        {c.statement}
                       </span>
-                      <span className="font-mono text-[10px] text-ink-faint">{c.ref}</span>
-                      <span className="min-w-0 break-words text-ink-dim">{c.statement}</span>
                     </li>
                   ))}
                 </ul>
-              </div>
+              </Part>
             )}
 
             {decisions.length > 0 && (
-              <div className="flex flex-col gap-1">
-                <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
-                  Decisions ({decisions.length})
-                </p>
-                <ul className="flex flex-col gap-1.5" aria-label="Decisions">
+              <Part label="Decisions" count={decisions.length}>
+                <ul className={ROWS} aria-label="Decisions">
                   {decisions.map((c, i) => (
                     <CandidateClaim key={`${c.ref.display}-${i}`} claim={c} />
                   ))}
                 </ul>
-              </div>
+              </Part>
             )}
 
-            <div className="flex flex-col gap-1">
-              <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
-                Acceptance criteria ({p.acceptanceCriteria.length})
-              </p>
+            <Part label="Acceptance criteria" count={p.acceptanceCriteria.length}>
               {p.acceptanceCriteria.length === 0 ? (
-                <p className="text-[11.5px] text-fail">
+                <Missing>
                   None. There is no observable way to judge whether this change was implemented.
-                </p>
+                </Missing>
               ) : (
                 <AcceptanceCriteria criteria={p.acceptanceCriteria} />
               )}
-            </div>
+            </Part>
 
-            <div className="flex flex-col gap-1">
-              <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
-                Unresolved ({p.unresolved.length})
-              </p>
+            <Part label="Unresolved" count={p.unresolved.length}>
               {p.unresolved.length === 0 ? (
-                <p data-testid="change-unresolved-none" className="text-[11.5px] text-ink-faint">
-                  none
+                <p data-testid="change-unresolved-none" className="text-small text-ink-faint">
+                  None
                 </p>
               ) : (
-                <ul data-testid="change-unresolved" className="flex flex-col gap-0.5">
+                <ul data-testid="change-unresolved" className={ROWS}>
                   {p.unresolved.map((q) => (
-                    <li key={q.id} className="flex min-w-0 items-baseline gap-2 text-[12px]">
-                      <span className="font-mono text-[10px] text-ink-faint">{q.id}</span>
-                      <span className="min-w-0 break-words text-await">{q.question}</span>
+                    <li
+                      key={q.id}
+                      className="flex min-w-0 items-baseline gap-2.5 px-3.5 py-2.5 text-small"
+                    >
+                      {/* Whole: an id that may shrink broke "Q-1" over two lines. */}
+                      <span className="shrink-0 whitespace-nowrap font-mono text-caption text-ink-faint">
+                        {q.id}
+                      </span>
+                      <span className="min-w-0 break-words text-await-ink">{q.question}</span>
                     </li>
                   ))}
                 </ul>
               )}
-            </div>
+            </Part>
 
-            {p.summary && <p className="text-[11.5px] text-ink-faint">{p.summary}</p>}
+            {p.summary && <p className="text-caption text-ink-faint">{p.summary}</p>}
           </div>
         );
       })}
     </div>
+  );
+}
+
+/**
+ * A path with its directory receding. A narrow row squeezes the directory
+ * first, down to a few characters and an ellipsis, then the file's stem; the
+ * extension stays, so a clipped name still says what kind of file it is.
+ * `wrap` breaks it over lines instead, where there is room to show it whole.
+ */
+function PathLabel({ path, wrap = false }: { path: string; wrap?: boolean }) {
+  const cut = path.lastIndexOf("/");
+  const dir = cut >= 0 ? path.slice(0, cut + 1) : "";
+  const base = cut >= 0 ? path.slice(cut + 1) : path;
+  if (wrap) {
+    return (
+      <span className="min-w-0 flex-1 break-words font-mono text-small">
+        {dir && <span className="text-ink-faint">{dir}</span>}
+        {base}
+      </span>
+    );
+  }
+  const dot = base.lastIndexOf(".");
+  const split = dot > 0 && base.length - dot <= 8;
+  const stem = split ? base.slice(0, dot) : base;
+  const ext = split ? base.slice(dot) : "";
+  // Mono, so widths are counted in characters against the row's own width
+  // (100cqw) and rounded down to whole ones: an ellipsis then sits flush
+  // against what follows it instead of leaving a stray part-character gap,
+  // which flex shrinking alone would.
+  const fit = (w: string) => `calc(round(down, ${w}, 1ch) + 0.5px)`;
+  const dirWidth = dir
+    ? fit(`clamp(${Math.min(dir.length, 6)}ch, 100cqw - ${base.length}ch, ${dir.length}ch)`)
+    : "0px";
+  const stemWidth = fit(`min(${stem.length}ch, 100cqw - ${dirWidth} - ${ext.length}ch - 0.5px)`);
+  return (
+    <span className="flex min-w-0 flex-1 overflow-hidden whitespace-nowrap font-mono text-small [container-type:inline-size]">
+      {dir && (
+        <span className="shrink-0 truncate text-ink-faint" style={{ width: dirWidth }}>
+          {dir}
+        </span>
+      )}
+      <span className="shrink-0 truncate" style={{ width: stemWidth }}>
+        {stem}
+      </span>
+      {ext && <span className="shrink-0">{ext}</span>}
+    </span>
   );
 }
 
@@ -988,7 +1364,7 @@ function ArtifactList({
   onSelect: (path: string) => void;
 }) {
   return (
-    <ul aria-label="Artifacts" className="flex flex-col gap-0.5">
+    <ul aria-label="Artifacts" className={`flex flex-col gap-px p-1 ${WELL}`}>
       {artifacts.map((a) => {
         const active = a.path === selected;
         return (
@@ -997,22 +1373,20 @@ function ArtifactList({
               type="button"
               onClick={() => onSelect(a.path)}
               aria-current={active ? "true" : undefined}
-              className={`flex w-full min-w-0 items-baseline gap-2 rounded-md px-2 py-1 text-left transition duration-(--duration-quick) hover:bg-surface-2 ${
-                active ? "bg-surface-2 text-ink" : "text-ink-dim"
+              title={a.path}
+              className={`flex min-h-9 w-full min-w-0 items-center gap-2.5 rounded-control px-2.5 py-1.5 text-left transition-colors duration-(--duration-quick) ${
+                active
+                  ? "bg-surface-2 text-ink"
+                  : "text-ink-dim hover:bg-surface-2/60 hover:text-ink"
               }`}
             >
-              <span className="min-w-0 flex-1 truncate font-mono text-[11.5px]">{a.path}</span>
-              {a.required && (
-                <span className="rounded border border-await/40 px-1 font-mono text-[8.5px] uppercase tracking-[0.1em] text-await">
-                  required
-                </span>
-              )}
-              {!a.text && (
-                <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-ink-faint">
-                  binary
-                </span>
-              )}
-              <span className="font-mono text-[10px] text-ink-faint">{formatBytes(a.bytes)}</span>
+              <Icon name="file" size={15} className={active ? "text-eye" : "text-ink-faint"} />
+              <PathLabel path={a.path} />
+              {a.required && <span className={chipClass()}>Required</span>}
+              {!a.text && <span className={chipClass()}>Binary</span>}
+              <span className="w-16 shrink-0 text-right text-caption text-ink-faint">
+                {formatBytes(a.bytes)}
+              </span>
             </button>
           </li>
         );
@@ -1021,68 +1395,98 @@ function ArtifactList({
   );
 }
 
-function ArtifactViewer({ selection, path }: { selection: GateSelection; path: string }) {
+/** The selected file, in a reading panel: its name and size on a header strip,
+ *  then the document itself. A lone file is already named by the one row
+ *  above it, so its strip carries only the size and age. */
+function ArtifactViewer({
+  selection,
+  path,
+  single,
+}: {
+  selection: GateSelection;
+  path: string;
+  single: boolean;
+}) {
   const { content, loading, error } = useArtifactContent(
     selection.instanceId,
     selection.phaseId,
     path,
   );
+  if (!loading && !error && !content) return null;
+  const header = (!single || content) && (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 border-b border-line px-4 py-2.5">
+      {!single && (
+        // A floor on the path's width, so on a phone the size and age drop to
+        // their own line instead of squeezing the name into a column.
+        <span className="flex min-w-48 flex-1 items-start gap-2 text-ink" title={path}>
+          <Icon name="file" size={15} className="mt-0.5 shrink-0 text-ink-faint" />
+          <PathLabel path={path} wrap />
+        </span>
+      )}
+      {content && (
+        <span className="text-caption text-ink-faint">
+          {formatBytes(content.bytes)} · modified <TimeAgo iso={content.modifiedAt} />
+        </span>
+      )}
+    </div>
+  );
+  let body: ReactNode;
   if (loading) {
-    return (
-      <div role="status" aria-busy="true" className="mt-3">
+    body = (
+      <div role="status" aria-busy="true" className="px-5 py-4">
         <span className="sr-only">Loading {path}…</span>
-        <Skeleton className="h-3 w-full" />
+        <Skeleton className="h-3.5 w-2/5" />
+        <Skeleton className="mt-3 h-3 w-full" />
         <Skeleton className="mt-2 h-3 w-4/5" />
         <Skeleton className="mt-2 h-3 w-2/3" />
       </div>
     );
-  }
-  if (error) {
-    return (
-      <p role="alert" className="mt-3 text-[12px] text-fail">
-        Couldn't load {path}: {error}
+  } else if (error) {
+    body = (
+      <p role="alert" className="flex items-start gap-2 px-4 py-3.5 text-small text-fail">
+        <Icon name="alert" size={15} className="mt-0.5" />
+        <span className="min-w-0 break-words">{loadError(path, error)}</span>
       </p>
     );
-  }
-  if (!content) return null;
-  if (!content.text) {
-    return (
-      <dl className="mt-3 grid grid-cols-[max-content_1fr] gap-x-5 gap-y-1.5">
-        <Field label="file">
-          <span className="font-mono">{content.path}</span>
-        </Field>
-        <Field label="size">{formatBytes(content.bytes)}</Field>
-        <Field label="modified">{new Date(content.modifiedAt).toLocaleString()}</Field>
-        <Field label="note">Binary — not shown here.</Field>
-      </dl>
+  } else if (content && !content.text) {
+    body = (
+      <p className="flex items-center gap-2 px-4 py-6 text-small text-ink-dim">
+        <Icon name="eye" size={15} className="text-ink-faint" />
+        Binary — not shown here.
+      </p>
+    );
+  } else {
+    const text = content?.content ?? "";
+    body = (
+      <Fragment>
+        {content?.truncated && (
+          <p className="flex items-center gap-2 border-b border-line px-4 py-2 text-caption text-ink-faint">
+            <Icon name="info" size={13} />
+            Showing the first {formatBytes(text.length)} of {formatBytes(content.bytes)}.
+          </p>
+        )}
+        {isMarkdown(path) ? (
+          <div className="px-5 py-4 sm:px-6 sm:py-5">
+            <Markdown source={text} className="!text-body max-w-[75ch] leading-relaxed" />
+          </div>
+        ) : (
+          <pre
+            data-testid="artifact-raw"
+            className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-caption leading-relaxed text-ink-dim"
+          >
+            {text}
+          </pre>
+        )}
+      </Fragment>
     );
   }
-  const body = content.content ?? "";
   return (
-    <div data-testid="artifact-viewer" className="mt-3">
-      {content.truncated && (
-        <p className="mb-2 text-[10.5px] text-ink-faint">
-          Showing the first {formatBytes(body.length)} of {formatBytes(content.bytes)}.
-        </p>
-      )}
-      {isMarkdown(content.path) ? (
-        <div className="rounded-lg border border-line bg-surface px-4 py-3">
-          <Markdown source={body} />
-        </div>
-      ) : (
-        <pre
-          data-testid="artifact-raw"
-          className="max-h-[50vh] overflow-auto rounded-lg bg-black/30 p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap break-words text-ink-dim"
-        >
-          {body}
-        </pre>
-      )}
+    <div data-testid="artifact-viewer" className={WELL}>
+      {header}
+      {body}
     </div>
   );
 }
-
-const BUTTON =
-  "rounded-md border px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] transition-transform duration-(--duration-press) disabled:opacity-40 motion-safe:active:scale-[0.97]";
 
 interface GateActions {
   approve: (instanceId: string, opts?: GateActionOptions) => Promise<unknown>;
@@ -1103,20 +1507,53 @@ export function GateDrawer({
     selection?.phaseId ?? null,
   );
   if (!selection) return <Drawer open={false} title="" onClose={onClose} children={null} />;
-  // Fresh state per gate: a different phase, or the same one on a new attempt,
-  // must not inherit a half-typed note or a stale "approved" line — so the
-  // panel is keyed on both and simply remounts.
+  // The hook keeps the last gate's review while the next one loads, and it
+  // must not be shown, nor approved, under this gate's title.
+  const current =
+    review?.instanceId === selection.instanceId && review.phaseId === selection.phaseId
+      ? review
+      : null;
+  // Fresh state per gate: a different phase must not inherit a half-typed note
+  // or a stale "approved" line, so the panel is keyed on the gate and remounts.
+  // Not on the attempt: that is unknown until the review arrives, and keying on
+  // it remounted the drawer the moment it did, which replayed its entrance and
+  // lost track of the button that opened it. A new attempt resets in place.
   return (
     <GatePanel
-      key={`${selection.instanceId}/${selection.phaseId}@${review?.attempt ?? "?"}`}
+      key={`${selection.instanceId}/${selection.phaseId}`}
       selection={selection}
-      review={review}
-      loading={loading}
+      review={current}
+      loading={loading || (!current && !error)}
       error={error}
       onClose={onClose}
       approve={approve}
       revise={revise}
     />
+  );
+}
+
+/** Argus's own checks, summarised beside the buttons that act on them. */
+function ChecksSummary({ checks }: { checks: Check[] }) {
+  const n = checkCounts(checks);
+  if (n.total === 0) return null;
+  if (n.failed > 0) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-caption font-semibold text-fail">
+        <Icon name="x-circle" size={14} />
+        {plural(n.failed, "check")} failed
+      </span>
+    );
+  }
+  // A check that was not evaluated has not failed, so a partial result is a
+  // plain breakdown rather than a near-miss "2 of 3".
+  if (n.passed < n.total) {
+    return <span className="text-caption text-ink-dim">{checksAside(checks)}</span>;
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 text-caption text-ok">
+      <Icon name="check-circle" size={14} />
+      {n.total === 1 ? "1 check passed" : `All ${n.total} checks passed`}
+    </span>
   );
 }
 
@@ -1141,6 +1578,28 @@ function GatePanel({
   const [note, setNote] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [sent, setSent] = useState<string | null>(null);
+  // The same gate on a new attempt (it was revised and stopped here again)
+  // starts clean. Reset during render, so no frame shows the last attempt's
+  // note or its "Revision sent" line under the new attempt's files.
+  const [attempt, setAttempt] = useState(review?.attempt);
+  if (review && review.attempt !== attempt) {
+    setAttempt(review.attempt);
+    if (attempt !== undefined) {
+      setSelectedPath(null);
+      setBusy(false);
+      setNoteOpen(false);
+      setNote("");
+      setErr(null);
+      setSent(null);
+    }
+  }
+  const noteId = useId();
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+
+  // Opening the note is asking to write one: put the caret there.
+  useEffect(() => {
+    if (noteOpen) noteRef.current?.focus();
+  }, [noteOpen]);
 
   // Default to the first required artifact, else the first text one, so a
   // gate with one report opens straight onto it.
@@ -1173,90 +1632,122 @@ function GatePanel({
   const reviseLabel = retry ? "Retry" : "Revise";
   const noteRequired = gated;
   const target: GateActionOptions = { phaseId: selection.phaseId };
+  const canSend = !busy && !(noteRequired && note.trim() === "");
+  const send = () =>
+    run(
+      () => revise(selection.instanceId, note.trim() || undefined, target),
+      retry ? "Retry sent — phase restarting" : "Revision sent — phase restarting",
+    );
+  const parts = payloadParts(review?.payload ?? null);
+  const checks = review?.verification?.checks ?? [];
 
   return (
     <Drawer
       open
+      size="lg"
       onClose={onClose}
       originY={selection.originY}
       title={review?.phaseName ?? selection.phaseId}
       subtitle={`${selection.pipelineName}${review ? ` · attempt ${review.attempt + 1}` : ""}`}
       footer={
         review && (
-          <div className="flex flex-col gap-2">
-            <div className="flex flex-wrap items-center gap-2">
-              {review.canApprove && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() =>
-                    run(() => approve(selection.instanceId, target), "Approved — pipeline resuming")
-                  }
-                  className={`${BUTTON} border-ok bg-ok/10 text-ok`}
-                >
-                  Approve
-                </button>
-              )}
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => setNoteOpen((o) => !o)}
-                aria-expanded={noteOpen}
-                className={`${BUTTON} border-await bg-await/10 text-await`}
-              >
-                {reviseLabel}
-              </button>
-              <span className="ml-auto">
-                <StatusPill status={gated ? "await" : "failed"} />
-              </span>
-            </div>
-            {review.canApprove && !noteOpen && (
-              <p className="text-[11px] text-ink-faint">
-                Approve continues the pipeline with exactly what is shown here.
-              </p>
-            )}
+          <div className="flex flex-col gap-3">
             {noteOpen && (
-              <div className="flex flex-col gap-1.5">
-                <p className="text-[11px] text-ink-faint">
+              <div className="flex flex-col gap-2 border-b border-line pb-3">
+                <label htmlFor={noteId} className={labelClass}>
+                  Revision note
+                  {!noteRequired && <span className="font-normal text-ink-faint"> (optional)</span>}
+                </label>
+                <p className="text-caption text-ink-faint">
                   {retry
                     ? "Runs the phase again. A note is optional."
                     : "Sends it back to the agent with your note; this attempt's files are discarded and the phase runs again."}
                 </p>
-                <div className="flex gap-1.5">
-                  <input
-                    type="text"
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
-                    aria-label="Revision note"
-                    placeholder={noteRequired ? "What should change?" : "Note (optional)"}
-                    className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1 font-mono text-[11px] text-ink placeholder:text-ink-faint"
-                  />
-                  <button
-                    type="button"
-                    disabled={busy || (noteRequired && note.trim() === "")}
-                    onClick={() =>
-                      run(
-                        () => revise(selection.instanceId, note.trim() || undefined, target),
-                        retry
-                          ? "Retry sent — phase restarting"
-                          : "Revision sent — phase restarting",
-                      )
+                <textarea
+                  id={noteId}
+                  ref={noteRef}
+                  rows={3}
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                      e.preventDefault();
+                      if (canSend) send();
                     }
-                    className={`${BUTTON} border-await bg-await/10 text-await`}
+                  }}
+                  placeholder={noteRequired ? "What should change?" : "Note (optional)"}
+                  className={`${fieldClass} min-h-20 w-full resize-y leading-relaxed`}
+                />
+                <div className="flex items-center justify-end gap-3">
+                  <span className="hidden items-center gap-1 text-caption text-ink-faint sm:inline-flex">
+                    <kbd className="kbd">Ctrl</kbd>
+                    <kbd className="kbd">Enter</kbd>
+                    <span className="ml-0.5">to send</span>
+                  </span>
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    iconRight="arrow-right"
+                    disabled={!canSend}
+                    onClick={send}
                   >
                     Send
-                  </button>
+                  </Button>
                 </div>
               </div>
             )}
-            {sent && !err && (
-              <p role="status" className="font-mono text-[10px] text-ok">
+            <div className="flex flex-wrap items-center gap-2">
+              {/* One loud action at a time: while a note is being written, Send
+                  is it, and Approve steps back (still there, no longer the
+                  bigger target beside the action being composed). */}
+              {review.canApprove && (
+                <Button
+                  variant={noteOpen ? "secondary" : "approve"}
+                  size="lg"
+                  icon="check"
+                  disabled={busy}
+                  className="flex-1 sm:flex-none"
+                  onClick={() =>
+                    run(() => approve(selection.instanceId, target), "Approved — pipeline resuming")
+                  }
+                >
+                  Approve
+                </Button>
+              )}
+              <Button
+                // With no Approve on offer, sending it back is the next step.
+                variant={!review.canApprove && !noteOpen ? "primary" : "secondary"}
+                size="lg"
+                icon={retry ? "retry" : "edit"}
+                disabled={busy}
+                aria-expanded={noteOpen}
+                className="flex-1 aria-expanded:border-ink-faint/45 aria-expanded:bg-surface-3 sm:flex-none"
+                onClick={() => setNoteOpen((o) => !o)}
+              >
+                {reviseLabel}
+              </Button>
+              <span className="ml-auto flex min-w-0 items-center">
+                <ChecksSummary checks={checks} />
+              </span>
+            </div>
+            {sent && !err ? (
+              <p role="status" className="flex items-center gap-2 text-small font-semibold text-ok">
+                <Icon name="check-circle" size={16} />
                 {sent}
               </p>
+            ) : (
+              review.canApprove &&
+              !noteOpen &&
+              !err && (
+                <p className="text-caption text-ink-faint">
+                  Approve continues the pipeline with exactly what is shown here.
+                </p>
+              )
             )}
             {err && (
-              <p role="alert" className="font-mono text-[10px] text-fail">
-                {err}
+              <p role="alert" className="flex items-start gap-2 text-small text-fail">
+                <Icon name="alert" size={16} className="mt-px" />
+                <span className="min-w-0 break-words">{err}</span>
               </p>
             )}
           </div>
@@ -1264,113 +1755,110 @@ function GatePanel({
       }
     >
       {loading && !review ? (
-        <div role="status" aria-busy="true">
+        <div role="status" aria-busy="true" className="flex flex-col gap-6">
           <span className="sr-only">Loading the review…</span>
-          <Skeleton className="h-3 w-full" />
-          <Skeleton className="mt-2 h-3 w-4/5" />
-          <Skeleton className="mt-2 h-3 w-2/3" />
+          <Skeleton className="h-24 w-full rounded-tile" />
+          <div>
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="mt-4 h-3 w-full" />
+            <Skeleton className="mt-2 h-3 w-4/5" />
+            <Skeleton className="mt-2 h-3 w-2/3" />
+          </div>
         </div>
       ) : error && !review ? (
-        <p role="alert" className="text-[12px] text-fail">
-          Couldn't load the review: {error}
-        </p>
+        <div
+          role="alert"
+          className="flex items-start gap-2.5 rounded-tile border border-fail/30 bg-fail/[0.07] px-4 py-3 text-small text-fail-ink"
+        >
+          <Icon name="alert" size={16} className="mt-0.5 text-fail" />
+          <span className="min-w-0 break-words">{loadError("the review", error)}</span>
+        </div>
       ) : review ? (
-        <div className="flex flex-col gap-5">
-          <section>
-            <Heading>{gated ? "Waiting on you" : "What went wrong"}</Heading>
-            {gated && (
-              <p className="mb-2 text-[12px] text-ink-faint">
-                The pipeline is paused here until you decide.
-              </p>
+        <div className="flex flex-col gap-8">
+          <div className="flex flex-col gap-3">
+            <Lead status={review.status} reason={parts.reason} />
+            {parts.notes.map((n, i) => (
+              <ClosingNote key={i} note={n} />
+            ))}
+            {review.payload == null && (
+              <p className="text-small text-ink-faint">The agent left no closing note.</p>
             )}
-            {review.payload != null ? (
-              <Payload value={review.payload} />
-            ) : (
-              <p className="text-[12px] text-ink-faint">The agent left no closing note.</p>
-            )}
-          </section>
-
-          {review.result !== undefined && (
-            <section>
-              <Heading>Result</Heading>
-              <pre
-                data-testid="gate-result"
-                className="max-h-[30vh] overflow-auto rounded-lg bg-black/30 p-3 font-mono text-[11px] leading-relaxed text-ink-dim"
-              >
-                {JSON.stringify(review.result, null, 2)}
-              </pre>
-            </section>
-          )}
+            <PayloadDetails parts={parts} />
+          </div>
 
           {review.verification && (
-            <section>
-              <Heading>Checks</Heading>
+            <Block title="Checks" aside={checksAside(review.verification.checks)}>
               <Verification report={review.verification} />
-            </section>
+            </Block>
+          )}
+
+          {review.result !== undefined && (
+            <Block title="Result">
+              <pre data-testid="gate-result" className={`max-h-[30vh] ${CODE}`}>
+                {JSON.stringify(review.result, null, 2)}
+              </pre>
+            </Block>
           )}
 
           {review.knowledge && review.knowledge.length > 0 && (
-            <section>
-              <Heading>Candidate knowledge</Heading>
+            <Block title="Candidate knowledge">
               <CandidateKnowledge
                 previews={review.knowledge}
                 discovery={review.discovery}
                 canApprove={review.canApprove}
               />
-            </section>
+            </Block>
           )}
 
           {review.changeProposals && review.changeProposals.length > 0 && (
-            <section>
-              <Heading>Change intent</Heading>
+            <Block title="Change intent">
               <ChangeProposalPanel
                 previews={review.changeProposals}
                 summary={review.changeIntent}
                 canApprove={review.canApprove}
               />
-            </section>
+            </Block>
           )}
 
           {review.ruleVerifications && review.ruleVerifications.length > 0 && (
-            <section>
-              <Heading>Business-rule verification</Heading>
+            <Block title="Business-rule verification">
               <RuleVerification
                 previews={review.ruleVerifications}
                 summary={review.ruleVerification}
                 canApprove={review.canApprove}
               />
-            </section>
+            </Block>
           )}
 
           {review.realization && (
-            <section>
-              <Heading>Change realization</Heading>
+            <Block title="Change realization">
               <RealizationHeader realization={review.realization} />
-            </section>
+            </Block>
           )}
 
           {review.acceptanceVerifications && review.acceptanceVerifications.length > 0 && (
-            <section>
-              <Heading>Acceptance criteria</Heading>
+            <Block title="Acceptance criteria">
               <AcceptanceVerification
                 previews={review.acceptanceVerifications}
                 summary={review.acceptanceVerification}
                 canApprove={review.canApprove}
               />
-            </section>
+            </Block>
           )}
 
-          <section>
-            <Heading>Artifacts</Heading>
+          <Block
+            title="Artifacts"
+            aside={artifacts.length > 0 ? plural(artifacts.length, "file") : undefined}
+          >
             {artifacts.length === 0 ? (
-              <p data-testid="gate-no-artifacts" className="text-[12px] text-ink-faint">
+              <p data-testid="gate-no-artifacts" className="text-small text-ink-faint">
                 This phase left no files.
                 {review.canApprove ? " Approving continues with the summary above." : ""}
               </p>
             ) : (
               <Fragment>
                 {review.truncated && (
-                  <p className="mb-1.5 text-[10.5px] text-ink-faint">
+                  <p className="text-caption text-ink-faint">
                     Showing the first {artifacts.length} files; more exist on disk.
                   </p>
                 )}
@@ -1384,11 +1872,12 @@ function GatePanel({
                     key={`${shownPath}@${review.attempt}`}
                     selection={selection}
                     path={shownPath}
+                    single={artifacts.length === 1}
                   />
                 )}
               </Fragment>
             )}
-          </section>
+          </Block>
         </div>
       ) : null}
     </Drawer>

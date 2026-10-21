@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, within, cleanup } from "@testing-library/react";
+import { useState } from "react";
+import { render, screen, fireEvent, within, cleanup, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ChangeProposalPreview, PhaseArtifactContent, PhaseReview } from "../types";
 import { GateDrawer, type GateSelection } from "./GateDrawer";
 
@@ -149,12 +151,16 @@ describe("GateDrawer — content", () => {
     open();
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText("What went wrong")).toBeInTheDocument();
-    expect(within(dialog).getByTestId("gate-reason")).toHaveTextContent("blocked: no remote");
+    // Sentence case, and "blocked" kept: the pill says Failed, so it is news.
+    expect(within(dialog).getByTestId("gate-reason")).toHaveTextContent("Blocked: no remote");
     // The note is rendered, not dumped: its heading is a heading and its
     // emphasis is markup.
     const note = within(dialog).getByTestId("gate-closing-note");
     expect(within(note).getByRole("heading", { level: 2, name: "Ship" })).toBeInTheDocument();
     expect(within(note).getByText("fsck passes").tagName).toBe("STRONG");
+    // The agent's protocol line is a chip beside the note, not a line in it.
+    expect(within(note).getByText("Reported blocked")).toBeInTheDocument();
+    expect(note).not.toHaveTextContent("ARGUS_OUTCOME");
     // The hook event's bookkeeping is behind a closed toggle, without the
     // fields already shown above it.
     const raw = within(dialog).getByTestId("gate-raw-payload");
@@ -167,6 +173,73 @@ describe("GateDrawer — content", () => {
     expect(raw).not.toHaveTextContent('"reason"');
     fireEvent.click(within(dialog).getByText("Raw payload"));
     expect(details).toHaveAttribute("open");
+  });
+
+  it("tells a failure once: a sentence, not the protocol, and the agent's fuller words in its place", () => {
+    // The reason is the agent's marker re-encoded by the scheduler, and the
+    // agent's last message says the same thing at more length: with the Failed
+    // pill, one error used to be told three times.
+    mockReview.review = review({
+      status: "failed",
+      canApprove: false,
+      payload: {
+        reason: "failed: could not reach advisory database (ETIMEDOUT)",
+        last_assistant_message:
+          "Could not reach the advisory database (ETIMEDOUT) after 3 retries.\n\nARGUS_OUTCOME: failed could not reach advisory database (ETIMEDOUT)",
+      },
+    });
+    open();
+    let dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByTestId("gate-reason")).toHaveTextContent(
+      /^Could not reach the advisory database \(ETIMEDOUT\) after 3 retries\.$/,
+    );
+    expect(within(dialog).queryByTestId("gate-closing-note")).toBeNull();
+    expect(dialog).not.toHaveTextContent(/failed:/);
+    cleanup();
+
+    // A message that goes on keeps the rest; a reason with no message is
+    // still a sentence.
+    mockReview.review = review({
+      status: "failed",
+      canApprove: false,
+      payload: {
+        reason: "failed: could not reach advisory database (ETIMEDOUT)",
+        last_assistant_message:
+          "Could not reach the advisory database (ETIMEDOUT).\n\nThe mirror was down too.",
+      },
+    });
+    open();
+    dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByTestId("gate-reason")).toHaveTextContent(
+      /^Could not reach the advisory database \(ETIMEDOUT\)\.$/,
+    );
+    const note = within(dialog).getByTestId("gate-closing-note");
+    expect(note).toHaveTextContent(/The mirror was down too\./);
+    expect(note).not.toHaveTextContent(/Could not reach/);
+    cleanup();
+
+    // A line with Markdown in it stays in the note, where it is rendered.
+    mockReview.review = review({
+      status: "failed",
+      canApprove: false,
+      payload: {
+        reason: "failed: could not reach advisory.db (ETIMEDOUT)",
+        last_assistant_message: "Could not reach `advisory.db` (ETIMEDOUT) after 3 retries.",
+      },
+    });
+    open();
+    dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByTestId("gate-reason")).toBeNull();
+    expect(within(dialog).getByText("advisory.db").tagName).toBe("CODE");
+    cleanup();
+
+    mockReview.review = review({
+      status: "failed",
+      canApprove: false,
+      payload: { reason: "failed: tests are red" },
+    });
+    open();
+    expect(screen.getByTestId("gate-reason")).toHaveTextContent(/^Tests are red$/);
   });
 
   it("shows a summary-only payload as a rendered note with no raw toggle", () => {
@@ -347,6 +420,82 @@ describe("GateDrawer — content", () => {
   });
 });
 
+describe("GateDrawer — focus", () => {
+  /** A board with one opener, as the Command Center wires it. */
+  function Board() {
+    const [sel, setSel] = useState<GateSelection | null>(null);
+    return (
+      <>
+        <button type="button" onClick={() => setSel(selection)}>
+          Review
+        </button>
+        <GateDrawer
+          selection={sel}
+          onClose={() => setSel(null)}
+          approve={approve}
+          revise={revise}
+        />
+      </>
+    );
+  }
+
+  it("hands focus back to the opener when the review arrived after the drawer opened", async () => {
+    // The first gate opened after a page load: nothing is cached, so the review
+    // lands while the drawer is already open. It used to remount the drawer,
+    // which then took the old Close button for its opener, and closing it left
+    // focus on the page body.
+    const user = userEvent.setup();
+    mockReview.review = null;
+    mockReview.loading = true;
+    const { rerender } = render(<Board />);
+    const opener = screen.getByRole("button", { name: "Review" });
+    await user.click(opener);
+    const close = screen.getByRole("button", { name: "Close" });
+    await waitFor(() => expect(close).toHaveFocus());
+
+    mockReview.review = review();
+    mockReview.loading = false;
+    rerender(<Board />);
+    expect(await screen.findByText("Drafted the quarterly report.")).toBeInTheDocument();
+    // The same drawer, not a new one: focus stays where it was.
+    expect(close).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(opener).toHaveFocus();
+  });
+
+  it("never shows one gate's review under another's title", () => {
+    // The read keeps the last gate's review while the next one loads; Approve
+    // beside it would act on the gate named in the title.
+    mockReview.review = review({ phaseId: "publish", phaseName: "Publish" });
+    open();
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByText("Publish")).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: /^approve$/i })).toBeNull();
+    expect(within(dialog).getByRole("status")).toHaveTextContent(/loading the review/i);
+  });
+
+  it("keeps a half-written note while the review refreshes, and starts clean on a new attempt", () => {
+    const { rerender } = open();
+    fireEvent.click(screen.getByRole("button", { name: /^revise$/i }));
+    fireEvent.change(screen.getByLabelText(/revision note/i), { target: { value: "tighten" } });
+
+    mockReview.review = review();
+    rerender(
+      <GateDrawer selection={selection} onClose={vi.fn()} approve={approve} revise={revise} />,
+    );
+    expect(screen.getByLabelText(/revision note/i)).toHaveValue("tighten");
+
+    mockReview.review = review({ attempt: 2 });
+    rerender(
+      <GateDrawer selection={selection} onClose={vi.fn()} approve={approve} revise={revise} />,
+    );
+    expect(screen.getByText(/Reports · attempt 3/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/revision note/i)).toBeNull();
+  });
+});
+
 describe("GateDrawer — deciding", () => {
   it("Approve targets the phase and stays disabled after an accepted click", async () => {
     approve.mockImplementationOnce(() => Promise.resolve(new Response()));
@@ -511,12 +660,14 @@ describe("GateDrawer — candidate knowledge", () => {
     expect(panel).toHaveTextContent(/Kobra bookings restrict customer comments to 180/);
     expect(panel).toHaveTextContent(/src\/Booking\/KobraAdapter\.cs:120-136@abc123de/);
     expect(panel).toHaveTextContent(/KobraAdapter\.MapComment/);
-    expect(panel).toHaveTextContent(/from local:kobra-origin/);
+    expect(panel).toHaveTextContent(/From local:kobra-origin/);
 
     // A proposed claim is named honestly: no canonical id is implied.
     expect(panel).toHaveTextContent(/local:comment-limit/);
-    expect(within(panel).getAllByText("business-rule").length).toBeGreaterThan(0);
-    expect(within(panel).getByText("assumption")).toBeInTheDocument();
+    // In the Knowledge view's words, not the ledger's keys.
+    expect(within(panel).getAllByText("Business rule").length).toBeGreaterThan(0);
+    expect(within(panel).getByText("Assumption")).toBeInTheDocument();
+    expect(within(panel).queryByText("business-rule")).not.toBeInTheDocument();
 
     // The revision shows before and after.
     expect(panel).toHaveTextContent(/RULE-17 v1 → v2/);
@@ -524,13 +675,14 @@ describe("GateDrawer — candidate knowledge", () => {
     expect(panel).toHaveTextContent(/Kobra comments max = 500/);
 
     // The deterministic warning, and the un-evidenced assumption called out.
+    // In sentence case: the server writes it as a clause.
     expect(screen.getByTestId("candidate-warnings")).toHaveTextContent(
-      /carries neither evidence nor a justification/,
+      /^Assumption carries neither evidence nor a justification/,
     );
     expect(screen.getAllByTestId("candidate-no-evidence").length).toBeGreaterThan(0);
 
     // …and the consumption the run declared.
-    expect(panel).toHaveTextContent(/consumed: RULE-17:v1/);
+    expect(panel).toHaveTextContent(/Consumed: RULE-17:v1/);
   });
 
   it("marks a stale revision so a reviewer knows the commit will refuse it", () => {
@@ -564,7 +716,10 @@ describe("GateDrawer — candidate knowledge", () => {
       ],
     });
     open();
-    expect(screen.getByTestId("gate-candidate-knowledge")).toHaveTextContent(/stale/);
+    // Named, and defined where it is shown, like every other chip here.
+    expect(
+      within(screen.getByTestId("gate-candidate-knowledge")).getByText("Stale"),
+    ).toHaveAttribute("title", expect.stringMatching(/commit will refuse it/));
   });
 
   it("is absent on an ordinary gate that proposed no knowledge", () => {
@@ -688,7 +843,8 @@ describe("GateDrawer — business-rule verification", () => {
 
     // THE distinction: the code is in breach and the rule still stands.
     expect(panel).toHaveTextContent(/violated/);
-    expect(panel).toHaveTextContent(/rule: supported/);
+    expect(panel).toHaveTextContent(/Rule supported/);
+    expect(panel).not.toHaveTextContent(/rule: /);
 
     // Evidence is concise and names the deterministic check Argus ran.
     expect(panel).toHaveTextContent(/check: crm-id-tests \(passed, exit 0\)/);
@@ -867,14 +1023,14 @@ describe("GateDrawer — change intent", () => {
 
     // What was asked for, verbatim, and whether the intent is fit to implement.
     expect(screen.getByTestId("change-request")).toHaveTextContent(/500-character customer/);
-    expect(screen.getByTestId("change-readiness")).toHaveTextContent("ready");
+    expect(screen.getByTestId("change-readiness")).toHaveTextContent("Ready");
 
     // CURRENT — the rule's own support beside what the implementation does.
     // Collapsing these two is how a bug becomes a requirement.
     const current = within(screen.getByLabelText("Current rules"));
     expect(current.getByText(/must not exceed 180 characters/)).toBeTruthy();
-    expect(panel).toHaveTextContent(/rule: supported/);
-    expect(panel).toHaveTextContent(/impl: holds @abc123de/);
+    expect(panel).toHaveTextContent(/Rule supported/);
+    expect(panel).toHaveTextContent(/Implementation holds at abc123de/);
 
     // PROPOSED — before and after, plus the decision that follows.
     const revisions = within(screen.getByLabelText("Proposed revisions"));
@@ -890,13 +1046,13 @@ describe("GateDrawer — change intent", () => {
     const criteria = screen.getByTestId("change-acceptance-criteria");
     expect(criteria).toHaveTextContent(/AC-1/);
     expect(criteria).toHaveTextContent(/501 characters is rejected/);
-    expect(criteria).toHaveTextContent(/regression/);
+    expect(criteria).toHaveTextContent(/Regression/);
 
-    expect(screen.getByTestId("change-unresolved-none")).toHaveTextContent("none");
+    expect(screen.getByTestId("change-unresolved-none")).toHaveTextContent("None");
     expect(panel).toHaveTextContent(/Nothing here is canonical yet/);
   });
 
-  it("marks an unfinished proposal needs-input and lists what is unknown", () => {
+  it("marks an unfinished proposal 'Needs input' and lists what is unknown", () => {
     mockReview.review = review({
       changeProposals: [
         changePreview({
@@ -915,7 +1071,7 @@ describe("GateDrawer — change intent", () => {
       ],
     });
     open();
-    expect(screen.getByTestId("change-readiness")).toHaveTextContent("needs-input");
+    expect(screen.getByTestId("change-readiness")).toHaveTextContent("Needs input");
     expect(screen.getByTestId("change-unresolved")).toHaveTextContent(
       /What should the new maximum be\?/,
     );

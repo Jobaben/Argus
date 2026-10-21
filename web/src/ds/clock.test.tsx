@@ -32,15 +32,32 @@ describe("useClock", () => {
     expect(result.current).toBe(first + CLOCK_TICK_MS);
   });
 
-  it("shares one interval across every subscriber and clears it with the last", () => {
+  it("shares one timer across every subscriber and clears it with the last", () => {
     const a = renderHook(() => useClock());
     const b = renderHook(() => useClock());
-    // One interval regardless of how many components read the clock.
+    // One timer regardless of how many components read the clock.
     expect(vi.getTimerCount()).toBe(1);
     a.unmount();
     expect(vi.getTimerCount()).toBe(1);
     b.unmount();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("ticks on the boundary, not a whole tick after whoever subscribed first", () => {
+    // Subscribed 10s into a tick: out of phase, the next tick came 15s later,
+    // and for that long "now" trailed the wall clock by up to 25s.
+    vi.setSystemTime(new Date("2026-07-07T12:00:10.000Z"));
+    const { result } = renderHook(() => useClock());
+    expect(result.current).toBe(Date.parse("2026-07-07T12:00:00.000Z"));
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(result.current).toBe(Date.parse("2026-07-07T12:00:15.000Z"));
+    act(() => {
+      vi.advanceTimersByTime(CLOCK_TICK_MS);
+    });
+    expect(result.current).toBe(Date.parse("2026-07-07T12:00:30.000Z"));
+    expect(vi.getTimerCount()).toBe(1);
   });
 
   it("re-reads the wall clock when it wakes up after being idle", () => {
@@ -116,6 +133,15 @@ describe("TimeAgo", () => {
     expect(el.tagName).toBe("TIME");
     expect(el).toHaveAttribute("dateTime", "2026-07-07T11:58:00.000Z");
     expect(el).toHaveAttribute("title");
+  });
+
+  it("never puts what just happened in the future", () => {
+    // 14s into a tick, the shared clock still reads the tick's start; a
+    // notification stamped a second ago is 13s ahead of it, and read "in 13s".
+    vi.setSystemTime(new Date("2026-07-07T12:00:14.000Z"));
+    render(<TimeAgo iso="2026-07-07T12:00:13.000Z" />);
+    expect(screen.getByText("just now")).toBeInTheDocument();
+    expect(screen.queryByText(/^in /)).toBeNull();
   });
 
   it("renders a dash for a missing timestamp", () => {

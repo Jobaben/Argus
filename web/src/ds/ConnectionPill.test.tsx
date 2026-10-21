@@ -36,9 +36,20 @@ describe("ConnectionPill", () => {
     expect(screen.getByRole("status")).toHaveAccessibleName(/connected/i);
   });
 
+  it("says Connecting, quietly and with no Retry, until the first attempt is answered", () => {
+    render(<ConnectionPill live={false} />);
+    expect(screen.getByText("Connecting")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveAccessibleName("Connecting to the Argus server");
+    expect(screen.getByRole("status").className).not.toMatch(/text-fail/);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
   it("says Offline — not an indefinite 'reconnecting' — when down", () => {
     render(<ConnectionPill live={false} />);
+    // The first attempt fails without ever opening.
+    act(() => sockets[0].close());
     expect(screen.getByText("Offline")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 
   it("counts down to the next attempt, so the wait is explained", () => {
@@ -50,7 +61,8 @@ describe("ConnectionPill", () => {
       sockets[0].close();
     });
     expect(screen.getByText(/retrying in \ds/)).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveAccessibleName(/retrying in \d+ seconds/i);
+    // The first backoff is one second, and it is said in the singular.
+    expect(screen.getByRole("status")).toHaveAccessibleName("Offline: retrying in 1 second");
   });
 
   it("offers a manual retry that reconnects without waiting out the backoff", async () => {

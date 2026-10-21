@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { subscribeLive } from "./liveSocket";
+import { fetchLoad, statusOf } from "./loadError";
 
 export interface LiveResourceState<T> {
   data: T;
   loading: boolean;
+  /** Why the last fetch failed, worded to be shown: the server's own reason
+   *  when it answered with an error, `UNREACHABLE` when it never answered. */
   error: string | null;
+  /** The HTTP status that error came with; null when there was no answer (or
+   *  no error). For views whose words depend on the answer — a 404 is "no such
+   *  run", a 401 a session that ended — rather than for wording the failure. */
+  errorStatus: number | null;
   /** Whether the shared WebSocket is currently connected. */
   live: boolean;
   /** When the value on screen last *changed*. Deliberately not "last checked":
@@ -29,6 +36,13 @@ export interface LiveResourceOptions<T> {
    *  sources with time-decaying ones (e.g. the Chronicle's session activity),
    *  where a healthy socket still can't signal every change. */
   pollAlways?: boolean;
+}
+
+interface Failure {
+  error: string;
+  status: number | null;
+  /** Whose failure it is: another path's is never this one's to show. */
+  path: string;
 }
 
 /** Retry schedule after a failed fetch: doubling, capped, jittered. */
@@ -80,7 +94,7 @@ export function useLiveResource<T>(
   const { events, select, initial, pollMs = 10000, pollAlways = false } = opts;
   const [data, setData] = useState<T>(initial);
   const [loading, setLoading] = useState(path != null);
-  const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<Failure | null>(null);
   const [live, setLive] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const mounted = useRef(true);
@@ -111,12 +125,14 @@ export function useLiveResource<T>(
   // every 304. Passing an unchanged value to a setter is not free: React still
   // renders the component once before bailing out, which would undo the whole
   // point of the 304 fast path. These let us skip the call entirely.
-  const errorRef = useRef<string | null>(null);
+  const failureRef = useRef<Failure | null>(null);
   const loadingRef = useRef(path != null);
-  const setErrorOnce = useCallback((next: string | null) => {
-    if (errorRef.current === next) return;
-    errorRef.current = next;
-    setError(next);
+  const setFailureOnce = useCallback((next: Failure | null) => {
+    const was = failureRef.current;
+    if (was?.error === next?.error && was?.status === next?.status && was?.path === next?.path)
+      return;
+    failureRef.current = next;
+    setFailure(next);
   }, []);
   const setLoadingOnce = useCallback((next: boolean) => {
     if (loadingRef.current === next) return;
@@ -143,7 +159,7 @@ export function useLiveResource<T>(
       state.abort = controller;
 
       try {
-        const res = await fetch(path, {
+        const res = await fetchLoad(path, {
           signal: controller.signal,
           // Ask the server every time, but let it answer 304. Browser-managed
           // revalidation would hand us a 200 out of its own cache, which defeats
@@ -158,10 +174,9 @@ export function useLiveResource<T>(
           // stamping a "last checked" timestamp here would defeat it, which is
           // why `updatedAt` tracks the last *change* rather than the last check.
           state.attempt = 0;
-          if (mounted.current) setErrorOnce(null);
+          if (mounted.current) setFailureOnce(null);
           return;
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
         const json = (await res.json()) as unknown;
         state.etag = res.headers?.get?.("etag") ?? null;
@@ -169,7 +184,7 @@ export function useLiveResource<T>(
         if (!mounted.current) return;
         setData(selectRef.current(json));
         setUpdatedAt(Date.now());
-        setErrorOnce(null);
+        setFailureOnce(null);
       } catch (e) {
         if (controller.signal.aborted) return;
         // A failed response says nothing about what the server holds now, so the
@@ -177,7 +192,11 @@ export function useLiveResource<T>(
         // 304 indefinitely.
         state.etag = null;
         if (!mounted.current) return;
-        setErrorOnce(e instanceof Error ? e.message : String(e));
+        setFailureOnce({
+          error: e instanceof Error ? e.message : String(e),
+          status: statusOf(e),
+          path,
+        });
         state.attempt += 1;
         if (state.retry) clearTimeout(state.retry);
         state.retry = setTimeout(() => {
@@ -198,7 +217,7 @@ export function useLiveResource<T>(
         }
       }
     },
-    [path, setErrorOnce, setLoadingOnce],
+    [path, setFailureOnce, setLoadingOnce],
   );
 
   // Declared before the fetching effect so the ref is current by the time that
@@ -213,6 +232,7 @@ export function useLiveResource<T>(
     state.etag = null;
     state.attempt = 0;
     state.pending = false;
+    setFailureOnce(null);
 
     const teardownRequest = () => {
       mounted.current = false;
@@ -268,15 +288,21 @@ export function useLiveResource<T>(
       stopPoll();
       unsubscribe();
     };
-  }, [path, refresh, pollMs, pollAlways, setLoadingOnce]);
+  }, [path, refresh, pollMs, pollAlways, setFailureOnce, setLoadingOnce]);
+
+  // Scoped while rendering, not only cleared by the effect above: that runs
+  // after the frame with the new path, which would show the last resource's
+  // error over the next one (another gate opened after one failed to load).
+  const shown = failure?.path === path ? failure : null;
 
   return {
     data,
     loading,
-    error,
+    error: shown?.error ?? null,
+    errorStatus: shown?.status ?? null,
     live,
     updatedAt,
-    stale: error !== null && updatedAt !== null,
+    stale: shown !== null && updatedAt !== null,
     refresh: () => void refresh(),
   };
 }

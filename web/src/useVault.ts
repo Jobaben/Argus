@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLiveResource } from "./live/useLiveResource";
+import { fetchLoad } from "./live/loadError";
 import type { VaultQuartersReport, VaultSearchResponse, VaultStatus } from "./types";
 
 const EMPTY_STATUS: VaultStatus = {
@@ -74,10 +75,9 @@ export function useVaultSearch(query: string) {
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/vault/search?q=${encodeURIComponent(q)}`, {
+        const res = await fetchLoad(`/api/vault/search?q=${encodeURIComponent(q)}`, {
           signal: controller.signal,
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as VaultSearchResponse;
         if (id !== requestId.current) return;
         setResponse(data);

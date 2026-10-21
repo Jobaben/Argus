@@ -40,7 +40,7 @@ Some features are panels within a page rather than separate destinations.
 | Issues                           | `#/issues`                                      | [Failure groups](health-and-quality.md#issues)                                                 |
 | Pipelines                        | `#/pipelines`                                   | [Definitions and gates](pipelines.md#pipelines)                                                |
 | Budget                           | `#/budget`                                      | [Limits](budget-and-history.md#budget)                                                         |
-| Users and sign-in                | More → Users, `#/users`; login on Pipelines     | [Accounts](administration.md#users--sign-in)                                                   |
+| Users and sign-in                | More → Users, `#/users`; sign in on Pipelines   | [Accounts](administration.md#users--sign-in)                                                   |
 | Search                           | `#/search`, / or palette                        | [Transcript search](sessions-and-inventory.md#search)                                          |
 | Agents                           | Palette or drill-down, `#/agents`               | [Discovered jobs](monitoring.md#agents)                                                        |
 | Agent Detail                     | `#/agent/<id>`                                  | [Job detail](monitoring.md#agent-detail)                                                       |

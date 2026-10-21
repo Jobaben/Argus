@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Run, ScheduleWithNext } from "../types";
 import Schedules from "./Schedules";
@@ -9,11 +9,13 @@ const mockState: {
   runs: Run[];
   create: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
+  remove: ReturnType<typeof vi.fn>;
 } = {
   schedules: [],
   runs: [],
   create: vi.fn().mockResolvedValue(undefined),
   update: vi.fn().mockResolvedValue(undefined),
+  remove: vi.fn().mockResolvedValue(undefined),
 };
 
 vi.mock("../useSchedules", () => ({
@@ -23,7 +25,7 @@ vi.mock("../useSchedules", () => ({
     error: null,
     create: mockState.create,
     update: mockState.update,
-    remove: vi.fn(),
+    remove: mockState.remove,
     runNow: vi.fn(),
     cancelRun: vi.fn(),
   }),
@@ -111,6 +113,7 @@ describe("Schedules catch-up", () => {
     mockState.schedules = [];
     mockState.runs = [];
     mockState.create = vi.fn().mockResolvedValue(undefined);
+    mockState.remove = vi.fn().mockResolvedValue(undefined);
   });
 
   it("submits catchUp: true when the checkbox is ticked", async () => {
@@ -190,6 +193,60 @@ describe("Schedules health", () => {
     expect(screen.getByText("prereq missing: gh")).toBeTruthy();
   });
 
+  it("reads a summary that is only the agent's outcome marker as the marker's reason", () => {
+    // The marker is protocol for the scheduler; its reason is the one human
+    // line there is, so the streak says it rather than nothing.
+    mockState.schedules = [schedule()];
+    mockState.runs = [
+      run({ id: "a", status: "failed", resultSummary: "ARGUS_OUTCOME: failed tests are red" }),
+      run({ id: "b", status: "failed" }),
+    ];
+    render(<Schedules />);
+    expect(screen.getByText("2 consecutive failures")).toBeTruthy();
+    expect(screen.getByText("tests are red")).toBeTruthy();
+    expect(screen.queryByText(/ARGUS_OUTCOME/)).toBeNull();
+  });
+
+  it("lays its footer out as a pipeline card's: run, open, then housekeeping", () => {
+    mockState.schedules = [schedule()];
+    render(<Schedules />);
+    const footer = screen
+      .getByRole("button", { name: /run now/i })
+      .closest("footer") as HTMLElement;
+    expect(
+      within(footer)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Run now", "Edit", "Disable", "Delete"]);
+    // One "Delete" per card on screen; a screen reader hears which card's.
+    expect(
+      within(footer).getByRole("button", { name: `Delete ${mockState.schedules[0].name}` }),
+    ).toBeInTheDocument();
+  });
+
+  it("asks before deleting, and Keep deletes nothing and hands focus back", async () => {
+    const user = userEvent.setup();
+    mockState.schedules = [schedule()];
+    render(<Schedules />);
+    const del = screen.getByRole("button", { name: "Delete Nightly audit" });
+    await user.click(del);
+    expect(screen.getByRole("group", { name: "Delete schedule “Nightly audit”?" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Keep" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Keep" }));
+    expect(screen.queryByRole("group", { name: /delete schedule/i })).toBeNull();
+    expect(del).toHaveFocus();
+    expect(mockState.remove).not.toHaveBeenCalled();
+  });
+
+  it("deletes once the question is answered with Delete schedule", async () => {
+    const user = userEvent.setup();
+    mockState.schedules = [schedule()];
+    render(<Schedules />);
+    await user.click(screen.getByRole("button", { name: "Delete Nightly audit" }));
+    await user.click(screen.getByRole("button", { name: "Delete schedule" }));
+    expect(mockState.remove).toHaveBeenCalledWith("s1");
+  });
+
   it("does not shout about a single failure a run row already shows", () => {
     mockState.schedules = [schedule()];
     mockState.runs = [run({ status: "failed" }), run({ id: "b", status: "succeeded" })];
@@ -210,9 +267,25 @@ describe("Schedules health", () => {
     render(<Schedules />);
     expect(screen.getByText("Healthy one")).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: /1 failing/i }));
+    const failing = screen.getByRole("button", { name: /1 failing/i });
+    await user.click(failing);
     expect(screen.queryByText("Healthy one")).toBeNull();
     expect(screen.getByText("Broken one")).toBeTruthy();
+    expect(failing).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /^all/i })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("names each card by its schedule, so its repeated buttons say whose they are", () => {
+    mockState.schedules = [
+      schedule({ id: "a", name: "Alpha" }),
+      schedule({ id: "b", name: "Beta" }),
+    ];
+    mockState.runs = [];
+    render(<Schedules />);
+    const beta = screen.getByRole("article", { name: "Beta" });
+    expect(within(beta).getByRole("button", { name: /run now/i })).toBeInTheDocument();
+    expect(within(beta).getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "Alpha" })).toBeInTheDocument();
   });
 
   it("omits a zero count rather than showing a grey nothing", () => {
@@ -262,5 +335,61 @@ describe("Schedules health", () => {
     // The Scheduler's own action belongs to the Schedules sub-tab only.
     expect(screen.queryByRole("button", { name: /New schedule/ })).toBeNull();
     route.segments = ["schedules"];
+  });
+});
+
+describe("Schedules editing", () => {
+  beforeEach(() => {
+    route.segments = ["schedules"];
+    mockState.runs = [];
+    mockState.update = vi.fn().mockResolvedValue(undefined);
+  });
+
+  it("keeps an open edit through a re-sort of the list", async () => {
+    // A wide screen: the cards once sat in two stacks there, and a card that
+    // changed stack on a re-sort was remounted — taking the typed edit with it.
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query.includes("min-width"),
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    try {
+      mockState.schedules = [
+        schedule({ id: "a", name: "Alpha" }),
+        schedule({ id: "b", name: "Beta" }),
+      ];
+      const user = userEvent.setup();
+      const { rerender } = render(<Schedules />);
+      await user.click(screen.getAllByRole("button", { name: "Edit" })[1]);
+      const name = screen.getByDisplayValue("Beta");
+      await user.clear(name);
+      await user.type(name, "Beta, edited");
+
+      // Alpha is paused from elsewhere: it drops to the end, and Beta moves up.
+      mockState.schedules = [
+        schedule({ id: "a", name: "Alpha", enabled: false }),
+        schedule({ id: "b", name: "Beta" }),
+      ];
+      rerender(<Schedules />);
+      expect(screen.getByDisplayValue("Beta, edited")).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("hands focus back to the card's Edit button when the form closes", async () => {
+    mockState.schedules = [
+      schedule({ id: "a", name: "Alpha" }),
+      schedule({ id: "b", name: "Beta" }),
+    ];
+    const user = userEvent.setup();
+    render(<Schedules />);
+    await user.click(screen.getAllByRole("button", { name: "Edit" })[1]);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getAllByRole("button", { name: "Edit" })[1]).toHaveFocus();
   });
 });

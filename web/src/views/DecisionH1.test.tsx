@@ -346,36 +346,66 @@ describe("DecisionH1Section", () => {
     await renderLoaded();
     expect(screen.getByRole("heading", { name: "H1 — gate operator action" })).toBeTruthy();
     const note = screen.getByRole("note");
+    // H2's anatomy: a short title, the caveat, then the statement as written.
+    expect(within(note).getByText("Shadow measurement only")).toBeTruthy();
     expect(within(note).getByText(STATEMENT)).toBeTruthy();
     expect(note.textContent).toContain(
-      "H1 is a shadow experiment: no gate, badge, ordering or approval reads these predictions, and gates still waiting on an operator are shown only as counts.",
+      "These predictions are never read by any gate, badge, ordering or approval, and gates still waiting on an operator are shown only as counts.",
     );
   });
 
   it("shows the statement even when nothing has been collected", async () => {
     await renderLoaded(emptyReport);
     expect(within(screen.getByRole("note")).getByText(STATEMENT)).toBeTruthy();
-    expect(screen.getByText("Collection enabled")).toBeTruthy();
-    expect(screen.getByText("No settings reported.")).toBeTruthy();
-    expect(screen.getByText("No H1 collection config recorded.")).toBeTruthy();
-    expect(screen.getByText("No H1 census recorded.")).toBeTruthy();
-    expect(screen.getByText("No deterministic baseline rows.")).toBeTruthy();
-    expect(screen.getByText("No verdict baseline rows.")).toBeTruthy();
-    expect(screen.getByText("No settled model assessments yet.")).toBeTruthy();
-    expect(screen.getAllByText("No findings recorded.").length).toBe(3);
+    // The same words as H2's report beside it, for the same states.
+    expect(screen.getByText("On")).toBeTruthy();
+    expect(screen.getByText("No valid settings")).toBeTruthy();
+    expect(screen.getByText("No collection config recorded")).toBeTruthy();
+    expect(screen.getByText("No census recorded")).toBeTruthy();
+    expect(screen.getByText("No deterministic baseline rows")).toBeTruthy();
+    expect(screen.getByText("No verdict baseline rows")).toBeTruthy();
+    expect(screen.getByText("No settled model assessments yet")).toBeTruthy();
+    expect(screen.getAllByText("No findings recorded").length).toBe(3);
     expect(screen.getByText(/Gate pauses seen and not captured: none/)).toBeTruthy();
     expect(screen.getByText(/H1 report as of ledger record 0 \(no records\)/)).toBeTruthy();
   });
 
+  it("says a census of nothing captured in one line, as H2 does, not as zero tiles", async () => {
+    const zero = (population: "manual" | "auto-approve-declared") => ({
+      population,
+      captured: 0,
+      sampled: 0,
+      notSampled: 0,
+      pending: 0,
+      resolved: 0,
+      windowClosed: 0,
+      labeled: { sentBack: 0, notSentBack: 0, approve: 0, revise: 0, abort: 0 },
+      unlabeled: {},
+      state: { held: 0, changed: 0, unobserved: 0 },
+      principals: {},
+      notCalled: {},
+    });
+    await renderLoaded({
+      ...emptyReport,
+      report: { ...emptyReport.report, census: [zero("manual"), zero("auto-approve-declared")] },
+    });
+    expect(screen.getByText("No census recorded")).toBeTruthy();
+    expect(screen.queryByText("Labeled: sent back")).toBeNull();
+  });
+
   it("renders the collection status, settings and configs", async () => {
     await renderLoaded();
-    expect(screen.getByText("Collection off")).toBeTruthy();
-    expect(screen.getByText("ARGUS_H1_COLLECT is not set")).toBeTruthy();
+    expect(screen.getByText("Off")).toBeTruthy();
+    // The reason reads as the server said it; the variable in it is set as code.
+    const reason = screen.getByText(
+      (_, el) => el?.tagName === "SPAN" && el.textContent === "ARGUS_H1_COLLECT is not set",
+    );
+    expect(reason.querySelector("code")?.textContent).toBe("ARGUS_H1_COLLECT");
     expect(
       screen.getByText("paused — daily cap reached (until 2026-09-30T00:00:00.000Z)"),
     ).toBeTruthy();
     expect(fact("Sampling rate")).toBe("10%");
-    expect(fact("Models")).toBe("haiku · runner default");
+    expect(fact("Requested models")).toBe("haiku · runner default");
     expect(screen.getAllByText("haiku · runner default")).toHaveLength(2);
     expect(fact("Combined max calls per 24h")).toBe("50");
     expect(fact("H1 own share per 24h")).toBe("20");
@@ -402,8 +432,8 @@ describe("DecisionH1Section", () => {
     const census = screen
       .getByRole("heading", { name: "Census", level: 2 })
       .closest("section") as HTMLElement;
-    const card = within(census).getAllByRole("heading", { level: 3 })[0]
-      .parentElement as HTMLElement;
+    const card = within(census).getAllByRole("heading", { level: 3 })[0].closest("header")
+      ?.parentElement as HTMLElement;
     const row = (label: string) => within(card).getByText(label).nextSibling?.textContent;
     expect(row("Captured")).toBe("40");
     expect(row("Sampled")).toBe("12");
@@ -509,7 +539,7 @@ describe("DecisionH1Section", () => {
     expect(within(table).getByText("0.2–0.4")).toBeTruthy();
     expect(within(table).getByText("0.310")).toBeTruthy();
     expect(within(table).getByText("25.0%")).toBeTruthy();
-    expect(within(table).getByText("unmeasured (n = 5)")).toBeTruthy();
+    expect(within(table).getByText(/^unmeasured \(n = 5 < \d+\)$/)).toBeTruthy();
 
     // Paired baselines.
     expect(screen.getAllByText("Deterministic baseline on the same items").length).toBe(2);
@@ -519,14 +549,16 @@ describe("DecisionH1Section", () => {
 
     // Usage.
     expect(screen.getAllByText("p50 1200 · p95 3400 · max 4100 ms (n = 8)").length).toBe(2);
-    expect(
-      screen.getAllByText(/total \$0.0412 · mean \$0.0051 \(known 8, unknown 0\)/).length,
-    ).toBe(2);
+    expect(screen.getAllByText(/total \$0.04 · mean \$0.0051 \(known 8, unknown 0\)/).length).toBe(
+      2,
+    );
   });
 
   it("renders spend, methods and the integrity findings", async () => {
     await renderLoaded();
-    expect(screen.getByText("$0.0412")).toBeTruthy();
+    // The app's money format: cents, and more digits only under a cent.
+    expect(screen.getByText("$0.04")).toBeTruthy();
+    expect(screen.getByText("Provider calls")).toBeTruthy();
     expect(
       screen.getByText("Counts and money across all attempts, settled or not; never outcomes."),
     ).toBeTruthy();
@@ -568,6 +600,6 @@ describe("DecisionH1Section", () => {
   it("treats a malformed body as no report", async () => {
     mockFetch({ "/api/decisions/h1": () => okJson({ nope: true }) });
     render(<DecisionH1Section />);
-    expect(await screen.findByText("No H1 report available.")).toBeTruthy();
+    expect(await screen.findByText("No H1 report available")).toBeTruthy();
   });
 });

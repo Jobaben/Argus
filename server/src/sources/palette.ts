@@ -132,11 +132,19 @@ export function buildPalette(input: PaletteInput, now: Date): PaletteIndex {
       kind: "schedule",
       id: schedule.id,
       title: schedule.name,
-      subtitle: `${describeTrigger(schedule.trigger)}${schedule.enabled ? "" : " · disabled"}`,
+      // The badge says "paused"; the subtitle saying "disabled" as well named
+      // one state twice, in two words. Both words still find it.
+      subtitle: describeTrigger(schedule.trigger),
       href: "#/schedules",
       badge: schedule.enabled ? null : "paused",
       severity: "none",
-      keywords: [schedule.id, "schedule", "cron", schedule.cwd],
+      keywords: [
+        schedule.id,
+        "schedule",
+        "cron",
+        schedule.cwd,
+        ...(schedule.enabled ? [] : ["paused", "disabled"]),
+      ],
       runnableScheduleId: schedule.id,
     });
   }
@@ -167,7 +175,8 @@ export function buildPalette(input: PaletteInput, now: Date): PaletteIndex {
       kind: "issue",
       id: issue.fingerprint,
       title: issue.title,
-      subtitle: `${issue.count}× · ${issue.schedules.join(", ")}`,
+      // The count is the badge; printed here too, the row said "3×" twice.
+      subtitle: issue.schedules.length > 0 ? issue.schedules.join(", ") : null,
       href: "#/issues",
       badge: `${issue.count}×`,
       severity: "error",

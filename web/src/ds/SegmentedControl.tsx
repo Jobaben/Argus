@@ -1,3 +1,5 @@
+import { useRef } from "react";
+
 export interface Segment<T extends string> {
   value: T;
   label: string;
@@ -5,7 +7,9 @@ export interface Segment<T extends string> {
 
 /**
  * A compact segmented control for mutually exclusive view options (e.g. the
- * Chronicle window picker). Radio-group semantics: one always selected.
+ * Chronicle window picker). Radio-group semantics: one always selected, one Tab
+ * stop for the whole group, and the arrow keys move the choice — the keyboard
+ * contract a radio group promises, which seven separate Tab stops did not keep.
  */
 export function SegmentedControl<T extends string>({
   segments,
@@ -19,11 +23,31 @@ export function SegmentedControl<T extends string>({
   /** Accessible name for the group. */
   label: string;
 }) {
+  const groupRef = useRef<HTMLDivElement>(null);
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step =
+      e.key === "ArrowRight" || e.key === "ArrowDown"
+        ? 1
+        : e.key === "ArrowLeft" || e.key === "ArrowUp"
+          ? -1
+          : 0;
+    if (step === 0) return;
+    e.preventDefault();
+    const at = segments.findIndex((s) => s.value === value);
+    const next = segments[(at + step + segments.length) % segments.length];
+    onChange(next.value);
+    // Focus follows the selection, as in a native radio group.
+    requestAnimationFrame(() =>
+      groupRef.current?.querySelector<HTMLButtonElement>(`[data-value="${next.value}"]`)?.focus(),
+    );
+  };
   return (
     <div
+      ref={groupRef}
       role="radiogroup"
       aria-label={label}
-      className="inline-flex items-center gap-0.5 rounded-lg border border-line bg-ground-2 p-0.5"
+      onKeyDown={onKeyDown}
+      className="inline-flex items-center gap-0.5 rounded-control border border-line bg-ground-2 p-0.5"
     >
       {segments.map((s) => {
         const selected = s.value === value;
@@ -33,9 +57,13 @@ export function SegmentedControl<T extends string>({
             type="button"
             role="radio"
             aria-checked={selected}
+            data-value={s.value}
+            tabIndex={selected ? 0 : -1}
             onClick={() => onChange(s.value)}
-            className={`rounded-md px-2.5 py-1 font-mono text-[11px] font-bold uppercase tracking-[0.1em] transition motion-safe:active:scale-[0.96] ${
-              selected ? "bg-surface-2 text-ink" : "text-ink-faint hover:text-ink-dim"
+            className={`h-7 rounded-md px-2.5 text-caption font-semibold transition duration-(--duration-quick) motion-safe:active:scale-[0.96] ${
+              selected
+                ? "bg-surface-3 text-ink shadow-[inset_0_1px_0_rgb(255_255_255/0.05)]"
+                : "text-ink-faint hover:text-ink"
             }`}
           >
             {s.label}

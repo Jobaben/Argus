@@ -1,4 +1,4 @@
-import { Card, formatMs, formatUsd } from "../ds";
+import { Button, Card, Icon, Skeleton, chipClass, formatMs, formatUsd } from "../ds";
 import { useVerdict } from "../useVerdict";
 import type { CriterionScore, Rubric, Verdict, VerdictPoint } from "../types";
 
@@ -12,19 +12,32 @@ import type { CriterionScore, Rubric, Verdict, VerdictPoint } from "../types";
  * context that gives it meaning.
  */
 
-function scoreTone(score: number, minScore: number | null): string {
-  if (minScore != null && score < minScore) return "text-fail";
-  if (score >= 8) return "text-ok";
-  if (score >= 5) return "text-await";
-  return "text-fail";
+/**
+ * Where a score sits. Strong is good news, under the bar (or under 5 when
+ * there is no bar) is a failure; a middling score that still clears the bar is
+ * neither, and painting it amber or violet would claim a status it does not
+ * have. The figure and its bar take their colour from the same answer.
+ */
+function scoreBand(score: number, minScore: number | null): "fail" | "ok" | "mid" {
+  if (minScore != null && score < minScore) return "fail";
+  if (score >= 8) return "ok";
+  if (score >= 5) return "mid";
+  return "fail";
 }
+
+const SCORE_TEXT = { fail: "text-fail", ok: "text-ok", mid: "text-ink" } as const;
+const SCORE_FILL = { fail: "bg-fail", ok: "bg-ok", mid: "bg-ink-dim" } as const;
+
+const scoreTone = (score: number, minScore: number | null) =>
+  SCORE_TEXT[scoreBand(score, minScore)];
 
 /** A 0–10 score as a bar. Ten segments, so the value is countable by eye. */
 export function ScoreBar({ score, minScore }: { score: number; minScore: number | null }) {
   const filled = Math.round(score);
+  const fill = SCORE_FILL[scoreBand(score, minScore)];
   return (
     <span
-      className="inline-flex items-center gap-px"
+      className="inline-flex shrink-0 items-center gap-[2px]"
       role="img"
       aria-label={`${score.toFixed(1)} out of 10`}
     >
@@ -32,13 +45,7 @@ export function ScoreBar({ score, minScore }: { score: number; minScore: number 
         <span
           key={i}
           aria-hidden="true"
-          className={`h-2.5 w-1.5 rounded-[1px] ${
-            i < filled
-              ? minScore != null && score < minScore
-                ? "bg-fail"
-                : "bg-ok"
-              : "bg-ground-2"
-          }`}
+          className={`h-2.5 w-[7px] rounded-[2px] ${i < filled ? fill : "bg-line-strong"}`}
         />
       ))}
     </span>
@@ -47,19 +54,19 @@ export function ScoreBar({ score, minScore }: { score: number; minScore: number 
 
 function CriterionRow({ c, minScore }: { c: CriterionScore; minScore: number | null }) {
   return (
-    <li className="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-1.5">
-      <span className="min-w-32 flex-1 truncate text-sm text-ink" title={c.label}>
+    <li className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3.5 py-3">
+      <span className="min-w-0 flex-1 basis-48 text-small text-ink" title={c.label}>
         {c.label}
       </span>
-      <ScoreBar score={c.score} minScore={minScore} />
-      <span
-        className={`w-8 shrink-0 text-right font-mono text-xs font-bold ${scoreTone(c.score, minScore)}`}
-      >
-        {c.score.toFixed(1)}
+      <span className="flex items-center gap-3">
+        <ScoreBar score={c.score} minScore={minScore} />
+        <span
+          className={`w-8 shrink-0 text-right text-small font-semibold tabular-nums ${scoreTone(c.score, minScore)}`}
+        >
+          {c.score.toFixed(1)}
+        </span>
       </span>
-      {c.note && (
-        <span className="w-full break-words font-mono text-[11px] text-ink-faint">{c.note}</span>
-      )}
+      {c.note && <span className="w-full break-words text-caption text-ink-faint">{c.note}</span>}
     </li>
   );
 }
@@ -102,9 +109,15 @@ export function TrajectoryNote({
       .join(" · ");
   }
   return (
-    <p className="mt-2 max-w-prose text-[11px] text-ink-dim" data-testid="trajectory-note">
-      <span className="font-bold text-ink-faint">Trajectory </span>
-      {text}
+    <p
+      className="mt-3 flex max-w-prose items-start gap-2 text-caption text-ink-dim"
+      data-testid="trajectory-note"
+    >
+      <Icon name="history" size={14} className="mt-px text-ink-faint" />
+      <span className="min-w-0">
+        <span className="font-semibold text-ink-faint">Trajectory </span>
+        {text}
+      </span>
     </p>
   );
 }
@@ -118,33 +131,15 @@ export function VerdictPanel({ runId }: { runId: string }) {
   // advertising a feature on every run that will never use it.
   if (!rubric && !verdict) return null;
 
+  const ready = verdict?.status === "ready" && verdict.score != null;
   const heading = (
-    <div className="mb-2 flex flex-wrap items-center gap-2">
-      <span className="font-mono text-[11px] font-bold uppercase tracking-[0.16em] text-ink-faint">
+    <div className="mb-3 flex min-h-5 flex-wrap items-center gap-x-3 gap-y-1">
+      <h2 className="eyebrow flex items-center gap-1.5">
+        <Icon name="gauge" size={13} />
         Verdict
-      </span>
-      {verdict?.status === "ready" && verdict.score != null && (
-        <>
-          <span
-            className={`font-mono text-lg font-extrabold ${scoreTone(verdict.score, verdict.minScore)}`}
-          >
-            {verdict.score.toFixed(1)}
-            <span className="text-[11px] font-normal text-ink-faint">/10</span>
-          </span>
-          {verdict.minScore != null && (
-            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">
-              bar {verdict.minScore.toFixed(1)}
-            </span>
-          )}
-          {verdict.regression && (
-            <span className="rounded-full border border-fail/40 bg-fail/12 px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-[0.1em] text-fail">
-              below the bar
-            </span>
-          )}
-        </>
-      )}
+      </h2>
       {verdict?.costUsd != null && (
-        <span className="font-mono text-[10px] text-ink-faint" title="What this scoring pass cost">
+        <span className="ml-auto text-caption text-ink-faint" title="What this scoring pass cost">
           {formatUsd(verdict.costUsd)}
           {verdict.durationMs != null && ` · ${formatMs(verdict.durationMs)}`}
         </span>
@@ -152,20 +147,45 @@ export function VerdictPanel({ runId }: { runId: string }) {
     </div>
   );
 
+  // The overall, set next to the bar it is judged against — the number only
+  // means something in that context.
+  const headline = ready && verdict.score != null && (
+    <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+      <span
+        className={`text-title font-semibold tabular-nums ${scoreTone(verdict.score, verdict.minScore)}`}
+      >
+        {verdict.score.toFixed(1)}
+        <span className="ml-0.5 text-small font-normal text-ink-faint">/10</span>
+      </span>
+      {verdict.minScore != null && (
+        <span className={chipClass()}>bar {verdict.minScore.toFixed(1)}</span>
+      )}
+      {verdict.regression && (
+        <span className={chipClass("fail")}>
+          <Icon name="arrow-down" size={11} />
+          below the bar
+        </span>
+      )}
+    </div>
+  );
+
   const rescore = (
-    <div className="mt-3 flex flex-wrap items-center gap-2">
-      <button
-        type="button"
+    <div className="mt-4 flex flex-wrap items-center gap-2">
+      <Button
+        size="sm"
+        icon="retry"
         disabled={busy || unavailable != null}
         onClick={() => void score()}
-        className="rounded-md border border-line px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.1em] text-ink-dim transition hover:text-ink disabled:opacity-50"
       >
         {busy ? "Scoring…" : verdict ? "Re-score" : "Score this output"}
-      </button>
+      </Button>
       {actionError && (
-        <span role="alert" className="text-sm text-fail">
-          {actionError}
-          {/auth/i.test(actionError) && " — sign in to run agent actions."}
+        <span role="alert" className="flex items-center gap-1.5 text-small text-fail">
+          <Icon name="alert" size={15} />
+          <span className="min-w-0 break-words">
+            {actionError}
+            {/auth/i.test(actionError) && " — sign in to run agent actions."}
+          </span>
         </span>
       )}
     </div>
@@ -175,7 +195,9 @@ export function VerdictPanel({ runId }: { runId: string }) {
     return (
       <Card>
         {heading}
-        <p className="text-sm text-ink-faint">Looking for a score…</p>
+        <p className="text-small text-ink-faint">Looking for a score…</p>
+        <Skeleton className="mt-3 h-3 w-3/5" />
+        <Skeleton className="mt-2 h-3 w-2/5" />
       </Card>
     );
   }
@@ -184,7 +206,7 @@ export function VerdictPanel({ runId }: { runId: string }) {
     return (
       <Card>
         {heading}
-        <p className="max-w-prose text-sm text-ink-dim">
+        <p className="max-w-prose text-small text-ink-dim">
           {unavailable ??
             (verdict?.status === "skipped"
               ? "Scoring is switched off on this server (ARGUS_ANALYSIS=off)."
@@ -193,7 +215,7 @@ export function VerdictPanel({ runId }: { runId: string }) {
                 : "Not scored yet. Argus scores each completed run against this rubric automatically.")}
         </p>
         {rubric && (
-          <p className="mt-2 max-w-prose text-[11px] text-ink-faint">Rubric: {rubric.goal}</p>
+          <p className="mt-2 max-w-prose text-caption text-ink-faint">Rubric: {rubric.goal}</p>
         )}
         {trajectoryNote}
         {rescore}
@@ -204,8 +226,11 @@ export function VerdictPanel({ runId }: { runId: string }) {
   return (
     <Card>
       {heading}
-      {verdict.summary && <p className="mb-2 max-w-prose text-sm text-ink">{verdict.summary}</p>}
-      <ul className="divide-y divide-line">
+      {headline}
+      {verdict.summary && (
+        <p className="mb-3 max-w-prose text-body text-ink-dim">{verdict.summary}</p>
+      )}
+      <ul className="divide-y divide-line overflow-hidden rounded-tile border border-line bg-ground-2/60">
         {verdict.criteria.map((c) => (
           <CriterionRow key={c.id} c={c} minScore={verdict.minScore} />
         ))}
@@ -250,7 +275,7 @@ export function VerdictSparkline({
         />
       ))}
       {minScore != null && (
-        <span className="ml-1.5 self-center font-mono text-[10px] text-ink-faint">
+        <span className="ml-1.5 self-center whitespace-nowrap text-micro text-ink-faint">
           bar {minScore.toFixed(1)}
         </span>
       )}

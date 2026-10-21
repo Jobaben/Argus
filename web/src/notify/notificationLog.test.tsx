@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   LOG_CAP,
@@ -116,11 +116,27 @@ describe("NotificationCenter", () => {
     });
     await user.click(screen.getByRole("button", { name: /notifications/i }));
     expect(screen.getByText("Monitor down: Nightly")).toBeInTheDocument();
-    expect(screen.getByText("expected a run, none arrived")).toBeInTheDocument();
+    // Prose, so in the body face: mono is kept for machine text.
+    expect(screen.getByText("expected a run, none arrived")).not.toHaveClass("font-mono");
     expect(screen.getByRole("link", { name: /Monitor down/ })).toHaveAttribute(
       "href",
       "#/monitors",
     );
+  });
+
+  it("sets a detail that is machine text in mono", async () => {
+    const user = userEvent.setup();
+    render(<NotificationCenter />);
+    act(() => {
+      logNotification({
+        tone: "ok",
+        title: "Agent done: Builder",
+        detail: "a1b2c3",
+        detailMono: true,
+      });
+    });
+    await user.click(screen.getByRole("button", { name: /notifications/i }));
+    expect(screen.getByText("a1b2c3")).toHaveClass("font-mono");
   });
 
   it("treats opening as the acknowledgement", async () => {
@@ -139,6 +155,95 @@ describe("NotificationCenter", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("hands focus back to the bell when Escape closes it from inside", async () => {
+    const user = userEvent.setup();
+    render(<NotificationCenter />);
+    act(() => logNotification({ tone: "fail", title: "one" }));
+    const bell = screen.getByRole("button", { name: /notifications/i });
+    await user.click(bell);
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Clear" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(bell).toHaveFocus();
+  });
+
+  it("closes when Tab leaves it, leaving focus on the page where it went", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <NotificationCenter />
+        <button type="button">On the page</button>
+      </>,
+    );
+    const bell = screen.getByRole("button", { name: /notifications/i });
+    await user.click(bell);
+    // From the bell into the panel is still inside: it stays open.
+    await user.tab();
+    expect(screen.getByRole("link", { name: "Briefing" })).toHaveFocus();
+    expect(screen.getByRole("dialog", { name: "Notifications" })).toBeInTheDocument();
+
+    // Past the panel's one link and on to the page: the panel goes, and does
+    // not pull focus back to the bell.
+    await user.tab();
+    const page = screen.getByRole("button", { name: "On the page" });
+    expect(page).toHaveFocus();
+    expect(bell).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("leaves focus where it is when Escape closes it from out on the page", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <NotificationCenter />
+        <button type="button">On the page</button>
+      </>,
+    );
+    const page = screen.getByRole("button", { name: "On the page" });
+    page.focus();
+    // Opened by a click that leaves focus where it was, as Safari's does: a
+    // button there takes no focus from a click.
+    fireEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(page).toHaveFocus();
+  });
+
+  it("stays open under an Escape that something in front has claimed", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <NotificationCenter />
+        <input
+          aria-label="Claims Escape"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") e.preventDefault();
+          }}
+        />
+      </>,
+    );
+    const field = screen.getByRole("textbox", { name: "Claims Escape" });
+    field.focus();
+    // Opened without moving focus (see above), so the Escape starts there.
+    fireEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "Notifications" })).toBeInTheDocument();
+  });
+
+  it("keeps focus on the bell once Clear has emptied it", async () => {
+    const user = userEvent.setup();
+    render(<NotificationCenter />);
+    act(() => logNotification({ tone: "fail", title: "one" }));
+    const bell = screen.getByRole("button", { name: /notifications/i });
+    await user.click(bell);
+    await user.tab();
+    await user.keyboard("{Enter}");
+    expect(screen.getByText(/nothing yet/i)).toBeInTheDocument();
+    expect(bell).toHaveFocus();
   });
 
   it("points at the Briefing for what happened before this session", async () => {

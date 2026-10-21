@@ -44,12 +44,19 @@ Under that, **one chip per phase** coloured by state — so which phase is runni
 which is waiting on you and which failed is answerable without leaving the list.
 A failed run names the step and the first line of its reason. A pipeline that has
 never run still shows its phases, greyed, because that is what it is going to do.
+Above the cards, filter chips count **All**, what **needs approval** (in the
+Command Center's words), what **failed** and what is **paused** — press one to
+narrow the list to those pipelines, press it again to go back.
 
-When you're **signed out**, the **Login** panel appears here (see
+When you're **signed out**, the sign-in panel sits above the list (see
 [Users & sign-in](administration.md#users--sign-in)) — viewing is open, but every mutating
-action requires a signed-in, root-approved account.
+action requires a signed-in, root-approved account. With no pipelines yet, the
+page says **No pipelines yet** instead, and its button — **Sign in to add one**,
+or **Create the root account** on a fresh installation — opens the same form
+in its place, with the caret in its first field; **Cancel** or Escape puts the
+empty state back.
 
-**The pipeline form** (+ New pipeline / Edit):
+**The pipeline form** (New pipeline / Edit):
 
 ![Pipeline form](../screenshots/pipeline-form.png)
 
@@ -73,32 +80,42 @@ action requires a signed-in, root-approved account.
   "Starts after" stays linear, exactly as before.
 - Inside the phase, ordered **steps** — each with a name, optional per-step
   **runtime / model / effort overrides**, and its prompt. Reorder or remove
-  phases and steps freely; **Save** stays disabled until every phase has a
+  phases and steps freely; **Save pipeline** stays disabled until every phase has a
   name, cwd and at least one complete step (the rail marks the incomplete
   ones). Phase features authored via the API — retry policies, published
   artifacts, rubrics, auto-approve — show as badges on the panel and are
   preserved on save.
 
-**What you can do (signed in):**
+**What you can do (signed in)** — from the card's footer: the run controls
+first, then **Analyze** and **Edit**, with **Disable**/**Enable** and **Delete**
+at the far end. An action the server refuses says why on its own line under
+the buttons (_Couldn't complete that: …_).
 
 - **Run now** — start an instance (hidden while one is running unless overlap
   is allowed).
-- **Stop / Stop all (N)** — abort active instances (with confirm).
-- **Enable / Disable**, **Edit**, **Delete** (with confirm). An instance runs
+- **Stop / Stop all (N)** — abort active instances. It asks first, on a line
+  of its own under the buttons: **Stop pipeline** (or **Stop N instances**)
+  goes ahead, **Keep running** leaves them be.
+- **Enable / Disable**, **Edit**, **Delete**. Delete asks the same way —
+  **Delete pipeline** or **Keep** — and the safe answer has focus, so Escape or
+  a stray Enter keeps everything. An instance runs
   the definition it started with — snapshotted onto the instance — so editing
   the pipeline while instances are running or waiting at a gate does not change
-  them. Saving such an edit asks first, so you know a fixed prompt lands on the
-  _next_ start rather than the one you are watching; renaming, changing the
-  trigger or overlap policy, and enabling or disabling save without asking.
+  them. Saving such an edit asks first, under **Save pipeline** — **Save
+  anyway** or **Keep editing**, which leaves your edit in the form — so you
+  know a fixed prompt lands on the _next_ start rather than the one you are
+  watching; renaming, changing the trigger or overlap policy, and enabling or
+  disabling save without asking.
   **Delete** stops the pipeline's running and waiting instances first (the
-  confirm says how many), then removes it. Pipelines chained `after` it do
+  question says how many), then removes it. Pipelines chained `after` it do
   not start from those stops. An instance left live by a pipeline
   deleted before this existed still gets a card on the Command Center, marked
-  _pipeline deleted_, with a **Stop** button.
-- Approving/revising a **gated phase** happens on the Command Center, inline
-  on the paused row.
+  **Pipeline deleted**, with a **Stop** button that asks first (**Stop
+  instance** or **Keep running**).
+- Approving/revising a **gated phase** happens in the Command Center's
+  [review drawer](monitoring.md#command-center).
 
-**Reliability:** each card has a **Reliability ▾** disclosure — open it and,
+**Reliability:** each card has a **Reliability** disclosure — open it and,
 over the trailing 30 days, Argus shows the pipeline's **first-attempt pass
 rate** (settled instances where every phase that ran passed on its very first
 try) and its **lucky-pass rate** (successful instances that only got there
@@ -214,7 +231,9 @@ work.
 2. Review the proposed model, effort, timeout or maximum-turn changes and their explanation.
    The allowed fields depend on the runtime; the analysis does not propose a new runtime.
 3. Select the proposals you accept and choose **Apply selected**. Analysis does not rewrite step prompts and
-   does not save configuration until a proposal is applied.
+   does not save configuration until a proposal is applied. If instances are
+   running, Argus asks first: **Apply anyway** saves the change for the next
+   start, and **Cancel** keeps the drawer open with your selection.
 4. Check the resulting definition before the next start. Existing instances
    continue with the definition they snapshotted.
 
@@ -362,7 +381,7 @@ ticked, so it runs after whichever branch actually happened.
   the record rather than deciding again. What ran is what the record says ran.
 
 **What you see:** an unrun branch reads as **skipped** — a hollow dot, a struck
-name, `skip` — and the phase panel says which decision skipped it and on what
+name, a **Skipped** marker — and the phase panel says which decision skipped it and on what
 grounds. A conditional chip carries its condition (`if Evaluate: accepted =
 true`), and the deciding phase's panel shows the decision in one line: the
 artifact, the value, what it selected, what it skipped.

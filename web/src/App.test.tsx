@@ -1,6 +1,7 @@
 // web/src/App.test.tsx
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import App from "./App";
 
 class FakeWS {
@@ -20,6 +21,13 @@ beforeEach(() => {
     ) as unknown as typeof fetch,
   );
   window.location.hash = "#/command";
+  // jsdom has no layout to scroll and says so on every call; the shell resets
+  // the scroll on each change of view.
+  vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("App shell", () => {
@@ -157,5 +165,141 @@ describe("route direction", () => {
     } finally {
       doc.startViewTransition = original;
     }
+  });
+});
+
+async function mountApp() {
+  await act(async () => {
+    render(<App />);
+  });
+  await act(async () => {});
+}
+
+/** One navigation, one `hashchange` (see `goto` under "route direction"). */
+function navigate(hash: string) {
+  window.history.replaceState(null, "", hash);
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+}
+
+describe("the phone menu names the page", () => {
+  it("on a drill-down with no tab of its own", async () => {
+    window.location.hash = "#/agents";
+    await mountApp();
+    expect(screen.getByRole("button", { name: /, menu\b/ })).toHaveTextContent("Agents");
+  });
+
+  it("on Users for a viewer who is not root, and More marks it as the current page", async () => {
+    const user = userEvent.setup();
+    window.location.hash = "#/users";
+    await mountApp();
+    expect(screen.getByRole("button", { name: /, menu\b/ })).toHaveTextContent("Users");
+    await user.click(screen.getByRole("button", { name: /more/i }));
+    expect(screen.getByRole("menuitem", { name: "Users" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("names the agent page Agent, not Detail", async () => {
+    window.location.hash = "#/agent/abc";
+    await mountApp();
+    expect(screen.getByRole("button", { name: /, menu\b/ })).toHaveTextContent("Agent");
+    expect(screen.getByRole("button", { name: /, menu\b/ })).not.toHaveTextContent("Detail");
+  });
+});
+
+describe("the command palette", () => {
+  it("reaches Agents, which has no tab", async () => {
+    const user = userEvent.setup();
+    await mountApp();
+    await user.click(screen.getByRole("button", { name: /command palette/i }));
+    await user.type(await screen.findByRole("combobox"), "agents");
+    expect(await screen.findByRole("option", { name: /^Agents/ })).toBeInTheDocument();
+  });
+});
+
+describe("arriving on a new view", () => {
+  const main = () => screen.getByRole("main");
+
+  it("takes focus to the page when the link that navigated is gone", async () => {
+    await mountApp();
+    // An in-page link that changes the view is unmounted with it; focus is
+    // left on the body.
+    (document.activeElement as HTMLElement | null)?.blur();
+    await act(async () => navigate("#/health"));
+    expect(main()).toHaveFocus();
+  });
+
+  it("leaves focus on the nav tab that was used, which is still there", async () => {
+    await mountApp();
+    const tab = screen.getByRole("link", { name: "Health" });
+    tab.focus();
+    await act(async () => navigate("#/health"));
+    expect(tab).toHaveFocus();
+  });
+
+  it("does not take focus on load or on a hash change within the same view", async () => {
+    await mountApp();
+    expect(main()).not.toHaveFocus();
+    await act(async () => navigate("#/command/some-instance"));
+    expect(main()).not.toHaveFocus();
+  });
+
+  it("opens a new view at its top, and keeps the place on a hash change within one", async () => {
+    // A run opened from a step drawer partway down the board landed with its
+    // title under the sticky bar: the window kept the board's scroll.
+    await mountApp();
+    expect(window.scrollTo).not.toHaveBeenCalled();
+    await act(async () => navigate("#/command/some-instance"));
+    expect(window.scrollTo).not.toHaveBeenCalled();
+    await act(async () => navigate("#/run/abc"));
+    expect(window.scrollTo).toHaveBeenCalledExactlyOnceWith(0, 0);
+  });
+
+  it("says the new page's name in a polite live region", async () => {
+    const said = () =>
+      Array.from(document.querySelectorAll('[aria-live="polite"]'), (r) => r.textContent);
+    await mountApp();
+    expect(said()).toContain("Command Center");
+    await act(async () => navigate("#/health"));
+    expect(said()).toContain("Health");
+    expect(said()).not.toContain("Command Center");
+  });
+});
+
+describe("the sign-in wall", () => {
+  function serve(status: object) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(url === "/api/auth/status" ? status : {}),
+        }),
+      ) as unknown as typeof fetch,
+    );
+  }
+
+  it("asks for the first account, not a sign-in, on a server with none", async () => {
+    serve({ sessionRequired: true, configured: false, authenticated: false });
+    await mountApp();
+    expect(
+      await screen.findByText("Create the first account to see the dashboard."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Sign in to see the dashboard/)).toBeNull();
+  });
+
+  it("asks for a sign-in once accounts exist", async () => {
+    serve({ sessionRequired: true, configured: true, authenticated: false });
+    await mountApp();
+    expect(
+      await screen.findByText("This server requires an account. Sign in to see the dashboard."),
+    ).toBeInTheDocument();
+  });
+
+  it("opens with the form focused, titled as the heading under the wordmark", async () => {
+    serve({ sessionRequired: true, configured: true, authenticated: false });
+    await mountApp();
+    // The form is the whole page, so the first field takes the caret on
+    // arrival, and the outline runs h1 then h2 with no level skipped.
+    expect(await screen.findByRole("heading", { level: 2, name: "Sign in" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Username")).toHaveFocus();
   });
 });

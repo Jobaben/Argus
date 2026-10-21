@@ -16,9 +16,11 @@ export {
   SkeletonTile,
 } from "./Skeleton";
 // Drawer stays out of this eager barrel so its shell loads with lazy drawers.
-export { InfoTip } from "./InfoTip";
-export { Legend } from "./Legend";
-export type { LegendItem } from "./Legend";
+// So do the pieces only lazy routes use — the form pickers (RubricFields,
+// ModelSelect, RuntimeSelect, ReasoningEffortSelect, TriggerFields),
+// RuntimeBadge, HeartbeatBar, Legend, Tabs, InfoTip, HealthCounter, AgentTile
+// and chronicleLayout: import them from their own modules. A re-export here
+// pulls a module into the shell's chunk even when nothing eager uses it.
 // `Markdown` is deliberately not re-exported here: it carries the `marked`
 // lexer, and the barrel is imported by the eager shell. Import it from
 // "./Markdown" inside a lazily-loaded view instead.
@@ -32,9 +34,6 @@ export { StatusPill } from "./StatusPill";
 export { Meter } from "./Meter";
 export type { MeterProps } from "./Meter";
 export { ConnectionPill } from "./ConnectionPill";
-export { HealthCounter } from "./HealthCounter";
-export { HeartbeatBar } from "./HeartbeatBar";
-export { AgentTile } from "./AgentTile";
 export { SweepBar } from "./SweepBar";
 export { AlertStrip } from "./AlertStrip";
 export { ToastRegion } from "./Toast";
@@ -75,12 +74,11 @@ export {
 export { createVelocityTracker, flickOutcome } from "./gesture";
 export { MoreMenu } from "./MoreMenu";
 export type { MoreItem } from "./MoreMenu";
-export { RubricFields } from "./RubricFields";
 export { slugify } from "./slug";
-export { ModelSelect } from "./ModelSelect";
-export { ReasoningEffortSelect } from "./ReasoningEffortSelect";
-export { RuntimeSelect } from "./RuntimeSelect";
-export { RuntimeBadge } from "./RuntimeBadge";
 export { SegmentedControl } from "./SegmentedControl";
 export type { Segment } from "./SegmentedControl";
-export * from "./chronicleLayout";
+export { Icon } from "./Icon";
+export type { IconName } from "./Icon";
+export { Button, ButtonLink, IconButton } from "./Button";
+export { buttonClass, chipClass, fieldClass, labelClass } from "./controls";
+export type { ButtonVariant, ButtonSize } from "./controls";

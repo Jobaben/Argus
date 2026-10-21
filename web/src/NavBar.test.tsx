@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NavBar } from "./NavBar";
 
@@ -9,6 +9,14 @@ const destinations = [
 ];
 const overflow = [{ id: "stats", label: "Stats", href: "#/stats" }];
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+/** The phone menu's toggle. Its name is its own text: the page name first,
+ *  then what the button is (WCAG 2.5.3, label in name). */
+const menuToggle = () => screen.getByRole("button", { name: /, menu\b/ });
+
 describe("NavBar", () => {
   it("renders the two destinations and drops the old monitoring strip", () => {
     render(
@@ -16,6 +24,7 @@ describe("NavBar", () => {
         destinations={destinations}
         overflow={overflow}
         activeId="command"
+        activeLabel="Command Center"
         live
         onOpenPalette={() => {}}
       />,
@@ -36,6 +45,7 @@ describe("NavBar", () => {
         destinations={destinations}
         overflow={overflow}
         activeId="command"
+        activeLabel="Command Center"
         live
         onOpenPalette={onOpenPalette}
       />,
@@ -59,13 +69,14 @@ describe("NavBar badge", () => {
         ]}
         overflow={overflow}
         activeId="command"
+        activeLabel="Command Center"
         live
         onOpenPalette={() => {}}
       />,
     );
-    // Twice: once on the Briefing tab, once as the mobile menu's total. Both
-    // render at every viewport (CSS hides one), so the count is not unique.
-    expect(screen.getAllByText("3")).toHaveLength(2);
+    // Once, on the Briefing tab. The phone menu marks its total with a dot
+    // and says the number in its name, not as a figure over its icon.
+    expect(screen.getAllByText("3")).toHaveLength(1);
     expect(screen.queryByText("0")).toBeNull();
   });
 
@@ -79,24 +90,285 @@ describe("NavBar badge", () => {
         ]}
         overflow={overflow}
         activeId="command"
+        activeLabel="Command Center"
         live
         onOpenPalette={() => {}}
       />,
     );
-    const toggle = screen.getByRole("button", { name: /open the menu/i });
+    const toggle = menuToggle();
     // The trigger names where you are, so the bar is still orienting when
     // collapsed.
     expect(toggle).toHaveTextContent("Command Center");
     expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).not.toHaveAttribute("aria-controls");
 
     await user.click(toggle);
-    expect(screen.getByRole("button", { name: /close the menu/i })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
+    // Open is aria-expanded's to say; the name stays what the button shows.
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAccessibleName("Command Center, menu, 3 waiting on you");
+    const sheet = document.getElementById(toggle.getAttribute("aria-controls")!);
+    expect(sheet).toContainElement(screen.getByRole("link", { name: "Stats" }));
     // Every destination is reachable at once, plus the secondary list.
     expect(screen.getAllByRole("link", { name: /briefing/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("link", { name: "Stats" }).length).toBeGreaterThan(0);
+  });
+
+  it("names a page in neither list, rather than falling back to 'Menu'", () => {
+    // Agents is a drill-down: no tab, no place in the secondary list. The phone
+    // header used to say "Menu" over it.
+    render(
+      <NavBar
+        destinations={destinations}
+        overflow={overflow}
+        activeId="agents"
+        activeLabel="Agents"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    expect(menuToggle()).toHaveAccessibleName("Agents, menu");
+  });
+
+  it("says the attention count is waiting on you, not a count for the page", () => {
+    render(
+      <NavBar
+        destinations={[
+          { id: "briefing", label: "Briefing", badge: 5 },
+          { id: "health", label: "Health" },
+        ]}
+        overflow={overflow}
+        activeId="health"
+        activeLabel="Health"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    const toggle = menuToggle();
+    // The name starts with the words on the button, so "Health" said aloud
+    // reaches it (WCAG 2.5.3); the menu and the count come after.
+    expect(toggle).toHaveAccessibleName("Health, menu, 5 waiting on you");
+    // The page name is a label of its own, with no count run on after it, and
+    // the icon carries a dot rather than a figure over its bars.
+    expect(within(toggle).getByText("Health")).toHaveTextContent(/^Health$/);
+    expect(within(toggle).queryByText(/^(\d+|9\+)$/)).toBeNull();
+  });
+
+  it("closes the sheet when Tab leaves it, so focus never lands under the scrim", async () => {
+    const user = userEvent.setup();
+    render(
+      <NavBar
+        destinations={destinations}
+        overflow={overflow}
+        activeId="command"
+        activeLabel="Command Center"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    const toggle = menuToggle();
+    await user.click(toggle);
+    // Opening hands focus to the current destination in the sheet.
+    await waitFor(() => expect(document.activeElement).toHaveAttribute("aria-current", "page"));
+
+    // Moving within the sheet keeps it open. Stats is its last link (the More
+    // menu, which also lists it, is closed).
+    await user.tab();
+    await user.tab();
+    expect(document.activeElement).toHaveTextContent("Stats");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    // Past its last link, focus leaves the menu, and the sheet goes with it.
+    await user.tab();
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveAccessibleName("Command Center, menu");
+  });
+
+  it("hands focus back to the toggle when a destination is chosen from the sheet", async () => {
+    const user = userEvent.setup();
+    render(
+      <NavBar
+        destinations={destinations}
+        overflow={overflow}
+        activeId="command"
+        activeLabel="Command Center"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    const toggle = menuToggle();
+    await user.click(toggle);
+    await waitFor(() => expect(document.activeElement).toHaveAttribute("aria-current", "page"));
+
+    // The next link in the sheet is Scheduler. Choosing it closes the sheet,
+    // and focus goes back to where the menu was opened rather than to <body>.
+    await user.tab();
+    expect(document.activeElement).toHaveTextContent("Scheduler");
+    await user.keyboard("{Enter}");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveFocus();
+  });
+
+  it("dims the page from <body>, where the bar's backdrop filter cannot shrink it", async () => {
+    // A fixed scrim inside the bar is laid out against the bar (its backdrop
+    // filter makes it the containing block): a 0px strip that dimmed nothing
+    // and let a tap through to the page.
+    const user = userEvent.setup();
+    const { container } = render(
+      <NavBar
+        destinations={destinations}
+        overflow={overflow}
+        activeId="command"
+        activeLabel="Command Center"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    const toggle = menuToggle();
+    await user.click(toggle);
+    const scrim = document.body.lastElementChild as HTMLElement;
+    expect(scrim.parentElement).toBe(document.body);
+    expect(container).not.toContainElement(scrim);
+    // Out of the bar's md:hidden wrapper, so it hides past `md` on its own:
+    // a sheet left open as a tablet turns must not leave the desktop dimmed.
+    expect(scrim).toHaveClass("fixed", "md:hidden");
+
+    // A tap on it closes the sheet and hands focus back to the toggle.
+    await user.click(scrim);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveFocus();
+  });
+
+  it("holds the page still while the sheet is open, and lets it go after", async () => {
+    const user = userEvent.setup();
+    const root = document.documentElement;
+    render(
+      <NavBar
+        destinations={destinations}
+        overflow={overflow}
+        activeId="command"
+        activeLabel="Command Center"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    // Below `md` only, where the sheet is: a sheet left open as the window
+    // widens is hidden, and so is its lock.
+    await user.click(menuToggle());
+    expect(root).toHaveClass("max-md:overflow-hidden");
+    await user.keyboard("{Escape}");
+    expect(root).not.toHaveClass("max-md:overflow-hidden");
+  });
+});
+
+/**
+ * jsdom lays nothing out. Give the tab strip a width and every tab a 100px slot
+ * in order, so the bar's own measurement decides what fits. The strip is the
+ * element whose children are the tabs; everything else stays unmeasured.
+ */
+function layOutTabs(room: { width: number }) {
+  const slot = (el: HTMLElement) => {
+    const tabs = el.parentElement?.querySelectorAll(":scope > [data-tab]");
+    return el.dataset.tab && tabs ? Array.prototype.indexOf.call(tabs, el) : -1;
+  };
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.querySelector(":scope > [data-tab]") ? room.width : 0;
+  });
+  vi.spyOn(HTMLElement.prototype, "offsetLeft", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return Math.max(0, slot(this)) * 100;
+  });
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return slot(this) === -1 ? 0 : 100;
+  });
+}
+
+describe("priority+ overflow", () => {
+  const five = [
+    { id: "briefing", label: "Briefing" },
+    { id: "command", label: "Command Center" },
+    { id: "schedules", label: "Scheduler" },
+    { id: "health", label: "Health", badge: 4 },
+    { id: "budget", label: "Budget" },
+  ];
+
+  it("moves the destinations the bar cannot fit to the head of the More menu", async () => {
+    layOutTabs({ width: 300 });
+    const user = userEvent.setup();
+    render(
+      <NavBar
+        destinations={five}
+        overflow={overflow}
+        activeId="command"
+        activeLabel="Command Center"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    // Three 100px tabs fit a 300px strip; the other two leave the bar.
+    for (const name of ["Briefing", "Command Center", "Scheduler"]) {
+      expect(screen.getByRole("link", { name })).toBeInTheDocument();
+    }
+    expect(screen.queryByRole("link", { name: /health/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Budget" })).toBeNull();
+
+    // A count that leaves the bar stays on screen, on the menu that holds it.
+    const more = screen.getByRole("button", { name: /more/i });
+    expect(more).toHaveTextContent("4");
+    await user.click(more);
+    const items = within(screen.getByRole("menu")).getAllByRole("menuitem");
+    expect(items.map((i) => i.textContent)).toEqual(["Health4", "Budget", "Stats"]);
+    expect(items[0]).toHaveAttribute("href", "#/health");
+  });
+
+  it("brings them back to the bar when the room grows", () => {
+    const room = { width: 300 };
+    layOutTabs(room);
+    render(
+      <NavBar
+        destinations={five}
+        overflow={overflow}
+        activeId="command"
+        activeLabel="Command Center"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("link", { name: "Budget" })).toBeNull();
+    room.width = 500;
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(screen.getByRole("link", { name: "Budget" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /more/i })).not.toHaveTextContent("4");
+  });
+
+  it("marks the page you are on in More when its tab is one that left the bar", async () => {
+    layOutTabs({ width: 300 });
+    const user = userEvent.setup();
+    render(
+      <NavBar
+        destinations={five}
+        overflow={overflow}
+        activeId="budget"
+        activeLabel="Budget"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    // No tab in the bar claims the page; the menu that now holds it does, and
+    // the phone menu still names it.
+    expect(screen.queryByRole("link", { current: "page" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /more/i }));
+    expect(screen.getByRole("menuitem", { name: "Budget" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(menuToggle()).toHaveTextContent("Budget");
   });
 });
 
@@ -110,6 +382,7 @@ describe("the active-destination pill", () => {
         destinations={destinations}
         overflow={overflow}
         activeId="command"
+        activeLabel="Command Center"
         live
         onOpenPalette={() => {}}
       />,
@@ -125,6 +398,7 @@ describe("the active-destination pill", () => {
         destinations={destinations}
         overflow={overflow}
         activeId="schedules"
+        activeLabel="Scheduler"
         live
         onOpenPalette={() => {}}
       />,
@@ -138,6 +412,7 @@ describe("the active-destination pill", () => {
         destinations={destinations}
         overflow={overflow}
         activeId="stats"
+        activeLabel="Stats"
         live
         onOpenPalette={() => {}}
       />,

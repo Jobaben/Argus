@@ -29,10 +29,15 @@ function selection(over: Partial<StepSelection> = {}): StepSelection {
   };
 }
 
+/** Answers `GET /api/runs/:id` the way the server does: the record and its
+ *  log tail side by side, `{ run, log }`. */
 function stubRun(body: Record<string, unknown>) {
+  const { log, ...run } = body;
   vi.stubGlobal(
     "fetch",
-    vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => body } as Response),
+    vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ run, log }) } as Response),
   );
 }
 
@@ -122,12 +127,110 @@ describe("StepDrawer", () => {
       <StepDrawer
         selection={selection({
           step: step({ status: "failed" }),
-          reason: "npm audit: 3 critical vulnerabilities",
+          reason: "exit code 1 from npm audit",
         })}
         onClose={vi.fn()}
       />,
     );
-    expect(screen.getByText("npm audit: 3 critical vulnerabilities")).toBeInTheDocument();
+    // Written by the server as a clause; set in sentence case here.
+    expect(screen.getByText("Exit code 1 from npm audit")).toBeInTheDocument();
+  });
+
+  it("tells a failure once: a sentence, not the protocol, and the agent's fuller words in its place", async () => {
+    stubRun({
+      id: "run_0003",
+      log: "",
+      resultSummary:
+        "Could not reach the advisory database (ETIMEDOUT) after 3 retries.\nARGUS_OUTCOME: failed could not reach advisory database (ETIMEDOUT)",
+    });
+    render(
+      <StepDrawer
+        selection={selection({
+          step: step({ status: "failed" }),
+          reason: "failed: could not reach advisory database (ETIMEDOUT)",
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    // Before the run arrives: the reason, without the "failed:" the pill says.
+    expect(screen.getByText("Could not reach advisory database (ETIMEDOUT)")).toBeInTheDocument();
+    // After: the agent's own sentence says it, once, where the reason was.
+    expect(
+      await screen.findByText("Could not reach the advisory database (ETIMEDOUT) after 3 retries."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/reach advisory database/)).toBeNull();
+    expect(screen.queryByText(/failed:/)).toBeNull();
+  });
+
+  it("words the log's envelope as the process's, without the figures shown above it", async () => {
+    stubRun({
+      id: "run_0003",
+      exitCode: 0,
+      log: JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 61_000,
+        num_turns: 4,
+        total_cost_usd: 0.42,
+        usage: { input_tokens: 115_620, output_tokens: 25_380 },
+      }),
+    });
+    render(
+      <StepDrawer
+        selection={selection({ step: step({ status: "failed", tokens: null }) })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText("Process")).toBeInTheDocument();
+    expect(screen.getByText(/^exited cleanly/)).toBeInTheDocument();
+    // The step failed all the same, and the log says why the two disagree.
+    expect(screen.getByText(/failed its outcome check/)).toBeInTheDocument();
+    // Cost and duration are in the readout already; tokens are not, so they
+    // stay, in the app's own format and the reading face.
+    expect(screen.getAllByText("Cost")).toHaveLength(1);
+    expect(screen.getByText("115.6k in / 25.4k out")).not.toHaveClass("font-mono");
+  });
+
+  it("says a non-zero exit as the exit code, whatever the CLI's envelope said", async () => {
+    // The envelope's "success" is the CLI's verdict on its session; this
+    // process exited 1, and the drawer said "exited cleanly — the run failed
+    // its outcome check all the same".
+    stubRun({
+      id: "run_0003",
+      exitCode: 1,
+      log: JSON.stringify({ type: "result", subtype: "success", is_error: false, num_turns: 4 }),
+    });
+    render(
+      <StepDrawer selection={selection({ step: step({ status: "failed" }) })} onClose={vi.fn()} />,
+    );
+    expect(await screen.findByText("exited with code 1")).toBeInTheDocument();
+    expect(screen.queryByText(/exited cleanly/)).toBeNull();
+    expect(screen.queryByText(/failed its outcome check/)).toBeNull();
+  });
+
+  it("shows the agent's summary without the protocol line it ends with", async () => {
+    stubRun({
+      id: "run_0003",
+      log: "",
+      resultSummary: "Drafted the changelog entry.\nARGUS_OUTCOME: succeeded",
+    });
+    render(<StepDrawer selection={selection()} onClose={vi.fn()} />);
+    expect(await screen.findByText("Drafted the changelog entry.")).toBeInTheDocument();
+    expect(screen.queryByText(/ARGUS_OUTCOME/)).not.toBeInTheDocument();
+  });
+
+  it("falls back to the marker's reason when the marker is all the summary has", async () => {
+    stubRun({
+      id: "run_0003",
+      log: "",
+      resultSummary: "ARGUS_OUTCOME: failed tests are red",
+    });
+    render(
+      <StepDrawer selection={selection({ step: step({ status: "failed" }) })} onClose={vi.fn()} />,
+    );
+    expect(await screen.findByText("tests are red")).toBeInTheDocument();
+    expect(screen.queryByText(/ARGUS_OUTCOME/)).not.toBeInTheDocument();
   });
 
   it("renders the run log", async () => {
@@ -209,10 +312,10 @@ describe("StepDrawer", () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
     render(<StepDrawer selection={selection()} onClose={onClose} />);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Esc" })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Close" })).toHaveFocus());
     await user.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole("button", { name: "Esc" }));
+    await user.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
@@ -220,7 +323,7 @@ describe("StepDrawer", () => {
     stubRun({ id: "run_0003", log: "", sessionId: "sess-1", project: "p" });
     const user = userEvent.setup();
     render(<StepDrawer selection={selection()} onClose={vi.fn()} />);
-    const close = screen.getByRole("button", { name: "Esc" });
+    const close = screen.getByRole("button", { name: "Close" });
     await waitFor(() => expect(close).toHaveFocus());
     // Two focusables: the close button and the transcript link. Tabbing past the
     // last must wrap to the first, not escape to the page behind.

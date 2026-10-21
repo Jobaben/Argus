@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Run } from "../types";
@@ -72,6 +72,9 @@ describe("Launch", () => {
   beforeEach(() => {
     mockState.runs = [];
     mockState.launch = vi.fn().mockResolvedValue(undefined);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("keeps Launch disabled until prompt and cwd are filled", async () => {
@@ -166,8 +169,203 @@ describe("Launch", () => {
     expect(screen.queryByText(/across 1 run/)).toBeNull();
   });
 
+  it("shows a run's summary without the agent's protocol line", async () => {
+    // Expanding the row tails its log; an empty one draws nothing.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ log: "" }) } as Response),
+    );
+    mockState.runs = [run({ resultSummary: "ARGUS_OUTCOME: succeeded nothing needed fixing" })];
+    const user = userEvent.setup();
+    render(<Launch />);
+    await user.click(screen.getByRole("button", { name: /Quick audit/, expanded: false }));
+    // A bare marker still says what happened: its reason is the summary.
+    expect(await screen.findByText("nothing needed fixing")).toBeInTheDocument();
+    expect(screen.queryByText(/ARGUS_OUTCOME/)).not.toBeInTheDocument();
+  });
+
+  it("shows a failed run's error without the agent's protocol line", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ log: "" }) } as Response),
+    );
+    mockState.runs = [
+      run({
+        status: "failed",
+        exitCode: 0,
+        resultSummary: null,
+        error: "lint found 3 errors\nARGUS_OUTCOME: failed lint is red",
+      }),
+    ];
+    const user = userEvent.setup();
+    render(<Launch />);
+    await user.click(screen.getByRole("button", { name: /Quick audit/, expanded: false }));
+    expect(await screen.findByText("Lint found 3 errors")).toBeInTheDocument();
+    expect(screen.queryByText(/ARGUS_OUTCOME/)).not.toBeInTheDocument();
+  });
+
+  it("tells a failed run's reason as a sentence in the reading face, in the failure style", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ log: "" }) } as Response),
+    );
+    mockState.runs = [
+      run({ status: "failed", exitCode: 1, resultSummary: null, error: "exit code 1" }),
+    ];
+    const user = userEvent.setup();
+    render(<Launch />);
+    await user.click(screen.getByRole("button", { name: /Quick audit/, expanded: false }));
+    // It read "exit code 1", lower-case and in mono, as though it were a value.
+    const reason = await screen.findByText("Exit code 1");
+    expect(reason).not.toHaveClass("font-mono");
+    expect(reason).toHaveClass("text-fail-ink");
+    expect(reason.closest("[class*=border-fail]")).not.toBeNull();
+  });
+
+  it("tells a stopped run's reason in the stopped grey, not the failure red", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ log: "" }) } as Response),
+    );
+    mockState.runs = [
+      run({
+        status: "interrupted",
+        exitCode: null,
+        resultSummary: null,
+        error: "interrupted: Argus restarted while this run was in flight",
+      }),
+    ];
+    const user = userEvent.setup();
+    render(<Launch />);
+    const row = screen.getByRole("button", { name: /Quick audit/, expanded: false });
+    expect(row).toHaveTextContent("Stopped");
+    await user.click(row);
+    // Under a grey Stopped pill it was a red box with an alert icon.
+    const reason = await screen.findByText(
+      "Interrupted: Argus restarted while this run was in flight",
+    );
+    expect(reason).toHaveClass("text-ink-dim");
+    expect(reason).not.toHaveClass("font-mono");
+    expect(reason.closest("[class*=fail]")).toBeNull();
+  });
+
+  it("says a process that exited non-zero exited so, whatever its envelope said", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          log: JSON.stringify({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            num_turns: 3,
+          }),
+        }),
+      } as Response),
+    );
+    mockState.runs = [run({ status: "failed", exitCode: 1, error: "exit code 1" })];
+    const user = userEvent.setup();
+    render(<Launch />);
+    await user.click(screen.getByRole("button", { name: /Quick audit/, expanded: false }));
+    // "success" is the CLI's subtype; it read "exited cleanly — the run failed
+    // its outcome check all the same" over a process that exited 1.
+    expect(await screen.findByText("exited with code 1")).toBeInTheDocument();
+    expect(screen.queryByText(/exited cleanly/)).toBeNull();
+    expect(screen.queryByText(/failed its outcome check/)).toBeNull();
+  });
+
+  it("explains a clean exit under a failed outcome", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          log: JSON.stringify({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            num_turns: 3,
+          }),
+        }),
+      } as Response),
+    );
+    // Exited 0, but the agent's outcome was failed: the pill says Failed.
+    mockState.runs = [run({ status: "succeeded", exitCode: 0, outcome: "failed" })];
+    const user = userEvent.setup();
+    render(<Launch />);
+    await user.click(screen.getByRole("button", { name: /Quick audit/, expanded: false }));
+    expect(await screen.findByText(/^exited cleanly/)).toBeInTheDocument();
+    expect(screen.getByText("The run failed its outcome check all the same.")).toBeInTheDocument();
+  });
+
+  it("words an expanded run's log as the step drawer does, without the row's own figures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          log: JSON.stringify({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            duration_ms: 120_000,
+            num_turns: 7,
+            total_cost_usd: 2.1,
+            usage: { input_tokens: 115_620, output_tokens: 25_380 },
+          }),
+        }),
+      } as Response),
+    );
+    mockState.runs = [run({ costUsd: 2.1, tokens: 141_000 })];
+    const user = userEvent.setup();
+    render(<Launch />);
+    await user.click(screen.getByRole("button", { name: /Quick audit/, expanded: false }));
+    expect(await screen.findByText("Process")).toBeInTheDocument();
+    expect(screen.getByText("exited cleanly")).toBeInTheDocument();
+    expect(screen.getByText("Turns")).toBeInTheDocument();
+    // The row's metadata line already says $2.10 and 141.0k tok.
+    expect(screen.queryByText("Agent exit")).toBeNull();
+    expect(screen.queryByText(/115620/)).toBeNull();
+    expect(screen.queryByText("Cost")).toBeNull();
+  });
+
+  it("calls a skipped run skipped, not idle", () => {
+    mockState.runs = [
+      run({
+        status: "skipped",
+        startedAt: null,
+        endedAt: null,
+        durationMs: null,
+        exitCode: null,
+        resultSummary: null,
+      }),
+    ];
+    render(<Launch />);
+    const row = screen.getByRole("button", { name: /Quick audit/, expanded: false });
+    expect(row).toHaveTextContent("Skipped");
+    expect(row).not.toHaveTextContent("Idle");
+  });
+
   it("shows the empty state when nothing has been launched", () => {
     render(<Launch />);
     expect(screen.getByText(/Nothing launched yet/)).toBeInTheDocument();
+  });
+});
+
+describe("Launch fields", () => {
+  it("names a field by its label and describes it with its hint and help", () => {
+    render(<Launch />);
+    // Help text inside the label used to become part of the field's name.
+    const name = screen.getByRole("textbox", { name: "Name" });
+    expect(name).toHaveAccessibleDescription(/optional.*Defaults to the prompt's first line/);
+  });
+
+  it("moves focus to the filled form on Reuse", async () => {
+    mockState.runs = [run()];
+    const user = userEvent.setup();
+    render(<Launch />);
+    await user.click(screen.getByRole("button", { name: /reuse/i }));
+    expect(screen.getByPlaceholderText(/Summarize the open TODOs/)).toHaveFocus();
   });
 });

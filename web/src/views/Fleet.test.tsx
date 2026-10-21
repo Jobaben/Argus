@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { FleetMachine, FleetView, MachineSummary, PairingCode, Peer } from "../types";
 import Fleet from "./Fleet";
@@ -166,6 +166,26 @@ describe("Fleet", () => {
     expect(screen.getByText(/lower bounds/)).toBeInTheDocument();
   });
 
+  it("a machine's counts use the fleet totals' words, shortened", () => {
+    state.fleet = fleetOf(
+      [
+        selfMachine(),
+        {
+          peer: peer(),
+          summary: summary({ machineId: "m2", gatedInstances: 2 }),
+          isSelf: false,
+        },
+      ],
+      2,
+    );
+    render(<Fleet />);
+    // "Needs approval" above, "Approval" in each card — not a third word.
+    const cell = screen.getByText("2", { selector: "dd" }).parentElement!;
+    expect(within(cell).getByText("Approval")).toBeInTheDocument();
+    expect(cell).toHaveAttribute("title", "Needs approval");
+    expect(screen.queryByText("Awaiting")).not.toBeInTheDocument();
+  });
+
   it("a complete fleet says so plainly", () => {
     state.fleet = fleetOf(
       [selfMachine(), { peer: peer(), summary: summary({ machineId: "m2" }), isSelf: false }],
@@ -191,6 +211,38 @@ describe("Fleet", () => {
     // "Last known, ten minutes ago" is information; an empty card is not.
     expect(screen.getByText("stale")).toBeInTheDocument();
     expect(screen.getByText("7")).toBeInTheDocument();
+  });
+
+  it("reds an open issue count, and leaves a zero neutral", () => {
+    state.fleet = fleetOf(
+      [
+        selfMachine(),
+        {
+          peer: peer(),
+          summary: summary({ machineId: "m2", label: "Build box", openIssues: 7 }),
+          isSelf: false,
+        },
+      ],
+      2,
+    );
+    render(<Fleet />);
+    // The issue count is a failure count, like the monitors beside it.
+    expect(screen.getByText("7").className).toContain("text-fail");
+    // This machine has none: its zero is grey, not red.
+    const laptop = screen.getByText("this machine").closest("div.rounded-tile") as HTMLElement;
+    const issues = within(laptop).getByText("Issues").nextSibling as HTMLElement;
+    expect(issues.textContent).toBe("0");
+    expect(issues.className).toContain("text-ink-faint");
+  });
+
+  it("calls in-flight instances live pipelines, as the Command Center does", () => {
+    state.fleet = fleetOf(
+      [selfMachine(), { peer: peer(), summary: summary({ machineId: "m2" }), isSelf: false }],
+      2,
+    );
+    render(<Fleet />);
+    expect(screen.getByText("Live pipelines")).toBeInTheDocument();
+    expect(screen.queryByText("Running")).toBeNull();
   });
 
   it("an unpaired peer is told what is actually wrong", () => {
@@ -246,14 +298,37 @@ describe("Fleet", () => {
     expect(add).toBeDisabled();
   });
 
-  it("unpairing names the peer being removed", async () => {
+  it("asks before unpairing, naming the machine and what pairing again takes", async () => {
     const user = userEvent.setup();
     state.fleet = fleetOf(
       [selfMachine(), { peer: peer(), summary: summary({ machineId: "m2" }), isSelf: false }],
       2,
     );
     render(<Fleet />);
-    await user.click(screen.getByRole("button", { name: /unpair/ }));
+    const opener = screen.getByRole("button", { name: /unpair laptop/i });
+    await user.click(opener);
+    expect(opener).toHaveAttribute("aria-expanded", "true");
+    const question = screen.getByRole("group", { name: "Unpair Laptop?" });
+    expect(question).toHaveAccessibleDescription(
+      "Pairing it again needs a new secret, entered on both machines.",
+    );
+    // The safe answer has focus; Keep unpairs nothing and hands focus back.
+    expect(within(question).getByRole("button", { name: "Keep" })).toHaveFocus();
+    await user.click(within(question).getByRole("button", { name: "Keep" }));
+    expect(screen.queryByRole("group", { name: "Unpair Laptop?" })).toBeNull();
+    expect(opener).toHaveFocus();
+    expect(actions.unpair).not.toHaveBeenCalled();
+  });
+
+  it("unpairs the machine once the question is answered", async () => {
+    const user = userEvent.setup();
+    state.fleet = fleetOf(
+      [selfMachine(), { peer: peer(), summary: summary({ machineId: "m2" }), isSelf: false }],
+      2,
+    );
+    render(<Fleet />);
+    await user.click(screen.getByRole("button", { name: /unpair laptop/i }));
+    await user.click(screen.getByRole("button", { name: "Unpair machine" }));
     expect(actions.unpair).toHaveBeenCalledWith("p1");
   });
 

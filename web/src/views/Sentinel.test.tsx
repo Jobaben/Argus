@@ -90,13 +90,76 @@ describe("Sentinel", () => {
     expect(screen.getByText(/escalates it on a clock/)).toBeInTheDocument();
   });
 
+  it("does not stack a row of zero counters above the empty state", () => {
+    render(<Sentinel />);
+    expect(screen.queryByRole("region", { name: "Incidents by state" })).not.toBeInTheDocument();
+  });
+
+  it("counts incidents once there are any", () => {
+    state.state = {
+      ...emptyState(),
+      incidents: [incident()],
+      summary: { open: 1, acknowledged: 0, resolved: 0, critical: 1 },
+    };
+    render(<Sentinel />);
+    expect(screen.getByRole("region", { name: "Incidents by state" })).toBeInTheDocument();
+  });
+
   it("shows a live incident with its status, severity and timeline", () => {
     state.state = { ...emptyState(), incidents: [incident()] };
     render(<Sentinel />);
     expect(screen.getByText("Nightly triage")).toBeInTheDocument();
     expect(screen.getByText("open")).toBeInTheDocument();
     expect(screen.getByText("critical")).toBeInTheDocument();
-    expect(screen.getByText("no run covered the slot")).toBeInTheDocument();
+    // The server's clause gets the capital a line of its own needs.
+    expect(screen.getByText("No run covered the slot")).toBeInTheDocument();
+  });
+
+  it("reads a slot time inside the server's sentence in the reader's own time", () => {
+    const iso = "2026-07-20T10:33:49.022Z";
+    state.state = {
+      ...emptyState(),
+      incidents: [
+        incident({
+          detail: `no run covered the slot expected at ${iso}`,
+          timeline: [
+            {
+              at: "2026-07-20T11:00:00.000Z",
+              kind: "opened",
+              detail: `Notify: no run covered the slot expected at ${iso}`,
+              by: "sentinel",
+            },
+          ],
+        }),
+      ],
+    };
+    render(<Sentinel />);
+    const local = new Date(iso).toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+    expect(screen.getByText(`No run covered the slot expected at ${local}`)).toBeInTheDocument();
+    expect(
+      screen.getByText(`Notify: no run covered the slot expected at ${local}`),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(iso))).not.toBeInTheDocument();
+  });
+
+  it("titles a phase anomaly without repeating the phase as its id", () => {
+    state.state = {
+      ...emptyState(),
+      incidents: [
+        incident({
+          key: "anomaly:phase:p1:implement:duration",
+          source: "anomaly",
+          title: "Release Train · Implement › implement",
+        }),
+      ],
+    };
+    render(<Sentinel />);
+    expect(
+      screen.getByRole("heading", { name: "Release Train · Implement", level: 3 }),
+    ).toBeInTheDocument();
   });
 
   it("acknowledging and resolving call through", async () => {
@@ -122,7 +185,7 @@ describe("Sentinel", () => {
     };
     render(<Sentinel />);
     expect(screen.queryByRole("button", { name: "Acknowledge" })).not.toBeInTheDocument();
-    expect(screen.getByText(/acknowledged by ada/)).toBeInTheDocument();
+    expect(screen.getByText(/Acknowledged by ada/)).toBeInTheDocument();
   });
 
   it("regression: the diagnostic's remediation is labelled as proposed, not done", () => {
@@ -228,10 +291,13 @@ describe("Sentinel", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(/sign in to act on incidents/i);
   });
 
-  it("an escalated incident shows the level it reached", () => {
-    state.state = { ...emptyState(), incidents: [incident({ level: 2 })] };
+  it("an escalated incident shows the level it reached, numbered as the ladder is", () => {
+    // The server counts from 0: level 1 is the ladder's second rung, Escalate.
+    state.state = { ...emptyState(), incidents: [incident({ level: 1 })] };
     render(<Sentinel />);
-    expect(screen.getByText("level 2")).toBeInTheDocument();
+    expect(screen.getByText("Level 2")).toBeInTheDocument();
+    expect(screen.getByText("Escalate")).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
   });
 
   it("an incident carrying a run links straight to its recording", () => {
@@ -338,7 +404,7 @@ describe("Sentinel — policy edges and states", () => {
       ],
     };
     render(<Sentinel />);
-    expect(screen.getByRole("link", { name: "issue" })).toHaveAttribute("href", "#/issues");
+    expect(screen.getByRole("link", { name: "Issue" })).toHaveAttribute("href", "#/issues");
   });
 
   it("dispatching a diagnostic calls through, and says re-diagnose once one exists", async () => {

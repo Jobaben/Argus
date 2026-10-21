@@ -1,5 +1,5 @@
 import type { AtlasClaim } from "@argus/contracts";
-import { EmptyState } from "../../ds";
+import { Button, EmptyState, Icon } from "../../ds";
 import { KIND_TERMS } from "../knowledgeGlossary";
 import {
   KIND_ORDER,
@@ -22,15 +22,32 @@ export function ClaimList({
   selected,
   showModule,
   onSelect,
+  onClearFilters,
 }: {
   claims: AtlasClaim[];
   selected: string | null;
   /** Whether to show each row's module, which is noise inside one module. */
   showModule: boolean;
   onSelect: (claim: AtlasClaim, originY: number) => void;
+  /** Offered as the way out of an empty result. */
+  onClearFilters?: () => void;
 }) {
   if (claims.length === 0) {
-    return <EmptyState>No claims match. Try a broader search or clear the filters.</EmptyState>;
+    return (
+      <EmptyState
+        icon="search"
+        title="No claims match"
+        action={
+          onClearFilters && (
+            <Button size="sm" icon="close" onClick={onClearFilters}>
+              Clear filters
+            </Button>
+          )
+        }
+      >
+        Nothing fits the search and filters you have set. Try a broader search, or clear them.
+      </EmptyState>
+    );
   }
   return (
     <div className="flex flex-col gap-7">
@@ -40,11 +57,11 @@ export function ClaimList({
         return (
           <section key={kind}>
             <Eyebrow tip={<KindTip kind={kind} />}>
-              <KindMark kind={kind} />
+              <KindMark kind={kind} size={12} />
               {KIND_TERMS[kind].term}
-              <span className="text-ink-faint/70">{ofKind.length}</span>
+              <span className="font-normal tabular-nums text-ink-faint/80">{ofKind.length}</span>
             </Eyebrow>
-            <ul className="divide-y divide-line overflow-hidden rounded-tile border border-line bg-surface">
+            <ul className="divide-y divide-line overflow-hidden rounded-tile border border-line bg-surface shadow-raised">
               {ofKind.map((c) => (
                 <ClaimRow
                   key={refKey(c)}
@@ -82,24 +99,31 @@ function ClaimRow({
         type="button"
         aria-current={selected || undefined}
         onClick={(e) => onSelect(claim, e.currentTarget.getBoundingClientRect().top)}
-        className={`flex w-full items-start gap-3 px-4 py-3 text-left transition duration-(--duration-quick) hover:bg-surface-2 ${
+        className={`group flex w-full items-start gap-3 px-4 py-3 text-left transition duration-(--duration-quick) hover:bg-surface-2/60 ${
           selected ? "bg-surface-2 shadow-[inset_2px_0_0_var(--color-eye)]" : ""
         }`}
       >
-        <KindMark kind={claim.kind} className="mt-1" />
+        <KindMark kind={claim.kind} className="mt-[3px]" />
         <span className="min-w-0 flex-1">
-          <span className="line-clamp-2 text-[14px] leading-snug text-ink">
+          <span className="line-clamp-2 text-body leading-snug text-ink">
             {stripModule(claim.statement)}
           </span>
-          <span className="mt-1 flex flex-wrap items-center gap-x-3 font-mono text-[11px] text-ink-faint">
-            <span>{shortId(claim.id)}</span>
+          <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-caption text-ink-faint">
+            <span className="font-mono">{shortId(claim.id)}</span>
             {mod && <span>{mod}</span>}
             <span>
               {files > 0 ? plural(files, "file") : plural(claim.evidence.length, "source")}
             </span>
           </span>
         </span>
-        {exception && <ExceptionBadge term={exception.term} tone={exception.tone} />}
+        <span className="flex shrink-0 items-center gap-2 self-center">
+          {exception && <ExceptionBadge term={exception.term} tone={exception.tone} />}
+          <Icon
+            name="chevron-right"
+            size={15}
+            className="text-ink-faint transition-colors duration-(--duration-quick) group-hover:text-ink-dim"
+          />
+        </span>
       </button>
     </li>
   );

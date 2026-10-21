@@ -1,3 +1,4 @@
+import type { IconName } from "../ds/Icon";
 import type { PaletteEntry, PaletteKind, PaletteSeverity } from "../types";
 import type { Rankable } from "./fuzzy";
 
@@ -20,15 +21,29 @@ export interface Command extends Rankable {
   subtitle?: string;
   keywords?: string[];
   group: CommandGroup;
-  /** Short trailing label: a status word, or the shortcut that also does this. */
+  /** Short trailing label: a status word or a count. */
   badge?: string;
+  /**
+   * The shortcut that also does this, in the key layer's notation ("g c",
+   * "?"), drawn as keycaps. Kept apart from `badge` so a shortcut is never
+   * guessed from the shape of a status word: "?" was drawn as a status badge
+   * because only a two-key chord looked like one.
+   */
+  keys?: string;
   severity?: PaletteSeverity;
   /** Where this goes, for a plain jump. */
   href?: string;
   /** What this does. Returning a promise lets the palette show a pending state. */
   run?: () => void | Promise<unknown>;
   /** Rendered as a leading glyph; keeps kinds distinguishable at a glance. */
-  icon?: string;
+  icon?: IconName;
+  /**
+   * Found by its title only when every word typed appears in it as written.
+   * Set on actions that change something: a scattered match ("rel" lighting
+   * R in "Run now" and "el" in "Changelog") is cheap on a jump, which costs a
+   * glance if it is wrong, and not on a row that fires a schedule.
+   */
+  literal?: boolean;
 }
 
 /** One nav destination, as the shell knows it. */
@@ -39,14 +54,14 @@ export interface Destination {
   chord?: string;
 }
 
-const KIND_ICON: Record<PaletteKind, string> = {
-  pipeline: "▤",
-  schedule: "◷",
-  monitor: "◉",
-  issue: "⚠",
-  agent: "◆",
-  project: "▸",
-  session: "≣",
+const KIND_ICON: Record<PaletteKind, IconName> = {
+  pipeline: "pipeline",
+  schedule: "clock",
+  monitor: "activity",
+  issue: "alert",
+  agent: "bolt",
+  project: "folder",
+  session: "terminal",
 };
 
 const KIND_GROUP: Record<PaletteKind, CommandGroup> = {
@@ -58,6 +73,39 @@ const KIND_GROUP: Record<PaletteKind, CommandGroup> = {
   project: "Recent",
   session: "Recent",
 };
+
+/**
+ * Kinds whose subtitle is machine text — an agent's working directory or
+ * command line, a session's project path — and is printed exactly as it came.
+ * Every other subtitle is a phrase the index wrote ("every 2h", "3 sessions")
+ * and reads as one.
+ */
+const MACHINE_SUBTITLE = new Set<PaletteKind>(["agent", "session"]);
+
+/** The status words the index sends, in the words the rest of the app uses:
+ *  a waiting gate is "Needs approval" on every StatusPill, so here too. */
+const BADGE_WORDS: Record<string, string> = {
+  await: "Needs approval",
+  awaiting: "Needs approval",
+  "awaiting-approval": "Needs approval",
+};
+
+function capitalise(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * An entry's badge as a person reads it: "Needs approval", "Running",
+ * "Paused". The index speaks in status values ("needs approval", "down"), and
+ * the palette was the one place they were printed as sent, lower case beside
+ * rows whose every other label is sentence case. A shouted value is lowered
+ * before it is capitalised, so "FAILED" reads "Failed" too.
+ */
+function statusBadge(badge: string | null): string | undefined {
+  if (!badge) return undefined;
+  const word = badge.toLowerCase();
+  return BADGE_WORDS[word] ?? capitalise(badge === badge.toUpperCase() ? word : badge);
+}
 
 export interface CommandContext {
   destinations: Destination[];
@@ -87,8 +135,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
       id: `go:${dest.id}`,
       title: dest.label,
       group: "Go to",
-      icon: "→",
-      badge: dest.chord,
+      icon: "arrow-right",
+      keys: dest.chord,
       keywords: ["go", "open", "tab", dest.id],
       href: `#/${dest.id}`,
     });
@@ -103,9 +151,9 @@ export function buildCommands(ctx: CommandContext): Command[] {
     commands.push({
       id: `review:${entry.gateInstanceId}`,
       title: `Review gate — ${entry.title}`,
-      subtitle: "see what the paused phase produced, then approve or revise",
+      subtitle: "See what the paused phase produced, then approve or revise",
       group: "Actions",
-      icon: "⏸",
+      icon: "approve",
       severity: "warn",
       keywords: ["approve", "revise", "review", "gate", "resume", "unblock", entry.id],
       href: `#/command/${encodeURIComponent(entry.gateInstanceId)}`,
@@ -118,9 +166,10 @@ export function buildCommands(ctx: CommandContext): Command[] {
     commands.push({
       id: `run:${scheduleId}`,
       title: `Run now — ${entry.title}`,
-      subtitle: "fire this schedule immediately",
+      subtitle: "Fire this schedule immediately",
       group: "Actions",
-      icon: "▶",
+      icon: "play",
+      literal: true,
       keywords: ["run", "fire", "trigger", "now", entry.id],
       run: () => ctx.actions.runSchedule(scheduleId),
     });
@@ -129,9 +178,10 @@ export function buildCommands(ctx: CommandContext): Command[] {
   commands.push({
     id: "action:caught-up",
     title: "Mark caught up",
-    subtitle: "reset the briefing window to now",
+    subtitle: "Reset the briefing window to now",
     group: "Actions",
-    icon: "✓",
+    icon: "check",
+    literal: true,
     keywords: ["briefing", "ack", "acknowledge", "clear", "digest"],
     run: () => ctx.actions.markCaughtUp(),
   });
@@ -139,10 +189,10 @@ export function buildCommands(ctx: CommandContext): Command[] {
   commands.push({
     id: "action:shortcuts",
     title: "Keyboard shortcuts",
-    subtitle: "every shortcut in the app",
+    subtitle: "Every shortcut in the app",
     group: "Actions",
-    icon: "⌨",
-    badge: "?",
+    icon: "keyboard",
+    keys: "?",
     keywords: ["help", "keys", "bindings", "cheatsheet"],
     run: () => ctx.actions.showShortcuts(),
   });
@@ -151,10 +201,13 @@ export function buildCommands(ctx: CommandContext): Command[] {
     commands.push({
       id: `entry:${entry.kind}:${entry.id}`,
       title: entry.title,
-      subtitle: entry.subtitle ?? undefined,
+      subtitle:
+        entry.subtitle && !MACHINE_SUBTITLE.has(entry.kind)
+          ? capitalise(entry.subtitle)
+          : (entry.subtitle ?? undefined),
       group: KIND_GROUP[entry.kind],
       icon: KIND_ICON[entry.kind],
-      badge: entry.badge ?? undefined,
+      badge: statusBadge(entry.badge),
       severity: entry.severity,
       keywords: entry.keywords,
       href: entry.href,

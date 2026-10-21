@@ -87,7 +87,12 @@ export interface Recording {
   durationMs: number;
   events: RecorderEvent[];
   lanes: RecorderLaneSummary[];
-  /** Index into `events` of where it went wrong, or null when nothing did. */
+  /**
+   * Index into `events` of where it went wrong, or null when nothing did. For
+   * a run that stopped short (interrupted or cancelled, with no failing
+   * outcome) it is where it stopped: the closing marker, an `end` event
+   * labelled "Stopped — <reason>", never an `error`.
+   */
   failureIndex: number | null;
   totals: RecorderTotals;
   /** Per-event cost is apportioned from the run total by token share, not

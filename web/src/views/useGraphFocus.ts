@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { prefersReducedMotion } from "../ds";
 import {
-  followTarget,
+  activePhases,
+  followScroll,
   scrollTargetFor,
   type FocusFrame,
   type FocusPhase,
@@ -39,15 +40,16 @@ function nodeCentre(layout: LaneLayout, id: string): Point | null {
 }
 
 /**
- * Keeps the phase the run is on centred in a scrolling graph, moving on as the
- * run does — until the user scrolls it themselves. From then on the view is
- * theirs until they ask to follow again: a board that pulls the view back
- * while someone is reading a branch is worse than one that never moved.
+ * Keeps the phases the run is on in view in a scrolling graph (see
+ * {@link followScroll}), moving on as the run does — until the user scrolls it
+ * themselves. From then on the view is theirs until they ask to follow again:
+ * a board that pulls the view back while someone is reading a branch is worse
+ * than one that never moved.
  *
  * Pausing is driven by input (wheel, touch, pointer, keys), never by `scroll`
  * events, which the follow's own smooth scroll fires too. A selection the
  * board makes itself — a gate opening, a failure landing — is still centred
- * once, followed or not.
+ * once, followed or not, unless following already has it in view.
  */
 export function useGraphFocus(
   scrollerRef: RefObject<HTMLElement | null>,
@@ -70,10 +72,14 @@ export function useGraphFocus(
     if (!following || !ready) return;
     const el = scrollerRef.current;
     if (!el) return;
-    const viewport = viewportOf(el);
-    const point = followTarget(phases, layout, { w: viewport.w / scale, h: viewport.h / scale });
-    if (!point) return;
-    const target = scrollTargetFor(point, viewport, { scale, runway: { x: runwayX, y: runwayY } });
+    const placed = { scale, runway: { x: runwayX, y: runwayY } };
+    // A run with nothing to follow is still placed once, at the graph's start:
+    // left at scroll 0 it opened on the empty runway before it, half a tile of
+    // nothing. Placed once only, so a run that finishes stays where it ended.
+    const target =
+      followScroll(phases, layout, viewportOf(el), placed) ??
+      (scrolled.current ? null : { left: Math.round(runwayX), top: Math.round(runwayY) });
+    if (!target) return;
     const prev = last.current;
     if (prev && prev.left === target.left && prev.top === target.top) return;
     last.current = target;
@@ -87,13 +93,16 @@ export function useGraphFocus(
     const prev = seenSelection.current;
     seenSelection.current = selectedId;
     if (selectedId === null || selectedId === prev || selectedId === clicked.current) return;
+    // The board's pick moves with the run, so centring a phase following has
+    // just brought into view undid the follow each time the run moved on.
+    if (following && activePhases(phases).includes(selectedId)) return;
     const el = scrollerRef.current;
     const point = nodeCentre(layout, selectedId);
     if (!el || !point) return;
     const runway = { x: runwayX, y: runwayY };
     scrollTile(el, scrollTargetFor(point, viewportOf(el), { scale, runway }), scrolled.current);
     scrolled.current = true;
-  }, [selectedId, ready, layout, scale, runwayX, runwayY, scrollerRef]);
+  }, [selectedId, ready, following, phases, layout, scale, runwayX, runwayY, scrollerRef]);
 
   const pause = () => {
     const el = scrollerRef.current;

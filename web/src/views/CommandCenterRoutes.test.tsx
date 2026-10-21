@@ -177,7 +177,7 @@ describe("the board on a routed instance", () => {
     const chip = screen.getByRole("button", { name: /Repair/ });
     expect(chip.getAttribute("title")).toMatch(/skipped/);
     expect(chip.getAttribute("title")).not.toMatch(/idle/);
-    expect(chip.textContent).toMatch(/skip/);
+    expect(chip.textContent).toMatch(/Skipped/);
   });
 
   it("draws the condition that governs a conditional branch on its edge, not in the node", () => {
@@ -201,8 +201,25 @@ describe("the board on a routed instance", () => {
     const decision = screen.getByTestId("phase-decision");
     expect(decision.textContent).toMatch(/evaluation/);
     expect(decision.textContent).toMatch(/\{"accepted":true\}/);
-    expect(decision.textContent).toMatch(/→ Publish/);
+    // The arrow is the routes line's icon, not a text glyph beside it.
+    expect(decision.textContent).toMatch(/\}\s+Publish/);
+    expect(decision.textContent).not.toContain("→");
     expect(decision.textContent).toMatch(/skipped Repair/);
+  });
+
+  it("lists where a phase's work comes from in full, conditions as the graph draws them", () => {
+    render(<CommandCenter />);
+    fireEvent.click(screen.getByRole("button", { name: /Publish/ }));
+    const from = screen.getByTestId("phase-needs");
+    expect(from).toHaveTextContent(/Waits for\s*accepted = true\s*01 Evaluate/);
+    // No parentheses: the condition is the same chip on the edge in the graph.
+    expect(from.textContent).not.toMatch(/\(/);
+
+    // A join lists every dependency, none of them left to a tooltip.
+    fireEvent.click(screen.getByRole("button", { name: /Report/ }));
+    expect(screen.getByTestId("phase-needs")).toHaveTextContent(
+      /02 Publish\s*or skipped\s*·\s*03 Repair\s*or skipped/,
+    );
   });
 
   it("takes a wordy decision apart instead of printing it as a wall of JSON", () => {
@@ -260,6 +277,6 @@ describe("the board on a routed instance", () => {
     render(<CommandCenter />);
     expect(screen.queryByTestId("phase-decision")).toBeNull();
     expect(screen.queryByTestId("phase-skip")).toBeNull();
-    expect(screen.getByRole("button", { name: /Evaluate/ }).textContent).not.toMatch(/skip/);
+    expect(screen.getByRole("button", { name: /Evaluate/ }).textContent).not.toMatch(/skipped/i);
   });
 });

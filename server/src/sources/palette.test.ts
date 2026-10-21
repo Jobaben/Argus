@@ -257,15 +257,21 @@ describe("buildPalette", () => {
     }
   });
 
-  it("marks every schedule runnable and notes a disabled one", () => {
+  it("marks every schedule runnable and badges a disabled one, once", () => {
     const { entries } = buildPalette(
       input({ schedules: [schedule(), schedule({ id: "s2", name: "Paused", enabled: false })] }),
       NOW,
     );
     assert.equal(entries[0].runnableScheduleId, "s1");
     assert.equal(entries[0].subtitle, "every 6h");
-    assert.equal(entries[1].subtitle, "every 6h · disabled");
+    assert.equal(entries[0].badge, null);
+    // The badge names the state; the subtitle does not repeat it in other words.
+    assert.equal(entries[1].subtitle, "every 6h");
     assert.equal(entries[1].badge, "paused");
+    // Typing either word still finds it.
+    assert.ok(entries[1].keywords?.includes("paused"));
+    assert.ok(entries[1].keywords?.includes("disabled"));
+    assert.ok(!entries[0].keywords?.includes("disabled"));
   });
 
   it("makes a schedule findable by its working directory", () => {
@@ -318,6 +324,17 @@ describe("buildPalette", () => {
     assert.equal(entries.length, 1);
     assert.equal(entries[0].badge, "2×");
     assert.equal(entries[0].severity, "error");
+  });
+
+  it("states an issue's count once, in the badge, and its schedules in the subtitle", () => {
+    const { entries } = buildPalette(
+      input({ issues: [issue({ schedules: ["Dependency audit", "Nightly review"] })] }),
+      NOW,
+    );
+    assert.equal(entries[0].badge, "2×");
+    assert.equal(entries[0].subtitle, "Dependency audit, Nightly review");
+    const bare = buildPalette(input({ issues: [issue({ schedules: [] })] }), NOW);
+    assert.equal(bare.entries[0].subtitle, null);
   });
 
   it("deep-links an agent by its short id, url-encoded", () => {

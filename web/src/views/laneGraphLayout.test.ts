@@ -5,6 +5,8 @@ import {
   LANE_GEOMETRY,
   laneLayout,
   labelWidth,
+  markerWidth,
+  MIN_SCALE,
   nodeWidthFor,
   NODE_MAX_W,
   NODE_MIN_W,
@@ -214,6 +216,31 @@ describe("nodeWidthFor", () => {
     expect(nodeWidthFor(["plan"])).toBe(NODE_MIN_W);
     expect(nodeWidthFor(["Discover rules: Bookings"])).toBe(Math.round(24 * 6.4 + 64));
     expect(nodeWidthFor(["x".repeat(200)])).toBe(NODE_MAX_W);
+  });
+
+  it("leaves room for the markers a node carries after its name", () => {
+    const name = "Draft release notes";
+    const gate = phase("notes", "idle", [], { name, gated: true });
+    // The gate's word used to come out of the name's room, at every width.
+    expect(laneLayout([gate]).nodeW).toBe(nodeWidthFor([name], [markerWidth(gate)]));
+    expect(laneLayout([gate]).nodeW).toBeGreaterThan(laneLayout([{ ...gate, gated: false }]).nodeW);
+  });
+
+  it("measures each marker a node can carry", () => {
+    expect(markerWidth(phase("a"))).toBe(0);
+    expect(markerWidth(phase("a", "idle", [], { gated: true }))).toBeGreaterThan(0);
+    const retried = markerWidth(phase("a", "failed", [], { gated: true, attempt: 1 }));
+    expect(retried).toBeGreaterThan(markerWidth(phase("a", "idle", [], { gated: true })));
+    // Step dots for a few steps, one step draws none.
+    expect(markerWidth(phase("a", "idle", [], { steps: [1] }))).toBe(0);
+    expect(markerWidth(phase("a", "idle", [], { steps: [1, 2, 3] }))).toBeGreaterThan(0);
+  });
+});
+
+describe("MIN_SCALE", () => {
+  it("keeps the graph's smallest text at 9px or more on screen", () => {
+    // Index, "Gate" and route labels are 11px; names are 12px.
+    expect(11 * MIN_SCALE).toBeGreaterThanOrEqual(9);
   });
 });
 

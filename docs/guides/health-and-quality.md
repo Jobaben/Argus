@@ -49,9 +49,13 @@ here.
   to restore. An empty tile is inert: pressing it could only blank the list.
 - One **monitor card** per schedule: its name (links back to the Scheduler),
   a status pill, a **heartbeat bar** of the last 30 runs (one tick per run,
-  colored by outcome), and a stats line — **uptime %** (succeeded vs failed
+  colored by outcome; each tick links to that run's
+  [Flight Recorder](monitoring.md#flight-recorder) and is named by its status
+  and time), and a stats line — **uptime %** (succeeded vs failed
   over the last 30), **last run** time, and either the **next** expected time
-  or, when late/down, the slot that was **expected** and missed.
+  or, when late/down, the slot that was **expected** and missed. On a card too
+  narrow for 30 ticks (a phone), the bar shows the newest runs that fit with
+  each tick wide enough to tap, rather than thirty hairlines.
 - Cards that are `down` or `failing` get a red border so they jump out.
 
 **Status meanings:** `up` — last expected slot ran; `late` — a slot is
@@ -79,7 +83,10 @@ never replays a storm of already-known-down alerts (the Briefing tab is the
 place that shows current bad state).
 
 **What you can do:** the tab itself is deliberately read-only — fix problems
-in the Scheduler or Issues tabs.
+in the Scheduler or Issues tabs. Open any run from its heartbeat tick. From
+the keyboard a heartbeat bar is one tab stop: Tab lands on the newest run (or
+the one you last walked to), `←`/`→`, Home and End walk the bar, Enter opens
+the run, and Tab moves on.
 
 **Where the data comes from:** `GET /api/monitors`, derived on every read
 from schedules + run records (no separate state to go stale); alerts arrive
@@ -134,13 +141,18 @@ leave that envelope.
 - Four counters: **Envelopes** (warm and judging), **Warming up**,
   **Anomalies** (last 14 days), **Critical**.
 - **Anomalies** first, because they are the news. Each states the multiple in
-  words — "3.2× median cost ($0.42 vs $0.13 over 24 runs)" — with a
-  **▶ replay this run** link straight into the
+  words — "3.2× median cost ($0.42 vs $0.13 over 24 runs)", or for a run far
+  under its envelope "4.7× shorter than the median duration" — with a
+  **Replay this run** link straight into the
   [Flight Recorder](monitoring.md#flight-recorder), and the robust z-score in a tooltip
   for anyone who wants it.
 - **Learned envelopes** second, because they are the evidence: per unit of
   work, the median and 5th–95th percentile of duration, cost and tokens, drawn
   as a bar with the median marked, plus how many samples it was learned from.
+- A pipeline phase's envelope (its anomalies too, and a Sentinel incident one
+  opens) is named by its pipeline and phase, such as _Release Train ·
+  Implement_; the phase id follows in mono only when that name does not
+  already say it, and the full stored name is in the tooltip.
 
 **What you can do:**
 
@@ -423,7 +435,7 @@ same 400-record cap; rubrics live on the schedule or pipeline definition.
 ## Sentinel
 
 _Incidents, escalation, and a diagnostic that proposes but never acts._ Route:
-`#/sentinel` (`g n`, or the ⋯ More menu — the Briefing is where a signal is
+`#/sentinel` (`g n`, or the More menu — the Briefing is where a signal is
 first seen; Sentinel is where its record lives)
 
 **Purpose:** Monitors, Issues and Watchtower each raise a _signal_. None of them
@@ -442,7 +454,7 @@ here would just make a second inbox):
 
 **What you see per incident:** status and severity, how long it has been open,
 a live **escalates in…** countdown, every link that leads somewhere useful
-(the monitor, the issue, **▶ replay the run**), and the **timeline** — opened,
+(**Monitor**, **Issue**, **Replay the run**), and the **timeline** — opened,
 escalated, acknowledged, diagnosed, noted, resolved, reopened — each entry
 attributed to Sentinel or to the person who did it.
 
@@ -457,7 +469,9 @@ attributed to Sentinel or to the person who did it.
 **Escalation and quiet hours** (Policy panel):
 
 - **Levels** — by default: notify, then escalate after 30 unacknowledged
-  minutes. Up to five levels.
+  minutes. Up to five levels, numbered from 1 in the panel's **Escalation**
+  ladder. An escalated incident's **Level N** uses the same numbers, so an
+  incident on the second rung reads **Level 2**.
 - **Quiet hours** — a local-clock window (wrapping past midnight is the normal
   case and is handled). Inside it, **the bell is silent but the record still
   lands**: the timeline, the incident list and the escalation clock all carry

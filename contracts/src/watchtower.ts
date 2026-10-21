@@ -75,7 +75,10 @@ export interface Anomaly {
   /** Robust z, or null when the sample is degenerate (MAD of zero). */
   zScore: number | null;
   at: string;
-  /** One human sentence: "3.2× median cost ($0.42 vs $0.13 over 24 runs)". */
+  /** One human sentence: "3.2× median cost ($0.42 vs $0.13 over 24 runs)", or
+   *  for a low one "4.7× shorter than the median duration (3.2m vs 15.0m over
+   *  24 runs)" — "cheaper" for cost, "fewer tokens" for tokens. Display text:
+   *  nothing parses it. */
   detail: string;
 }
 

@@ -3,7 +3,21 @@ import { Fragment, useEffect, useState } from "react";
 import { runtimeLabel } from "../useRuntimes";
 import type { Run, StepCompletion } from "../types";
 import type { StepPill } from "../ds";
-import { Skeleton, StatusPill, formatMs, formatTokens, formatUsd, parseRunLog } from "../ds";
+import {
+  Button,
+  ButtonLink,
+  Icon,
+  Skeleton,
+  StatusPill,
+  formatMs,
+  formatTokens,
+  formatUsd,
+  parseRunLog,
+} from "../ds";
+import { withoutOutcome } from "./outcome";
+import { tellOnce } from "./failureReason";
+import { envelopeFields } from "./runEnvelope";
+import { fetchLoad, loadError } from "../live/loadError";
 
 /**
  * Everything Argus knows about one step of a pipeline, without leaving the board.
@@ -51,14 +65,34 @@ function completionLabel(c: StepCompletion): string {
   return `${marker}${via}${hook}`;
 }
 
+/**
+ * A labelled value. The labels are lower-case in the DOM — they are the
+ * vocabulary the rest of Argus (and its tests) uses — and set in sentence case
+ * on screen.
+ */
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <Fragment>
-      <dt className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">{label}</dt>
-      <dd className="min-w-0 break-words text-[12.5px] text-ink-dim">{children}</dd>
+      <dt className="text-caption text-ink-faint first-letter:uppercase">{label}</dt>
+      <dd className="min-w-0 break-words text-small text-ink-dim">{children}</dd>
     </Fragment>
   );
 }
+
+/** One figure in the readout strip at the top of the drawer. */
+function Stat({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <span className="text-caption text-ink-faint">{label}</span>
+      <span className="flex min-h-6 items-center text-heading font-semibold text-ink">
+        {children}
+      </span>
+    </div>
+  );
+}
+
+/** Nested regions are inset wells, not more outlined boxes. */
+const WELL = "rounded-tile border border-line bg-ground-2/60";
 
 /**
  * The run behind a step, fetched on open.
@@ -80,13 +114,13 @@ function useRunDetail(runId: string | null, running: boolean) {
     const controller = new AbortController();
     const load = async () => {
       try {
-        const res = await fetch(`/api/runs/${encodeURIComponent(runId)}`, {
+        const res = await fetchLoad(`/api/runs/${encodeURIComponent(runId)}`, {
           signal: controller.signal,
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const body = (await res.json()) as Run & { log?: string };
+        // The record and its log tail arrive side by side, not merged.
+        const body = (await res.json()) as { run: Run; log?: string };
         if (!alive) return;
-        setState({ run: body, log: body.log ?? "", loading: false, error: null });
+        setState({ run: body.run, log: body.log ?? "", loading: false, error: null });
       } catch (e) {
         if (!alive || controller.signal.aborted) return;
         setState((s) => ({
@@ -108,27 +142,50 @@ function useRunDetail(runId: string | null, running: boolean) {
   return state;
 }
 
-function RunLog({ log }: { log: string }) {
+function RunLog({
+  log,
+  shown,
+  failed,
+  exitCode,
+}: {
+  log: string;
+  /** Which figures the drawer's readout already shows. */
+  shown: { cost: boolean; tokens: boolean; duration: boolean };
+  /** The step failed, whatever its process said. */
+  failed: boolean;
+  /** What the process did, which the log's envelope does not say. */
+  exitCode: number | null | undefined;
+}) {
   const parsed = parseRunLog(log);
   if (parsed.kind === "empty") {
-    return <p className="text-[12px] text-ink-faint">No output recorded yet.</p>;
+    return <p className={`${WELL} px-4 py-4 text-small text-ink-faint`}>No output recorded yet.</p>;
   }
   return (
-    <div className="rounded-lg bg-black/30 p-3">
+    <div className={`${WELL} overflow-hidden`}>
       {parsed.truncated && (
-        <p className="mb-2 text-[10.5px] text-ink-faint">Showing the end of a longer log.</p>
+        <p className="flex items-center gap-2 border-b border-line px-4 py-2 text-caption text-ink-faint">
+          <Icon name="info" size={13} />
+          Showing the end of a longer log.
+        </p>
       )}
       {parsed.kind === "envelope" ? (
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 text-[12px]">
-          {parsed.fields.map((f) => (
+        <dl className="grid grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-6 gap-y-2 px-4 py-3.5">
+          {envelopeFields(parsed.fields, shown, { failed, exitCode }).map((f) => (
             <Fragment key={f.label}>
-              <dt className="text-ink-faint">{f.label}</dt>
-              <dd className="break-words font-mono text-ink-dim">{f.value}</dd>
+              <dt className="text-caption text-ink-faint">{f.label}</dt>
+              {/* Mono for the ids only: durations, counts and the process's
+                  word are read, not copied. */}
+              <dd
+                className={`break-words text-caption text-ink-dim ${f.machine ? "font-mono" : ""}`}
+              >
+                {f.value}
+                {f.note && <span className="mt-0.5 block text-ink-faint">{f.note}</span>}
+              </dd>
             </Fragment>
           ))}
         </dl>
       ) : (
-        <pre className="max-h-[40vh] overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-ink-dim">
+        <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-words px-4 py-3.5 font-mono text-caption leading-relaxed text-ink-dim">
           {parsed.text}
         </pre>
       )}
@@ -157,10 +214,20 @@ export function StepDrawer({
     return <Drawer open={false} title="" onClose={onClose} children={null} />;
 
   const run = detail.run;
+  // The agent's prose without its protocol line, which the status pill below
+  // already says; a bare marker with no reason leaves nothing worth a panel.
+  // When it opens by telling the phase's failure reason, that line is the
+  // reason, said in full, and the panel below keeps the rest: one error used
+  // to be told twice, once as "failed: …" and again as the agent's sentence.
+  const told = tellOnce(selection.reason, withoutOutcome(run?.resultSummary));
+  const reason = told.reason || null;
+  const summary = told.message || null;
   const transcriptHref =
     run?.sessionId && run.project
       ? `#/sessions/${encodeURIComponent(run.project)}/${encodeURIComponent(run.sessionId)}`
       : null;
+
+  const canCancel = running && runId !== null && onCancelRun !== undefined;
 
   return (
     <Drawer
@@ -170,139 +237,210 @@ export function StepDrawer({
       title={step.name}
       subtitle={`${selection.pipelineName} · ${selection.phaseName}`}
       footer={
-        <div className="flex items-center gap-2">
-          {transcriptHref && (
-            <a
-              href={transcriptHref}
-              onClick={onClose}
-              className="rounded-md border border-line px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-queue transition duration-(--duration-quick) hover:border-queue/50"
-            >
-              Open transcript
-            </a>
-          )}
-          {running && runId && onCancelRun && (
-            <button
-              type="button"
-              disabled={cancelling}
-              onClick={() => {
-                setCancelling(true);
-                setCancelError(null);
-                void onCancelRun(runId)
-                  .catch((e: unknown) => setCancelError(e instanceof Error ? e.message : String(e)))
-                  .finally(() => setCancelling(false));
-              }}
-              className="rounded-md border border-fail/40 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-fail transition duration-(--duration-quick) hover:bg-fail/10 disabled:opacity-40"
-            >
-              {cancelling ? "Cancelling…" : "Cancel run"}
-            </button>
-          )}
-          {cancelError && (
-            <span role="alert" className="font-mono text-[10px] text-fail">
-              {cancelError}
-            </span>
-          )}
-          <span className="ml-auto">
-            <StatusPill status={step.status} />
-          </span>
-        </div>
+        transcriptHref || canCancel || cancelError ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {transcriptHref && (
+              <ButtonLink href={transcriptHref} onClick={onClose} icon="terminal">
+                Open transcript
+              </ButtonLink>
+            )}
+            {cancelError && (
+              <span
+                role="alert"
+                className="flex min-w-0 items-center gap-1.5 text-caption text-fail"
+              >
+                <Icon name="alert" size={14} />
+                <span className="min-w-0 break-words">{cancelError}</span>
+              </span>
+            )}
+            {canCancel && (
+              // Destructive, so it stands apart at the far end rather than
+              // beside the way out to the transcript.
+              <Button
+                variant="danger"
+                icon="stop"
+                className="ml-auto"
+                disabled={cancelling}
+                onClick={() => {
+                  setCancelling(true);
+                  setCancelError(null);
+                  void onCancelRun(runId)
+                    .catch((e: unknown) =>
+                      setCancelError(e instanceof Error ? e.message : String(e)),
+                    )
+                    .finally(() => setCancelling(false));
+                }}
+              >
+                {cancelling ? "Cancelling…" : "Cancel run"}
+              </Button>
+            )}
+          </div>
+        ) : undefined
       }
     >
-      <dl className="grid grid-cols-[max-content_1fr] gap-x-5 gap-y-2">
-        <Field label="job">
-          <span className="font-mono">{runId ?? "—"}</span>
-        </Field>
-        {step.candidate && (
-          // Best-of-N: which draft this is, and what became of it. Stated in
-          // words rather than as a status token, because "aborted" is exactly
-          // the wrong word for a draft that simply was not the one chosen.
-          <Field label="candidate">
-            <span className="font-mono">
-              c{step.candidate.index + 1} of {step.candidate.total}
-            </span>
-            {step.selected
-              ? " · selected"
-              : step.superseded
-                ? " · superseded by the winner"
-                : step.verified === true
-                  ? " · checks passed"
-                  : step.verified === false
-                    ? " · checks failed"
-                    : ""}
-          </Field>
-        )}
-        {step.completion && (
-          <Field label="completion">
-            <span title={step.completion.reason ?? undefined}>
-              {completionLabel(step.completion)}
-            </span>
-          </Field>
-        )}
-        {step.model && <Field label="model">{step.model}</Field>}
-        {step.runtime && (
-          <Field label="runtime">{runtimeLabel(step.runtime) || step.runtime}</Field>
-        )}
-        {step.workspace && (
-          // The branch is the deliverable of an isolated phase; the directory it
-          // ran in is disposable, so it rides along as the title rather than
-          // taking a line of its own.
-          <Field label="workspace">
-            <span className="font-mono" title={step.workspace.path}>
-              {step.workspace.branch}
-            </span>
-          </Field>
-        )}
-        {step.startedAt && (
-          <Field label="started">{new Date(step.startedAt).toLocaleString()}</Field>
-        )}
-        {step.durationMs != null && <Field label="duration">{formatMs(step.durationMs)}</Field>}
-        {run?.deadlineAt && run.startedAt && (
-          <Field label="timeout">
-            {formatMs(Math.max(0, Date.parse(run.deadlineAt) - Date.parse(run.startedAt)))}
-          </Field>
-        )}
-        {run?.stallSeconds != null && (
-          <Field label="stall">no output for {run.stallSeconds}s</Field>
-        )}
-        {step.tokens != null && <Field label="tokens">{formatTokens(step.tokens)}</Field>}
-        {step.costUsd != null && <Field label="cost">{formatUsd(step.costUsd)}</Field>}
-        {step.currentActivity && <Field label="activity">{step.currentActivity}</Field>}
-      </dl>
-
-      {selection.reason && (
-        <p className="mt-4 whitespace-pre-wrap rounded-lg border border-fail/30 bg-fail/10 px-3 py-2 text-[12.5px] leading-relaxed text-[#ffc4ca]">
-          {selection.reason}
-        </p>
-      )}
-
-      {run?.resultSummary && (
-        <p className="mt-4 whitespace-pre-wrap text-[12.5px] leading-relaxed text-ok">
-          {run.resultSummary}
-        </p>
-      )}
-
-      <section className="mt-5">
-        <h3 className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-faint">
-          {running ? "Log (tailing)" : "Log"}
-        </h3>
-        {runId === null ? (
-          <p className="text-[12px] text-ink-faint">
-            This step hasn't started, so there is no run to show yet.
-          </p>
-        ) : detail.loading ? (
-          <div role="status" aria-busy="true">
-            <span className="sr-only">Loading the run log…</span>
-            <Skeleton className="h-3 w-full" />
-            <Skeleton className="mt-2 h-3 w-4/5" />
-            <Skeleton className="mt-2 h-3 w-2/3" />
+      <div className="flex flex-col gap-6">
+        {/* The outcome first: why it failed, or what it produced. */}
+        {reason && (
+          <div className="flex items-start gap-2.5 rounded-tile border border-fail/30 bg-fail/[0.07] px-4 py-3">
+            <Icon name="x-circle" size={17} className="mt-0.5 text-fail" />
+            <p className="min-w-0 whitespace-pre-wrap break-words text-small leading-relaxed text-fail-ink">
+              {reason}
+            </p>
           </div>
-        ) : detail.error ? (
-          <p role="alert" className="text-[12px] text-fail">
-            Couldn't load the run: {detail.error}
-          </p>
-        ) : (
-          <RunLog log={detail.log} />
         )}
-      </section>
+
+        {summary &&
+          (step.status === "done" ? (
+            <div className="flex items-start gap-2.5 rounded-tile border border-ok/25 bg-ok/[0.06] px-4 py-3">
+              <Icon name="check-circle" size={17} className="mt-0.5 text-ok" />
+              <p className="min-w-0 whitespace-pre-wrap break-words text-small leading-relaxed text-ink">
+                {summary}
+              </p>
+            </div>
+          ) : (
+            // A failed or stopped run still leaves the agent's last word, but
+            // that is not a result: it sits in a plain well, so green keeps
+            // meaning done.
+            <div className={`${WELL} flex items-start gap-2.5 px-4 py-3`}>
+              <Icon name="message" size={17} className="mt-0.5 text-ink-faint" />
+              <p className="min-w-0 whitespace-pre-wrap break-words text-small leading-relaxed text-ink-dim">
+                {summary}
+              </p>
+            </div>
+          ))}
+
+        <div
+          className={`${WELL} grid grid-cols-2 gap-x-6 gap-y-4 px-4 py-3.5 sm:flex sm:flex-wrap sm:gap-x-10`}
+        >
+          <Stat label="Status">
+            <StatusPill status={step.status} />
+          </Stat>
+          {step.durationMs != null && <Stat label="Duration">{formatMs(step.durationMs)}</Stat>}
+          {step.tokens != null && <Stat label="Tokens">{formatTokens(step.tokens)}</Stat>}
+          {step.costUsd != null && <Stat label="Cost">{formatUsd(step.costUsd)}</Stat>}
+        </div>
+
+        <dl className="grid grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-6 gap-y-2.5">
+          <Field label="job">
+            {runId === null ? (
+              <span className="font-mono text-caption">—</span>
+            ) : (
+              // The run itself is one click further: its Flight Recorder replay.
+              <a
+                href={`#/run/${encodeURIComponent(runId)}`}
+                onClick={onClose}
+                title="Open this run in the Flight Recorder"
+                // Padded past its 14px line to a target a thumb can land on;
+                // the negative margin keeps the row's rhythm.
+                className="-my-2 inline-block break-all rounded-sm py-2 font-mono text-caption text-ink-dim underline decoration-line-strong underline-offset-[3px] transition-colors duration-(--duration-quick) hover:text-ink hover:decoration-ink-faint"
+              >
+                {runId}
+              </a>
+            )}
+          </Field>
+          {step.candidate && (
+            // Best-of-N: which draft this is, and what became of it. Stated in
+            // words rather than as a status token, because "aborted" is exactly
+            // the wrong word for a draft that simply was not the one chosen.
+            <Field label="candidate">
+              <span className="font-mono text-caption">
+                c{step.candidate.index + 1} of {step.candidate.total}
+              </span>
+              {step.selected
+                ? " · selected"
+                : step.superseded
+                  ? " · superseded by the winner"
+                  : step.verified === true
+                    ? " · checks passed"
+                    : step.verified === false
+                      ? " · checks failed"
+                      : ""}
+            </Field>
+          )}
+          {step.completion && (
+            <Field label="completion">
+              <span title={step.completion.reason ?? undefined}>
+                {completionLabel(step.completion)}
+              </span>
+            </Field>
+          )}
+          {step.model && <Field label="model">{step.model}</Field>}
+          {step.runtime && (
+            <Field label="runtime">{runtimeLabel(step.runtime) || step.runtime}</Field>
+          )}
+          {step.workspace && (
+            // The branch is the deliverable of an isolated phase; the directory it
+            // ran in is disposable, so it rides along as the title rather than
+            // taking a line of its own.
+            <Field label="workspace">
+              <span className="break-all font-mono text-caption" title={step.workspace.path}>
+                {step.workspace.branch}
+              </span>
+            </Field>
+          )}
+          {step.startedAt && (
+            <Field label="started">{new Date(step.startedAt).toLocaleString()}</Field>
+          )}
+          {run?.deadlineAt && run.startedAt && (
+            <Field label="timeout">
+              {formatMs(Math.max(0, Date.parse(run.deadlineAt) - Date.parse(run.startedAt)))}
+            </Field>
+          )}
+          {run?.stallSeconds != null && (
+            <Field label="stall">no output for {run.stallSeconds}s</Field>
+          )}
+          {step.currentActivity && <Field label="activity">{step.currentActivity}</Field>}
+        </dl>
+
+        <section className="flex flex-col gap-3">
+          <div className="flex min-h-5 items-center justify-between gap-3">
+            <h3 className="eyebrow">Log</h3>
+            {running && runId !== null && (
+              // Live, so it wears the eye's colour: this is the one thing on the
+              // drawer that changes while you watch it.
+              <span className="inline-flex items-center gap-1.5 text-caption text-eye">
+                <span
+                  aria-hidden="true"
+                  className="h-1.5 w-1.5 rounded-full bg-current motion-safe:animate-[pulse_var(--duration-pulse)_ease-in-out_infinite]"
+                />
+                Tailing
+              </span>
+            )}
+          </div>
+          {runId === null ? (
+            <p className={`${WELL} flex items-center gap-2 px-4 py-4 text-small text-ink-faint`}>
+              <Icon name="clock" size={15} />
+              This step hasn't started, so there is no run to show yet.
+            </p>
+          ) : detail.loading ? (
+            <div role="status" aria-busy="true" className={`${WELL} px-4 py-4`}>
+              <span className="sr-only">Loading the run log…</span>
+              <Skeleton className="h-3 w-full" />
+              <Skeleton className="mt-2 h-3 w-4/5" />
+              <Skeleton className="mt-2 h-3 w-2/3" />
+            </div>
+          ) : detail.error ? (
+            <p
+              role="alert"
+              className="flex items-start gap-2 rounded-tile border border-fail/30 bg-fail/[0.07] px-4 py-3 text-small text-fail-ink"
+            >
+              <Icon name="alert" size={15} className="mt-0.5 text-fail" />
+              <span className="min-w-0 break-words">{loadError("the run", detail.error)}</span>
+            </p>
+          ) : (
+            <RunLog
+              log={detail.log}
+              failed={step.status === "failed"}
+              exitCode={run?.exitCode}
+              shown={{
+                cost: step.costUsd != null,
+                tokens: step.tokens != null,
+                duration: step.durationMs != null,
+              }}
+            />
+          )}
+        </section>
+      </div>
     </Drawer>
   );
 }

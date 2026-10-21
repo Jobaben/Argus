@@ -1,6 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ConnectionPill,
+  Icon,
   IrisMark,
   MoreMenu,
   SURFACE,
@@ -18,9 +20,15 @@ export interface NavTab {
   badge?: number;
 }
 
+/**
+ * An attention count. Violet, the colour of "waiting on you", not red: the
+ * Briefing's count is everything that wants a human — a gate, a down monitor —
+ * and painting it the colour of failure made a waiting approval look like an
+ * outage.
+ */
 function Badge({ count }: { count: number }) {
   return (
-    <span className="ml-1.5 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-fail/15 px-1.5 py-0.5 font-mono text-[10px] font-bold leading-none text-fail">
+    <span className="ml-1.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-await/18 px-1.5 text-micro font-semibold leading-none text-await">
       {count}
     </span>
   );
@@ -40,73 +48,150 @@ function MobileNav({
   destinations,
   overflow,
   activeId,
+  activeLabel,
 }: {
   destinations: NavTab[];
   overflow: MoreItem[];
   activeId: string;
+  activeLabel: string;
 }) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
-  const activeLabel = destinations.find((d) => d.id === activeId)?.label;
+  const sheetId = useId();
   const { present, exited } = usePresence(open);
   const scrimRef = useSurfaceMotion<HTMLDivElement>(open, SURFACE.scrim);
   // `top` — the sheet belongs to the bar it drops out of, so that is the edge it
   // collapses back into rather than shrinking toward its own middle.
   const sheetRef = useSurfaceMotion<HTMLDivElement>(open, SURFACE.rise, exited, "top center");
 
-  // Navigating closes the sheet: the hash change is the confirmation.
+  // Navigating closes the sheet: the hash change is the confirmation. Escape
+  // closes it too, and opening it moves focus to the current destination — a
+  // sheet you can open from the keyboard but not leave from it is a trap.
+  // However it closes (a link, the scrim, Escape, a hash change), focus goes
+  // back to the toggle: left on a link in a sheet going inert and then away,
+  // it fell to <body>, and the next Tab started again from the top.
+  const sheetEl = useRef<HTMLDivElement | null>(null);
+  const close = useCallback(() => {
+    setOpen(false);
+    buttonRef.current?.focus({ preventScroll: true });
+  }, []);
   useEffect(() => {
     if (!open) return;
-    const close = () => setOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
     window.addEventListener("hashchange", close);
-    return () => window.removeEventListener("hashchange", close);
-  }, [open]);
+    document.addEventListener("keydown", onKey);
+    const raf = requestAnimationFrame(() =>
+      (
+        sheetEl.current?.querySelector<HTMLElement>('[aria-current="page"]') ??
+        sheetEl.current?.querySelector<HTMLElement>("a")
+      )?.focus(),
+    );
+    // The page holds still while the sheet is open: the scrim takes no pan,
+    // but a drag on the sheet, which has nothing of its own to scroll, chained
+    // to the page behind it. A class at the sheet's own breakpoint, not an
+    // inline style: past `md` the sheet and scrim hide while still open (a
+    // tablet turned to landscape), and the lock must not outlive them there.
+    const root = document.documentElement;
+    const lock = "max-md:overflow-hidden";
+    root.classList.add(lock);
+    return () => {
+      window.removeEventListener("hashchange", close);
+      document.removeEventListener("keydown", onKey);
+      cancelAnimationFrame(raf);
+      root.classList.remove(lock);
+    };
+  }, [open, close]);
 
   const attention = destinations.reduce((n, d) => n + (d.badge ?? 0), 0);
 
   return (
-    <div className="md:hidden">
+    // Tabbing out of the open sheet closes it: left open, the next stop is
+    // page content under the scrim, focused where nobody can see it.
+    <div
+      className="min-w-0 md:hidden"
+      onBlur={(e) => {
+        const to = e.relatedTarget;
+        if (open && to instanceof Node && !e.currentTarget.contains(to)) setOpen(false);
+      }}
+    >
+      {/* The one control in the bar that gives way: the page name truncates so
+          the search, bell and connection pill always fit, offline Retry
+          included, at every phone width. The hit area reaches 44px tall on
+          a phone without making the bar any taller. Its name is its text, so
+          it starts with the page name a voice user reads off it (WCAG 2.5.3);
+          what the button is, and the count, follow out of sight. The open
+          state is aria-expanded's to say, so the name does not change. */}
       <button
         ref={buttonRef}
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        aria-label={open ? "Close the menu" : "Open the menu"}
-        className="flex h-8 items-center gap-2 rounded-md border border-line px-2.5 text-sm text-ink-dim transition duration-(--duration-quick) hover:text-ink motion-safe:active:scale-[0.97]"
+        aria-controls={present ? sheetId : undefined}
+        className="relative flex h-9 min-w-0 max-w-full items-center gap-2.5 rounded-control border border-line-strong bg-surface/60 pl-2.5 pr-3 text-sm text-ink transition duration-(--duration-quick) before:absolute before:-inset-y-1 before:inset-x-0 hover:bg-surface-2 motion-safe:active:scale-[0.97]"
       >
-        <span aria-hidden="true" className="font-mono leading-none">
-          {open ? "✕" : "☰"}
+        {/* The attention count is a dot at the icon's corner, not a number
+            after the page name: as a suffix, "Health 5" read as five things
+            wrong with Health when it is everything, anywhere, that is waiting
+            on a person. Clear of the bars, so the icon still reads as a menu;
+            the number is in the name, and on Briefing in the sheet. */}
+        <span className="relative flex shrink-0">
+          <Icon name={open ? "close" : "menu"} size={17} className="text-ink-dim" />
+          {!open && attention > 0 && (
+            <span
+              aria-hidden="true"
+              className="absolute -right-1.5 -top-1 size-2 rounded-full bg-await"
+            />
+          )}
         </span>
-        <span className="max-w-[6.5rem] truncate sm:max-w-[9rem]">{activeLabel ?? "Menu"}</span>
-        {!open && attention > 0 && <Badge count={attention} />}
+        <span className="min-w-0 truncate font-semibold">{activeLabel}</span>
+        <span className="sr-only">
+          {attention > 0 ? `, menu, ${attention} waiting on you` : ", menu"}
+        </span>
       </button>
 
       {present && (
         <>
-          {/* A full-screen scrim so a tap anywhere outside dismisses, and the
-              page behind cannot be scrolled by accident. */}
+          {/* A scrim over the page below the bar, so a tap anywhere outside
+              dismisses rather than landing on what is behind. In <body>, not
+              here: the bar's backdrop filter makes it the containing block of
+              anything fixed inside it, and the scrim was a 0px strip at its
+              foot — the page undimmed, scrolling, and taking the taps. Out of
+              the md:hidden wrapper, so it hides past `md` itself, with the
+              sheet. The sheet stays in the bar, after the toggle in the tab
+              order. */}
+          {createPortal(
+            <div
+              ref={scrimRef}
+              className="fixed inset-x-0 bottom-0 top-14 z-20 touch-none bg-ground/70 backdrop-blur-[2px] md:hidden"
+              inert={!open}
+              aria-hidden={open ? undefined : true}
+              onClick={close}
+            />,
+            document.body,
+          )}
           <div
-            ref={scrimRef}
-            className="fixed inset-0 top-[49px] z-20 bg-ground/60 backdrop-blur-[2px]"
+            ref={(node) => {
+              sheetEl.current = node;
+              sheetRef(node);
+            }}
+            id={sheetId}
             inert={!open}
             aria-hidden={open ? undefined : true}
-            onClick={() => setOpen(false)}
-          />
-          <div
-            ref={sheetRef}
-            inert={!open}
-            aria-hidden={open ? undefined : true}
-            className="absolute inset-x-0 top-full z-30 border-b border-line bg-surface px-3 pb-3 pt-2 shadow-[0_24px_60px_-24px_rgb(0_0_0/0.9)]"
+            className="absolute inset-x-0 top-full z-30 border-b border-line-strong bg-surface px-3 pb-4 pt-3 shadow-[0_24px_60px_-24px_rgb(0_0_0/0.9)]"
           >
-            <ul className="grid grid-cols-2 gap-1.5">
+            <ul className="grid grid-cols-2 gap-1">
               {destinations.map((t) => (
                 <li key={t.id}>
                   <a
                     href={`#/${t.id}`}
                     aria-current={t.id === activeId ? "page" : undefined}
-                    onClick={() => setOpen(false)}
-                    className={`flex items-center rounded-md px-3 py-2.5 text-sm transition-transform duration-(--duration-press) motion-safe:active:scale-[0.98] ${
-                      t.id === activeId ? "bg-surface-2 font-semibold text-ink" : "text-ink-dim"
+                    onClick={close}
+                    className={`flex h-11 items-center rounded-control px-3 text-heading transition-transform duration-(--duration-press) motion-safe:active:scale-[0.98] ${
+                      t.id === activeId
+                        ? "bg-surface-3 font-semibold text-ink"
+                        : "text-ink-dim hover:bg-surface-2"
                     }`}
                   >
                     {t.label}
@@ -116,15 +201,17 @@ function MobileNav({
               ))}
             </ul>
             {overflow.length > 0 && (
-              <ul className="mt-2 flex flex-wrap gap-1.5 border-t border-line pt-2">
+              <ul className="mt-3 flex flex-wrap gap-1 border-t border-line pt-3">
                 {overflow.map((o) => (
                   <li key={o.id}>
                     <a
                       href={o.href}
                       aria-current={o.id === activeId ? "page" : undefined}
-                      onClick={() => setOpen(false)}
-                      className={`inline-flex rounded-md px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-[0.1em] transition-transform duration-(--duration-press) motion-safe:active:scale-[0.98] ${
-                        o.id === activeId ? "bg-surface-2 text-ink" : "text-ink-faint"
+                      onClick={close}
+                      className={`inline-flex h-9 items-center rounded-control px-3 text-sm transition-transform duration-(--duration-press) motion-safe:active:scale-[0.98] ${
+                        o.id === activeId
+                          ? "bg-surface-3 text-ink"
+                          : "text-ink-faint hover:text-ink"
                       }`}
                     >
                       {o.label}
@@ -141,22 +228,33 @@ function MobileNav({
 }
 
 /**
- * The active-destination pill, as one element that moves.
+ * The active-destination pill, as one element that moves — and how many
+ * destinations fit beside it.
  *
- * It used to be a background colour on whichever tab was current, which meant
- * the pill *teleported* between tabs — there and then here, with nothing in
+ * The pill used to be a background colour on whichever tab was current, which
+ * meant it *teleported* between tabs — there and then here, with nothing in
  * between. One absolutely-positioned indicator that slides instead is the
  * cheapest shared-element transition there is, and it answers "which tab did I
  * come from?" without the user having to have been watching.
  *
- * Measured rather than computed: the tab strip is a horizontal scroller with
- * variable-width labels and optional badges, so the only honest source for where
- * the pill goes is where the anchor actually is. Returns null until the first
- * measurement, so nothing paints in the wrong place.
+ * Between ~768px and ~1150px the eight destinations do not fit. The strip used
+ * to scroll sideways behind a fade, which hid Health, Issues and Budget from
+ * anyone without a trackpad and clipped the focus ring of whichever one the
+ * keyboard reached. Now the ones that do not fit leave the bar for the head of
+ * the More menu ("priority+"), so every destination is one click away at every
+ * width. Tabs past the fit stay laid out, invisibly, at the end of the strip:
+ * each keeps a measurable position, so the count never depends on itself.
+ *
+ * Measured rather than computed: labels and badges are variable-width, so the
+ * only honest source for where the pill goes is where the anchor actually is.
+ * Until the first measurement (and in jsdom, where nothing has a width) every
+ * tab counts as fitting and the pill is hidden, so nothing paints in the wrong
+ * place.
  */
-function useActivePill(activeId: string, tabCount: number) {
+function useTrack(activeId: string, tabCount: number) {
   const trackRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState<{ left: number; width: number } | null>(null);
+  const [fit, setFit] = useState(tabCount);
 
   // Layout effect: the measurement has to land in the same frame as the tab
   // change, or the pill starts sliding one frame after the label goes bold.
@@ -164,42 +262,77 @@ function useActivePill(activeId: string, tabCount: number) {
     const track = trackRef.current;
     if (!track) return;
     const measure = () => {
-      const current = track.querySelector<HTMLElement>('[aria-current="page"]');
-      if (!current) {
-        setBox(null);
-        return;
+      const tabs = Array.from(track.querySelectorAll<HTMLElement>("[data-tab]"));
+      // The track's right padding is the focus ring's room, not the tabs'.
+      const room = track.clientWidth - (parseFloat(getComputedStyle(track).paddingRight) || 0);
+      let fits = tabs.length;
+      if (track.clientWidth > 0) {
+        const first = tabs.findIndex((t) => t.offsetLeft + t.offsetWidth > room + 0.5);
+        if (first !== -1) fits = first;
       }
-      setBox({ left: current.offsetLeft - track.scrollLeft, width: current.offsetWidth });
+      setFit((f) => (f === fits ? f : fits));
+      const index = tabs.findIndex((t) => t.dataset.tab === activeId);
+      const current = index !== -1 && index < fits ? tabs[index] : null;
+      setBox((b) => {
+        if (!current) return null;
+        const left = current.offsetLeft;
+        const width = current.offsetWidth;
+        return b && b.left === left && b.width === width ? b : { left, width };
+      });
     };
     measure();
-    // The strip scrolls, and it reflows when the window does — both move the
-    // anchor without changing which one is active.
-    track.addEventListener("scroll", measure, { passive: true });
+    // The room changes with the window, and every tab changes width when the
+    // web font arrives: the first measurement is taken against the fallback
+    // face, and when Hellix swapped in the pill was left parked between two
+    // tabs until something else happened to re-measure it. A ResizeObserver on
+    // the track and on the tabs catches that, and a badge appearing.
     window.addEventListener("resize", measure);
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    ro?.observe(track);
+    for (const tab of track.querySelectorAll("[data-tab]")) ro?.observe(tab);
+    let live = true;
+    void document.fonts?.ready.then(() => {
+      if (live) measure();
+    });
     return () => {
-      track.removeEventListener("scroll", measure);
+      live = false;
+      ro?.disconnect();
       window.removeEventListener("resize", measure);
     };
   }, [activeId, tabCount]);
 
-  return { trackRef, box };
+  return { trackRef, box, fit: Math.min(fit, tabCount) };
 }
 
 export function NavBar({
   destinations,
   overflow,
   activeId,
+  activeLabel,
   live,
   onOpenPalette,
 }: {
   destinations: NavTab[];
   overflow: MoreItem[];
   activeId: string;
+  /** The current page's name, from the whole route table. Drill-downs (an
+   *  agent, a run) and Search are in neither list, and a page the viewer may
+   *  not see in the menu (Users, signed out) is not in it either; looked up
+   *  from the lists, all of them left the phone header saying only "Menu". */
+  activeLabel: string;
   live: boolean;
   onOpenPalette: () => void;
 }) {
-  const overflowActive = overflow.some((o) => o.id === activeId);
-  const { trackRef, box: pill } = useActivePill(activeId, destinations.length);
+  const { trackRef, box: pill, fit } = useTrack(activeId, destinations.length);
+  // The destinations the bar had no room for, at the head of the More menu
+  // with their badges: a count that leaves the bar must not leave the screen.
+  const spilled: MoreItem[] = destinations.slice(fit).map((d) => ({
+    id: d.id,
+    label: d.label,
+    href: `#/${d.id}`,
+    badge: d.badge,
+  }));
+  const overflowActive = [...spilled, ...overflow].some((o) => o.id === activeId);
   const reduced = prefersReducedMotion();
   // ⌘ on Apple, Ctrl elsewhere — showing the wrong one is worse than showing
   // none, since the hint is the only place most users learn the shortcut.
@@ -210,25 +343,37 @@ export function NavBar({
   return (
     <nav
       aria-label="Primary"
-      className="sticky top-0 z-30 border-b border-line bg-ground/80 backdrop-blur"
+      className="sticky top-0 z-30 border-b border-line bg-ground/75 backdrop-blur-md backdrop-saturate-150"
     >
-      <div className="relative mx-auto flex max-w-[1600px] items-center gap-2 px-3 py-2.5 sm:gap-3 sm:px-6">
+      <div className="relative mx-auto flex h-14 max-w-[1600px] items-center gap-2 px-4 sm:gap-3 sm:px-6">
         {/* The wordmark is the least load-bearing thing in the bar, so it is what
-            gives up room first on a phone. */}
-        <span className="flex shrink-0 items-center gap-2 text-sm font-bold">
-          <IrisMark size={18} />{" "}
-          <span className="hidden sm:inline">
+            gives up room first: below xl the destinations need it more. The
+            iris stays, and it is still the way home. */}
+        <a
+          href="#/command"
+          aria-label="Argus home"
+          className="flex shrink-0 items-center gap-2.5 rounded-control py-1 pr-1 text-heading font-semibold tracking-[0.14em]"
+        >
+          <IrisMark size={22} />
+          <span aria-hidden="true" className="hidden xl:inline">
             ARG<span className="text-eye">U</span>S
           </span>
-        </span>
+        </a>
 
-        <MobileNav destinations={destinations} overflow={overflow} activeId={activeId} />
+        <MobileNav
+          destinations={destinations}
+          overflow={overflow}
+          activeId={activeId}
+          activeLabel={activeLabel}
+        />
 
-        {/* Destinations scroll horizontally rather than overflow the bar; below
-            `md` the sheet above replaces them entirely. */}
+        {/* Destinations take the room the bar has and no more: the ones that
+            do not fit move to the More menu (see useTrack). Below `md` the
+            sheet above replaces them entirely. The padding is the focus ring's
+            room — the strip clips, and a clipped ring is no ring. */}
         <div
           ref={trackRef}
-          className="relative ml-2 hidden min-w-0 items-center gap-1 overflow-x-auto md:flex"
+          className="relative ml-0.5 hidden min-w-0 flex-1 items-center gap-0.5 overflow-hidden p-1 md:flex lg:ml-2"
         >
           {/* First in DOM order and unpositioned in z, so it paints *under* the
               anchors: same pixels the active tab's own background used to draw,
@@ -238,7 +383,7 @@ export function NavBar({
               positioned, so that width change cannot move anything else. */}
           <span
             aria-hidden="true"
-            className={`pointer-events-none absolute inset-y-1 rounded-md bg-surface-2 ${
+            className={`pointer-events-none absolute inset-y-1 left-0 rounded-md bg-surface-2 ${
               reduced ? "" : "transition-[transform,width,opacity] duration-(--duration-base)"
             } ease-(--ease-out-expo)`}
             style={
@@ -247,47 +392,54 @@ export function NavBar({
                 : { opacity: 0, width: 0 }
             }
           />
-          {destinations.map((t) => (
-            <a
-              key={t.id}
-              href={`#/${t.id}`}
-              aria-current={t.id === activeId ? "page" : undefined}
-              className={`relative shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition duration-(--duration-quick) motion-safe:active:scale-[0.97] ${
-                t.id === activeId ? "text-ink" : "text-ink-dim hover:text-ink"
-              }`}
-            >
-              {t.label}
-              {t.badge != null && t.badge > 0 && <Badge count={t.badge} />}
-            </a>
-          ))}
+          {destinations.map((t, i) => {
+            // Past the fit: still laid out, so it can be measured, but not seen,
+            // focused or announced — the More menu carries it instead.
+            const spilt = i >= fit;
+            return (
+              <a
+                key={t.id}
+                href={`#/${t.id}`}
+                data-tab={t.id}
+                aria-current={t.id === activeId && !spilt ? "page" : undefined}
+                aria-hidden={spilt ? true : undefined}
+                tabIndex={spilt ? -1 : undefined}
+                className={`relative flex h-8 shrink-0 items-center rounded-md px-3 text-sm transition duration-(--duration-quick) motion-safe:active:scale-[0.97] ${
+                  t.id === activeId ? "text-ink" : "text-ink-dim hover:text-ink"
+                }${spilt ? " invisible" : ""}`}
+              >
+                {t.label}
+                {t.badge != null && t.badge > 0 && <Badge count={t.badge} />}
+              </a>
+            );
+          })}
         </div>
 
-        <div className="ml-auto flex min-w-0 shrink items-center gap-1.5 sm:gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
           {/* The palette is the fastest path to anything in Argus, so it gets a
               real affordance with its shortcut on it — not a bare icon nobody
-              would guess is keyboard-driven. It collapses to the icon alone on
-              narrow viewports. */}
+              would guess is keyboard-driven. Below xl it gives its label and
+              keycap to the destinations and keeps the shortcut in its tooltip.
+              On a phone its hit area grows to 44px tall without the bar
+              growing, as the bell's does. */}
           <button
             type="button"
             onClick={onOpenPalette}
-            aria-label={`Open the command palette (${modLabel})`}
-            className="group flex h-8 items-center gap-2 rounded-md border border-line px-2 text-ink-dim transition duration-(--duration-quick) hover:border-ink-faint/40 hover:text-ink motion-safe:active:scale-[0.97] sm:pr-1.5"
+            aria-label={`Search — open the command palette (${modLabel})`}
+            title={`Search (${modLabel})`}
+            className="group relative flex h-8 items-center gap-2 rounded-control border border-line-strong bg-surface/60 px-2 text-ink-dim transition duration-(--duration-quick) hover:border-ink-faint/45 hover:bg-surface-2 hover:text-ink motion-safe:active:scale-[0.97] max-md:before:absolute max-md:before:-inset-x-[3px] max-md:before:-inset-y-1.5 xl:pl-2.5 xl:pr-1.5 min-[1400px]:min-w-56"
           >
-            <span aria-hidden="true" className="text-base leading-none">
-              ⌕
-            </span>
-            <span className="hidden text-sm sm:inline">Jump to…</span>
-            <kbd
-              aria-hidden="true"
-              className="hidden rounded border border-line bg-ground-2 px-1.5 py-0.5 font-mono text-[10px] text-ink-faint transition duration-(--duration-quick) group-hover:text-ink-dim sm:inline"
-            >
+            <Icon name="search" size={16} />
+            <span className="hidden text-sm xl:inline">Search</span>
+            <span aria-hidden="true" className="kbd ml-auto hidden xl:inline-flex">
               {modLabel}
-            </kbd>
+            </span>
           </button>
           {/* The overflow menu duplicates the sheet's secondary list on mobile,
-              so it only appears once the desktop bar does. */}
+              so it only appears once the desktop bar does. It also carries the
+              destinations the bar had no room for, ahead of its own pages. */}
           <span className="hidden md:inline">
-            <MoreMenu items={overflow} active={overflowActive} activeId={activeId} />
+            <MoreMenu lead={spilled} items={overflow} active={overflowActive} activeId={activeId} />
           </span>
           <NotificationCenter />
           <ConnectionPill live={live} />

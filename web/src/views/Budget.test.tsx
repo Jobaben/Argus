@@ -97,21 +97,27 @@ describe("Budget", () => {
   it("projects the month and names the day a limit would be crossed", () => {
     // Whether the current rate clears the ceiling is the question the page is
     // opened to answer; it used to be arithmetic over a 30-bar chart.
-    mockState.budget = response({
-      // Deliberately far past the pace, so the crossing day lands inside the
-      // month whatever today's date is — the projection is date-dependent and
-      // the assertion must not be.
-      config: { dailyUsd: null, monthlyUsd: 5, blockScheduled: false, updatedAt: null },
-      status: {
-        state: "exceeded",
-        today: { spentUsd: 2, limitUsd: null, ratio: null },
-        month: { spentUsd: 40, limitUsd: 5, ratio: 8 },
-        blockScheduled: false,
-      },
-    });
-    render(<Budget />);
-    expect(screen.getByText(/On course for/)).toBeInTheDocument();
-    expect(screen.getByText(/limit reached around/)).toBeInTheDocument();
+    // The projection is date-dependent and the assertion must not be, so the
+    // clock is pinned: 10 July, $20 spent, $2/day against a $50 ceiling — a
+    // crossing still ahead, around the 25th.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 6, 10, 12));
+    try {
+      mockState.budget = response({
+        config: { dailyUsd: null, monthlyUsd: 50, blockScheduled: false, updatedAt: null },
+        status: {
+          state: "ok",
+          today: { spentUsd: 2, limitUsd: null, ratio: null },
+          month: { spentUsd: 20, limitUsd: 50, ratio: 0.4 },
+          blockScheduled: false,
+        },
+      });
+      render(<Budget />);
+      expect(screen.getByText(/On course for/, { ignore: ".sr-only" })).toBeInTheDocument();
+      expect(screen.getByText(/limit reached around/, { ignore: ".sr-only" })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says nothing about a month with no spend to project from", () => {
@@ -125,6 +131,28 @@ describe("Budget", () => {
     });
     render(<Budget />);
     expect(screen.queryByText(/On course for/)).toBeNull();
+  });
+
+  it("with nothing spent yet, says so once rather than in every panel", () => {
+    mockState.budget = response({
+      status: {
+        state: "ok",
+        today: { spentUsd: 0, limitUsd: 10, ratio: 0 },
+        month: { spentUsd: 0, limitUsd: 50, ratio: 0 },
+        blockScheduled: false,
+      },
+      days: [
+        { date: "2026-07-12", usd: 0, tokens: 0, runs: 0 },
+        { date: "2026-07-13", usd: 0, tokens: 0, runs: 0 },
+      ],
+    });
+    render(<Budget />);
+    expect(screen.getByText("No spend in the last 30 days")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Forecast" })).toBeNull();
+    expect(screen.queryByText(/No costed runs/)).toBeNull();
+    expect(screen.queryByText("No projection yet")).toBeNull();
+    // The limits are still there to set.
+    expect(screen.getByRole("button", { name: /save budget/i })).toBeInTheDocument();
   });
 
   it("marks the days that broke the daily limit", () => {

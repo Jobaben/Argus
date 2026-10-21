@@ -1,4 +1,5 @@
-import { TimeAgo } from "../ds";
+import { Fragment, useId } from "react";
+import { EmptyState, Icon, TimeAgo } from "../ds";
 import type { MachineFacetState } from "./useMachineFacet";
 
 /**
@@ -8,37 +9,63 @@ import type { MachineFacetState } from "./useMachineFacet";
  * chip. A single-machine install should look exactly as it did before
  * federation existed, and a picker with one option is a feature advertising
  * itself at the cost of the page it sits on.
+ *
+ * Styled as the shared `SegmentedControl`, which it cannot simply be: each
+ * machine carries its own reporting state, and a peer that has gone quiet stays
+ * selectable — being able to look at a machine and see "it is down" is the
+ * point — so it is marked with a dot and a reason rather than greyed out. The
+ * dot is red only for a peer that has failed to answer; one just added and not
+ * yet reached is grey, as the Fleet page draws it.
  */
 export function MachinePicker({ facet, label }: { facet: MachineFacetState; label: string }) {
+  const reasonId = useId();
   if (facet.soloMode || facet.machines.length < 2) return null;
   return (
     <div
       role="radiogroup"
       aria-label={label}
-      className="mb-3 inline-flex flex-wrap items-center gap-0.5 rounded-lg border border-line bg-ground-2 p-0.5"
+      className="mb-4 inline-flex max-w-full flex-wrap items-center gap-0.5 rounded-control border border-line bg-ground-2 p-0.5"
     >
       {facet.machines.map((m) => {
         const id = m.isSelf ? null : m.peer.id;
         const active = facet.selected === id;
         const reporting = m.isSelf || m.summary !== null;
+        const reason = `${m.peer.label} is not reporting — ${m.peer.error ?? m.peer.status}`;
+        const describedBy = `${reasonId}-${m.peer.id}`;
         return (
-          <button
-            key={m.peer.id}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            onClick={() => facet.select(id)}
-            title={
-              reporting
-                ? undefined
-                : `${m.peer.label} is not reporting — ${m.peer.error ?? m.peer.status}`
-            }
-            className={`rounded-md px-2.5 py-1 font-mono text-[11px] font-bold uppercase tracking-[0.1em] transition ${
-              active ? "bg-surface-2 text-ink" : "text-ink-faint hover:text-ink-dim"
-            } ${reporting ? "" : "opacity-50"}`}
-          >
-            {m.isSelf ? "This machine" : m.peer.label}
-          </button>
+          <Fragment key={m.peer.id}>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => facet.select(id)}
+              title={reporting ? undefined : reason}
+              aria-describedby={reporting ? undefined : describedBy}
+              className={`inline-flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2.5 text-caption font-semibold transition duration-(--duration-quick) motion-safe:active:scale-[0.96] ${
+                active
+                  ? "bg-surface-3 text-ink shadow-[inset_0_1px_0_rgb(255_255_255/0.05)]"
+                  : "text-ink-faint hover:text-ink"
+              }`}
+            >
+              {!reporting && (
+                <span
+                  aria-hidden="true"
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                    m.peer.status === "pending" ? "bg-ink-faint" : "bg-fail"
+                  }`}
+                />
+              )}
+              <span className="truncate">{m.isSelf ? "This machine" : m.peer.label}</span>
+            </button>
+            {/* The reason, for assistive tech, as the radio's description: outside
+              it so the name stays the machine's, and hidden so it is read only
+              with the radio, not again on its own. */}
+            {!reporting && (
+              <span id={describedBy} hidden>
+                {reason}
+              </span>
+            )}
+          </Fragment>
         );
       })}
     </div>
@@ -56,39 +83,55 @@ export function MachinePicker({ facet, label }: { facet: MachineFacetState; labe
 export function PeerBanner({ facet }: { facet: MachineFacetState }) {
   const peer = facet.peer;
   if (!peer) return null;
+  // A stale peer is a connection state, so it is told apart by its clock and
+  // its words, not by violet, which means a person is being waited on.
   const stale = peer.peer.status === "stale";
   return (
-    <p
-      className={`mb-3 rounded-tile border px-3 py-2 text-xs ${
-        stale ? "border-await/40 text-await" : "border-line text-ink-faint"
+    <div
+      className={`mb-6 flex items-start gap-2.5 rounded-tile border px-4 py-3 text-small ${
+        stale
+          ? "border-line-strong bg-ground-2/60 text-ink-dim"
+          : "border-line bg-surface/60 text-ink-dim"
       }`}
       role="status"
     >
-      Showing <strong className="text-ink">{peer.summary?.label ?? peer.peer.label}</strong>
-      {peer.summary ? (
-        <>
-          , as of <TimeAgo iso={peer.summary.generatedAt} />
-          {stale && " — this peer has stopped answering, so these figures are frozen"}.{" "}
-          {peer.peer.url && (
-            <a href={peer.peer.url} className="text-eye hover:underline">
-              Open its Argus
-            </a>
-          )}{" "}
-          for anything not shown here.
-        </>
-      ) : (
-        <> — no summary yet ({peer.peer.error ?? peer.peer.status}).</>
-      )}
-    </p>
+      <Icon
+        name={stale ? "clock" : "eye"}
+        size={16}
+        className={`mt-0.5 ${stale ? "text-ink-dim" : "text-ink-faint"}`}
+      />
+      <p className="min-w-0">
+        Showing{" "}
+        <strong className="font-semibold text-ink">{peer.summary?.label ?? peer.peer.label}</strong>
+        {peer.summary ? (
+          <>
+            , as of <TimeAgo iso={peer.summary.generatedAt} />
+            {stale && " — this peer has stopped answering, so these figures are frozen"}.{" "}
+            {peer.peer.url && (
+              <a
+                href={peer.peer.url}
+                className="inline-flex items-center gap-0.5 font-semibold text-ink underline decoration-line-strong underline-offset-2 transition-colors duration-(--duration-quick) hover:decoration-ink"
+              >
+                Open its Argus
+                <Icon name="external" size={13} />
+              </a>
+            )}{" "}
+            for anything not shown here.
+          </>
+        ) : (
+          <> — no summary yet ({peer.peer.error ?? peer.peer.status}).</>
+        )}
+      </p>
+    </div>
   );
 }
 
 /** What a peer view shows when the peer has sent nothing for this section. */
 export function PeerEmpty({ what }: { what: string }) {
   return (
-    <p className="rounded-tile border border-line bg-surface px-3 py-6 text-center text-sm text-ink-faint">
-      Nothing to show — that machine reported no {what}. A peer sends a bounded summary, not its
-      whole history; open its own Argus for the full picture.
-    </p>
+    <EmptyState compact icon="inbox" title="Nothing to show">
+      That machine reported no {what}. A peer sends a bounded summary, not its whole history; open
+      its own Argus for the full picture.
+    </EmptyState>
   );
 }

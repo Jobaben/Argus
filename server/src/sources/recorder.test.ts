@@ -115,6 +115,74 @@ test("a failed run with no errored tool falls back to the terminal marker", () =
   assert.match(rec.events[rec.events.length - 1].label, /spawn ENOENT/);
 });
 
+/** The closing marker: the last event of a finished run. */
+const closing = (over: Partial<Run>) => {
+  const rec = buildRecording(
+    run(over),
+    [
+      assistant(1_000, [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "a" } }]),
+      userResult(2_000, "t1", { is_error: true, content: "boom" }),
+    ],
+    NOW,
+  );
+  return { rec, last: rec.events[rec.events.length - 1] };
+};
+
+test("regression: an interrupted run closes on a stop, not a failure", () => {
+  // It read "Failed — interrupted: …" in red beside a grey Stopped pill.
+  const { rec, last } = closing({
+    status: "interrupted",
+    exitCode: null,
+    error: "interrupted: Argus restarted while this run was in progress",
+  });
+  assert.equal(last.kind, "end");
+  assert.equal(last.label, "Stopped — interrupted: Argus restarted while this run was in progress");
+  assert.equal(last.errored, undefined);
+  // Where it stopped, not the tool error before it, which is not why it ended.
+  assert.equal(rec.failureIndex, rec.events.length - 1);
+});
+
+test("a cancelled run closes on a stop, and one with no reason names its status", () => {
+  assert.equal(
+    closing({ status: "cancelled", exitCode: null, error: "cancelled by user" }).last.label,
+    "Stopped — cancelled by user",
+  );
+  const bare = closing({ status: "interrupted", exitCode: null, error: null });
+  assert.equal(bare.last.kind, "end");
+  assert.equal(bare.last.label, "Stopped — interrupted");
+});
+
+test("a stopped run whose outcome failed still closes as a failure", () => {
+  const { last } = closing({ status: "cancelled", outcome: "failed", error: "cancelled by user" });
+  assert.equal(last.kind, "error");
+  assert.equal(last.label, "Failed — cancelled by user");
+});
+
+test("regression: a clean exit that failed its outcome check is labelled with the reason", () => {
+  // It read "Failed — exit code 0", naming the one thing that went right.
+  const { last } = closing({
+    outcome: "failed",
+    resultSummary: "Tried twice.\nARGUS_OUTCOME: failed the fixture server never came up",
+  });
+  assert.equal(last.kind, "error");
+  assert.equal(last.label, "Failed — the fixture server never came up");
+  assert.equal(
+    closing({ outcome: "failed", resultSummary: "no marker here" }).last.label,
+    "Failed its outcome check",
+  );
+  // A bare marker gives no reason; it must not echo its own verdict back.
+  assert.equal(
+    closing({ outcome: "failed", resultSummary: "Done.\nARGUS_OUTCOME: failed" }).last.label,
+    "Failed its outcome check",
+  );
+});
+
+test("a real non-zero exit keeps its exit code", () => {
+  const { last } = closing({ status: "failed", exitCode: 3, outcome: "failed" });
+  assert.equal(last.kind, "error");
+  assert.equal(last.label, "Failed — exit code 3");
+});
+
 test("file-shaped tools land in the file lane with a diff shape", () => {
   const rec = buildRecording(
     run(),

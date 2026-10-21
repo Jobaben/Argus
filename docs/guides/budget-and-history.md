@@ -55,14 +55,17 @@ and optionally **pause scheduled firings** until you're back under.
   count. When a **daily** limit is set, it is drawn as a dashed line across the
   chart and any day that broke it is red, with a count underneath. The last bar
   is today, ringed to say so — a partly-finished day should not read as a quiet
-  one.
+  one. While nothing has been spent in that window, one **No spend in the last
+  30 days** note stands in for the chart and the [Ledger](#ledger) panels below
+  it; they arrive with the first costed run.
 - **Limits** — the config form: a daily USD limit, a monthly USD limit
   (either may be empty = no limit), and the hard-stop checkbox.
 
 **The hard stop** ("Pause scheduled runs while over budget"): while any limit
 is exceeded, due schedule slots are **skipped** instead of fired — each skip
-is recorded as a `skipped` run ("skipped: spend budget exceeded") so the
-Scheduler shows exactly what didn't happen, and the slot still counts as
+is recorded as a `skipped` run ("skipped: spend budget exceeded", under a
+**Skipped** pill) so the Scheduler shows exactly what didn't happen, and the
+slot still counts as
 covered for [Monitors](health-and-quality.md#monitors) (a budget pause is not an outage). Firing
 resumes by itself the moment spend drops under every limit — a new day, a new
 month, or a raised ceiling. **Manual actions are never blocked**: Run now,
@@ -143,8 +146,9 @@ Spend over the last **30 days**, grouped by one of four dimensions:
 - **Model** — per model, with runs that pinned nothing shown as _CLI default_,
   which is a real answer rather than a gap.
 
-Each row carries its dollar total, its **share** of the window, its **cost per
-run** and its token count. Past the twelfth slice the tail folds into a single
+Each row carries its dollar total, its **share** of the window (a slice too
+small to round to 1% reads `<1%`, not `0%`), its **cost per run** and its
+token count. Past the twelfth slice the tail folds into a single
 `N more` row rather than being dropped — a total that does not add up is worse
 than a long tail you cannot itemise. The footer reports how many costed runs
 fell **outside** the grouping (a schedule run has no pipeline), so the totals
@@ -279,7 +283,7 @@ the alternative is every page broken until a human notices.
 
 Search expands your query with terms that **co-occur with it in this machine's
 own history** — search `backoff` and it may also search `quarantine`, because
-your runs mention them together. Expanded results arrive tagged **related**, and
+your runs mention them together. Expanded results arrive tagged **Related**, and
 the terms used are printed above the results, so an expansion is always visible
 and auditable.
 

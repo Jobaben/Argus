@@ -38,6 +38,11 @@ export interface LanePhase {
   skipped?: boolean;
   /** Incoming edges with their conditions, when the caller has a graph to read. */
   edges?: RouteEdgeView[];
+  /** What the node carries after its name, for sizing it: see {@link markerWidth}. */
+  gated?: boolean;
+  attempt?: number;
+  steps?: readonly unknown[];
+  candidates?: { total: number; verified: number; selected: number | null } | null;
 }
 
 /** The geometry every measurement is derived from, in CSS px. */
@@ -68,8 +73,14 @@ export const LANE_GEOMETRY: LaneGeometry = {
 /** Roughly twelve plain stages; a longer graph scrolls inside its tile. */
 export const MAX_TILE_HEIGHT_PX = 640;
 
-/** The furthest fit-to-view shrinks a graph before it scrolls instead. */
-export const MIN_SCALE = 0.6;
+/**
+ * The furthest fit-to-view shrinks a graph before it scrolls instead.
+ *
+ * Set by the smallest text a node carries: the index, "Gate" and the route
+ * labels are 11px, and 11 × 0.82 is just over 9px on screen. At the 0.6 this
+ * used to be, a fan-out beside the focus panel drew them at 6.6px.
+ */
+export const MIN_SCALE = 0.82;
 
 export const NODE_MIN_W = 160;
 export const NODE_MAX_W = 240;
@@ -77,14 +88,44 @@ export const NODE_MAX_W = 240;
 /** Height of a route label, for spreading labels stacked along a column. */
 const LABEL_H = 14;
 
+/** One character of a node's 11px marker words, and the gap before each marker. */
+const MARKER_CHAR = 6.2;
+const MARKER_GAP = 6;
+
 /**
- * Node width for a set of names: the longest name plus the node's own chrome
- * (dot, index, markers), estimated rather than measured so layout never reads
- * the DOM. Clamped, so one long name cannot make every node a banner.
+ * The width of what a node shows after its name — "Skipped", "Gate", "Try 2",
+ * the step dots or their count, a best-of-N tally — estimated like the name.
+ * Left out, a gated phase's name was cut short at every width, beside a graph
+ * using a fifth of its card.
  */
-export function nodeWidthFor(names: string[]): number {
-  const longest = Math.max(0, ...names.map((n) => n.length));
-  return Math.round(Math.min(NODE_MAX_W, Math.max(NODE_MIN_W, longest * 6.4 + 64)));
+export function markerWidth(p: LanePhase): number {
+  const attempt = p.attempt ?? 0;
+  const words: (string | false | undefined)[] = [
+    p.skipped && "Skipped",
+    p.gated && "Gate",
+    attempt > 0 && `Try ${attempt + 1}`,
+  ];
+  const c = p.candidates;
+  const steps = p.steps?.length ?? 0;
+  if (c) {
+    words.push(`${c.verified}/${c.total} verified${c.selected == null ? "" : " · c1 selected"}`);
+  } else if (steps > 6) words.push(`${steps}/${steps}`);
+  let w = 0;
+  for (const word of words) if (word) w += word.length * MARKER_CHAR + MARKER_GAP;
+  // A dot per step, 4px with 3px between, when there are few enough to count.
+  if (!c && steps > 1 && steps <= 6) w += steps * 7 - 3 + MARKER_GAP;
+  return w;
+}
+
+/**
+ * Node width for a set of names: the longest name, with whatever markers its
+ * node carries (`extras`, per name), plus the node's own chrome (dot, index),
+ * estimated rather than measured so layout never reads the DOM. Clamped, so
+ * one long name cannot make every node a banner.
+ */
+export function nodeWidthFor(names: string[], extras: number[] = []): number {
+  const widest = Math.max(0, ...names.map((n, i) => n.length * 6.4 + (extras[i] ?? 0)));
+  return Math.round(Math.min(NODE_MAX_W, Math.max(NODE_MIN_W, widest + 64)));
 }
 
 /**
@@ -160,7 +201,7 @@ export function edgeState(source: LanePhase, target: LanePhase): EdgeState {
   return "pending";
 }
 
-/** Estimated rendered width of a label at the graph's 8.5px mono. */
+/** Estimated rendered width of a route label, at the graph's 11px. */
 export function labelWidth(text: string): number {
   return text.length * 5.15 + 12;
 }
@@ -213,7 +254,12 @@ export function laneLayout(
 ): LaneLayout {
   const orientation = options.orientation ?? "TB";
   const { laneGap, nodeH, gapLabelled, gapPlain, pad, tail } = options.geometry ?? LANE_GEOMETRY;
-  const nodeW = options.nodeW ?? nodeWidthFor(phases.map((p) => p.name ?? p.id));
+  const nodeW =
+    options.nodeW ??
+    nodeWidthFor(
+      phases.map((p) => p.name ?? p.id),
+      phases.map(markerWidth),
+    );
   const tb = orientation === "TB";
 
   // No edges at all means "unknown", not "one parallel stage" — an instance

@@ -176,6 +176,57 @@ test("failed outcome trumps a clean exit status", () => {
   assert.equal(out.totals.failed, 1);
 });
 
+test("regression: a run cut short is stopped, not idle, and not a failure", () => {
+  // An interrupted run's bar said "Idle" over "interrupted: Argus restarted…".
+  const out = buildChronicle(
+    {
+      runs: [
+        run("int", {
+          status: "interrupted",
+          exitCode: null,
+          error: "interrupted: Argus restarted",
+        }),
+        run("can", { status: "cancelled", exitCode: null, error: "cancelled by user" }),
+        run("skip", { status: "skipped", startedAt: null, endedAt: null, exitCode: null }),
+      ],
+      agents: [agent("a1", { status: "stopped" }), agent("a2", { status: "idle" })],
+      sessions: [],
+    },
+    NOW,
+    24 * HOUR,
+  );
+  const status = Object.fromEntries(
+    out.groups.flatMap((g) => g.rows.flat()).map((s) => [s.id, s.status]),
+  );
+  assert.deepEqual(status, {
+    "run:int": "stopped",
+    "run:can": "stopped",
+    "run:skip": "idle",
+    "agent:a1": "stopped",
+    "agent:a2": "idle",
+  });
+  assert.equal(out.totals.failed, 0);
+});
+
+test("a run status this build does not know reads as idle, never as no status", () => {
+  // Vault rows cast their status string to the union unchecked.
+  const out = buildChronicle(
+    { runs: [run("r1", { status: "paused" as Run["status"] })], agents: [], sessions: [] },
+    NOW,
+    24 * HOUR,
+  );
+  assert.equal(out.groups[0].rows[0][0].status, "idle");
+});
+
+test("a failing outcome still trumps a stop", () => {
+  const out = buildChronicle(
+    { runs: [run("r1", { status: "cancelled", outcome: "failed" })], agents: [], sessions: [] },
+    NOW,
+    24 * HOUR,
+  );
+  assert.equal(out.groups[0].rows[0][0].status, "failed");
+});
+
 test("totals sum cost and tokens, staying null when nothing reports them", () => {
   const withCost = buildChronicle(
     {

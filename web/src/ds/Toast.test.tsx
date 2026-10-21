@@ -25,6 +25,20 @@ describe("ToastRegion", () => {
     expect(screen.getByText("Failed")).toBeInTheDocument();
   });
 
+  it("sets a job id detail in mono and leaves prose details in the body face", () => {
+    render(
+      <ToastRegion
+        toasts={[
+          { ...toast, detailMono: true },
+          { id: "t2", tone: "info", title: "Monitor down", detail: "No answer for 5 minutes" },
+        ]}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(screen.getByText("abc123")).toHaveClass("font-mono");
+    expect(screen.getByText("No answer for 5 minutes")).not.toHaveClass("font-mono");
+  });
+
   it("invokes onDismiss with the toast id", () => {
     const onDismiss = vi.fn();
     render(<ToastRegion toasts={[toast]} onDismiss={onDismiss} />);

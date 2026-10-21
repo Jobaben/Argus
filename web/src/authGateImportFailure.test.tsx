@@ -25,6 +25,6 @@ it("retains the sign-in wall and avoids data reads when the auth import fails", 
   expect(
     screen.getByText("This server requires an account. Sign in to see the dashboard."),
   ).toBeInTheDocument();
-  expect(screen.queryByRole("form", { name: "Login" })).toBeNull();
+  expect(screen.queryByRole("form", { name: "Sign in" })).toBeNull();
   expect(fetchMock.mock.calls).toHaveLength(1);
 });

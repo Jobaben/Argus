@@ -191,13 +191,22 @@ describe("Command Center in peer mode", () => {
       pipelines: [
         { id: "i1", name: "Release train", status: "awaiting-approval", phase: "review" },
         { id: "i2", name: "Nightly build", status: "running", phase: null },
+        { id: "i3", name: "Docs sync", status: "failed", phase: "publish" },
+        { id: "i4", name: "Odd one", status: "paused-by-operator", phase: null },
       ],
     });
     const { default: CommandCenter } = await import("../views/CommandCenter");
     render(<CommandCenter />);
-    expect(screen.getByText("Release train")).toBeInTheDocument();
+    // Peer mode is its own chunk, fetched once a peer is on show.
+    expect(await screen.findByText("Release train")).toBeInTheDocument();
     expect(screen.getByText("at review")).toBeInTheDocument();
-    expect(screen.getByText("needs approval")).toBeInTheDocument();
+    // The words and colours of this board's own pills: a peer's failure is
+    // red, where every status but a gate used to borrow the running amber.
+    expect(screen.getByText("Needs approval")).toBeInTheDocument();
+    expect(screen.getByText("Working").className).toMatch(/text-run/);
+    expect(screen.getByText("Failed").className).toMatch(/text-fail/);
+    // A status this build has no word for is cased and left neutral.
+    expect(screen.getByText("Paused by operator").className).not.toMatch(/text-(run|fail)/);
   });
 
   it("regression: offers no approve or revise for a machine it does not own", async () => {
@@ -208,6 +217,8 @@ describe("Command Center in peer mode", () => {
     });
     const { default: CommandCenter } = await import("../views/CommandCenter");
     render(<CommandCenter />);
+    // Once the peer's board is drawn, so the absence below means something.
+    await screen.findByText("Release train");
     // A gate is opened by the machine that owns it. A button here would either
     // fail or need a second control plane across the pairing.
     expect(screen.queryByRole("button", { name: /approve/i })).not.toBeInTheDocument();
@@ -218,7 +229,7 @@ describe("Command Center in peer mode", () => {
     withFacets({ pipelines: [] });
     const { default: CommandCenter } = await import("../views/CommandCenter");
     render(<CommandCenter />);
-    expect(screen.getByText(/reported no live pipelines/)).toBeInTheDocument();
+    expect(await screen.findByText(/reported no live pipelines/)).toBeInTheDocument();
   });
 });
 
@@ -259,7 +270,8 @@ describe("Issues in peer mode", () => {
     const { default: Issues } = await import("../views/Issues");
     render(<Issues />);
     expect(screen.getByText("ECONNREFUSED")).toBeInTheDocument();
-    expect(screen.getByText(/9×/)).toBeInTheDocument();
+    // The occurrence count, written the way the local list writes it.
+    expect(screen.getByText(/×9\b/)).toBeInTheDocument();
   });
 
   it("regression: offers no triage buttons for another machine's issues", async () => {

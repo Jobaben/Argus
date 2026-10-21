@@ -124,10 +124,9 @@ describe("TriggerFields", () => {
     expect(screen.getByText("tok123")).toBeTruthy();
   });
 
-  it("rotate asks for confirmation, then calls onRotate", async () => {
+  it("rotate asks in place first: Keep token changes nothing, Rotate now rotates", async () => {
     const user = userEvent.setup();
     const onRotate = vi.fn();
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     render(
       <TriggerFields
         fieldClass={FIELD}
@@ -136,10 +135,20 @@ describe("TriggerFields", () => {
         hook={{ url: "https://argus.example/hook", token: "tok123", onRotate }}
       />,
     );
-    await user.click(screen.getByRole("button", { name: /rotate token/i }));
-    expect(confirmSpy).toHaveBeenCalled();
-    expect(onRotate).toHaveBeenCalled();
-    confirmSpy.mockRestore();
+    const rotate = screen.getByRole("button", { name: "Rotate token" });
+    await user.click(rotate);
+    expect(screen.getByRole("group", { name: "Rotate the webhook token?" })).toHaveTextContent(
+      /anything already configured with it will stop working/,
+    );
+    expect(screen.getByRole("button", { name: "Keep token" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Keep token" }));
+    expect(onRotate).not.toHaveBeenCalled();
+    expect(rotate).toHaveFocus();
+
+    await user.click(rotate);
+    await user.click(screen.getByRole("button", { name: "Rotate now" }));
+    expect(onRotate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("group")).toBeNull();
   });
 
   it("emits an after trigger naming the first offered pipeline", async () => {

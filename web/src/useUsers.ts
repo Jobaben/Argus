@@ -9,7 +9,7 @@ export type UserRow = UserSummary;
 
 /** Root-only account list with approve/reject transitions. */
 export function useUsers() {
-  const { data, loading, error, refresh } = useLiveResource<UserRow[]>("/api/users", {
+  const { data, loading, error, errorStatus, refresh } = useLiveResource<UserRow[]>("/api/users", {
     select: (j) => (j as { users?: UserRow[] }).users ?? [],
     initial: [],
     pollMs: 30_000,
@@ -27,6 +27,7 @@ export function useUsers() {
     users: data ?? [],
     loading,
     error,
+    errorStatus,
     refresh,
     approve: (u: string) => act(u, "approve"),
     reject: (u: string) => act(u, "reject"),

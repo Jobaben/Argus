@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import type { Stats as StatsData } from "../useStats";
 import Stats from "./Stats";
 import { hasSessionData, hasTokenData } from "./statsGroups";
+import { UNREACHABLE } from "../live/loadError";
 
 const mockState: { stats: StatsData | null; loading: boolean; error: string | null } = {
   stats: null,
@@ -90,9 +91,17 @@ describe("Stats", () => {
     expect(screen.getByText(/No usage stats found yet/)).toBeInTheDocument();
   });
 
-  it("surfaces a fetch error", () => {
-    mockState.error = "boom";
+  it("gives the server's reason when it answered with an error", () => {
+    mockState.error = "database is locked";
     render(<Stats />);
-    expect(screen.getByText(/Couldn't reach the Argus server: boom/)).toBeInTheDocument();
+    expect(screen.getByText("Couldn't load stats: database is locked")).toBeInTheDocument();
+    expect(screen.queryByText(/couldn't reach/i)).toBeNull();
+  });
+
+  it("says the server could not be reached only when no answer came back", () => {
+    mockState.error = UNREACHABLE;
+    render(<Stats />);
+    expect(screen.getByText("Couldn't reach the Argus server")).toBeInTheDocument();
+    expect(screen.queryByText(/couldn't load/i)).toBeNull();
   });
 });

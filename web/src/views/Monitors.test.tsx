@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { MonitorHealth, MonitorsSummary } from "../types";
 import Monitors from "./Monitors";
@@ -78,7 +78,32 @@ describe("Monitors", () => {
     expect(screen.getAllByText("Up").length).toBe(2);
     expect(screen.getAllByText("Down").length).toBe(2);
     expect(screen.getByText("96.7%")).toBeInTheDocument();
-    expect(screen.getAllByRole("img", { name: /Last 2 runs/ }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("group", { name: /Last 2 runs/ }).length).toBeGreaterThan(0);
+  });
+
+  it("opens a run from its beat on the strip", () => {
+    mockState.monitors = [monitor()];
+    mockState.summary = { up: 1, late: 0, down: 0, failing: 0, paused: 0, pending: 0 };
+    render(<Monitors />);
+    const strip = screen.getByRole("group", { name: "Last 2 runs" });
+    const failed = within(strip).getByRole("link", { name: /^Failed, / });
+    expect(failed).toHaveAttribute("href", "#/run/r2");
+  });
+
+  it("marks the counter whose filter is on, and only that one", async () => {
+    const user = userEvent.setup();
+    mockState.monitors = [
+      monitor(),
+      monitor({ scheduleId: "s2", name: "Backup", status: "down", uptimePct: 50 }),
+    ];
+    mockState.summary = { up: 1, late: 0, down: 1, failing: 0, paused: 0, pending: 0 };
+    render(<Monitors />);
+    const down = screen.getByRole("button", { name: /down/i });
+    const up = screen.getByRole("button", { name: /up/i });
+    expect(down).toHaveAttribute("aria-pressed", "false");
+    await user.click(down);
+    expect(down).toHaveAttribute("aria-pressed", "true");
+    expect(up).toHaveAttribute("aria-pressed", "false");
   });
 
   it("says how overdue a down monitor is, not merely when the slot was", () => {
@@ -130,5 +155,18 @@ describe("Monitors", () => {
     mockState.error = "boom";
     render(<Monitors />);
     expect(screen.getByText(/Couldn't load monitors: boom/)).toBeInTheDocument();
+  });
+
+  it("a failing card opens its failed run; a healthy one offers nothing", () => {
+    mockState.monitors = [
+      monitor({ scheduleId: "s1", name: "Backup", status: "failing" }),
+      monitor({ scheduleId: "s2", name: "Nightly triage", status: "up" }),
+    ];
+    mockState.summary = { up: 1, late: 0, down: 0, failing: 1, paused: 0, pending: 0 };
+    render(<Monitors />);
+    const links = screen.getAllByRole("link", { name: /open (failed|last) run/i });
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveTextContent("Open failed run");
+    expect(links[0]).toHaveAttribute("href", "#/run/r2");
   });
 });

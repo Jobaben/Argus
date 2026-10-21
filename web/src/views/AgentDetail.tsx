@@ -1,35 +1,41 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAgents } from "../useAgents";
 import { useTimeline } from "../useTimeline";
 import type { Agent, AgentStatus, TimelineEntry } from "../types";
 import {
   AlertStrip,
+  Button,
+  ButtonLink,
   EmptyState,
   Handoff,
+  Icon,
   Page,
+  RAIL,
   SkeletonRows,
   SkeletonTile,
+  STATUS,
   StatusPill,
+  SweepBar,
+  TILE_DETAIL,
+  TILE_SKIN,
   TimeAgo,
   toDsStatus,
   transitionName,
 } from "../ds";
+import { loadError } from "../live/loadError";
 
+/** The timeline's rail dot. The dot carries the colour; the word beside it is
+ *  set in ink, so a state is said once in colour and once in words rather than
+ *  twice in colour (dot and pill) as it was. */
 const DOT_STYLE: Record<AgentStatus, string> = {
-  working: "bg-run ring-run/30",
-  done: "bg-ok ring-ok/30",
-  failed: "bg-fail ring-fail/30",
-  idle: "bg-idle ring-idle/30",
-  queued: "bg-queue ring-queue/30",
-  stopped: "bg-idle ring-idle/30",
-  unknown: "bg-idle ring-idle/30",
+  working: "bg-run",
+  done: "bg-ok",
+  failed: "bg-fail",
+  idle: "bg-idle",
+  queued: "bg-queue",
+  stopped: "bg-idle",
+  unknown: "bg-idle",
 };
-
-function formatAt(iso: string): string {
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return iso;
-  return new Date(t).toLocaleString();
-}
 
 /** Reads the agent short from `#/agent/<short>` and tracks hashchange. */
 function useHashShort(): string | null {
@@ -46,114 +52,175 @@ function useHashShort(): string | null {
   return short;
 }
 
-function MetaRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+function MetaRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 py-1.5">
-      <span className="shrink-0 text-xs uppercase tracking-wide text-ink-faint">{label}</span>
-      <span
-        className={`min-w-0 truncate text-right text-sm text-ink-dim ${mono ? "font-mono" : ""}`}
-      >
-        {value}
-      </span>
+    <div className="grid grid-cols-[7.5rem_minmax(0,1fr)] items-baseline gap-3 py-2.5">
+      <dt className="text-caption text-ink-faint">{label}</dt>
+      <dd className="min-w-0 break-words text-small text-ink-dim">{children}</dd>
     </div>
   );
 }
 
-function AgentMeta({ agent }: { agent: Agent }) {
-  const folder = agent.cwd?.split(/[\\/]/).filter(Boolean).pop() ?? null;
+/** Status, id and freshness — the line under the agent's name. */
+function AgentCaption({ agent }: { agent: Agent }) {
   return (
-    <section className="rounded-xl border border-line bg-surface p-4">
-      <header className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="truncate text-xl font-semibold text-ink">{agent.name}</h2>
-          <p className="mt-0.5 font-mono text-xs text-ink-faint">{agent.short}</p>
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-1.5">
-          <StatusPill status={toDsStatus(agent.status)} />
-          {agent.live && (
-            <span className="inline-flex items-center gap-1.5 text-xs text-ok">
-              <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ok opacity-75" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-ok" />
-              </span>
-              live
-            </span>
-          )}
-        </div>
-      </header>
-
-      {agent.detail && <p className="mt-3 text-sm text-ink-dim">{agent.detail}</p>}
-
-      {agent.result && agent.result !== agent.detail && (
-        <p className="mt-2 rounded-lg bg-ok/5 px-3 py-2 text-sm text-ok">{agent.result}</p>
+    <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-caption text-ink-faint">
+      <StatusPill status={toDsStatus(agent.status)} />
+      <span>
+        job <span className="font-mono text-ink-dim">{agent.short}</span>
+      </span>
+      {/* Live is the brand's cyan everywhere else — the tile, the connection
+          pill — and was green here, which on this page also means "done". */}
+      {agent.live && (
+        <span className="inline-flex items-center gap-1.5 text-eye">
+          <span className="relative flex h-2 w-2" aria-hidden="true">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-eye opacity-60 motion-safe:animate-ping" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-eye" />
+          </span>
+          Live
+        </span>
       )}
+      <span>
+        Updated <TimeAgo iso={agent.updatedAt} />
+      </span>
+    </span>
+  );
+}
 
-      <div className="mt-3 divide-y divide-line/30 border-t border-line/30 pt-1">
-        {folder && <MetaRow label="Folder" value={folder} mono />}
-        {agent.cwd && <MetaRow label="CWD" value={agent.cwd} mono />}
-        {agent.template && <MetaRow label="Template" value={agent.template} />}
-        {agent.tempo && <MetaRow label="Tempo" value={agent.tempo} />}
-        {agent.sessionId && <MetaRow label="Session" value={agent.sessionId} mono />}
-        {agent.cliVersion && <MetaRow label="CLI" value={agent.cliVersion} mono />}
-        {agent.pid != null && <MetaRow label="PID" value={String(agent.pid)} mono />}
-        {agent.inFlight && (
-          <MetaRow
-            label="In flight"
-            value={`${agent.inFlight.tasks} tasks · ${agent.inFlight.queued} queued`}
-          />
-        )}
-        <div className="flex items-baseline justify-between gap-4 py-1.5">
-          <span className="shrink-0 text-xs uppercase tracking-wide text-ink-faint">Created</span>
-          <TimeAgo iso={agent.createdAt} />
+/**
+ * What the agent is doing, or did — the one sentence worth reading — on the
+ * same status-skinned surface as its tile, so the tile you opened and the page
+ * you landed on are visibly the same thing.
+ */
+function AgentSummary({ agent }: { agent: Agent }) {
+  const ds = toDsStatus(agent.status);
+  const { token } = STATUS[ds];
+  const result = agent.result && agent.result !== agent.detail ? agent.result : null;
+  if (!agent.detail && !result && ds !== "working") return null;
+  return (
+    <section
+      className={`relative overflow-hidden rounded-tile border bg-gradient-to-b to-surface p-4 pl-5 shadow-raised sm:p-5 sm:pl-6 ${TILE_SKIN[token]}`}
+    >
+      <span aria-hidden="true" className={`absolute inset-y-0 left-0 w-[3px] ${RAIL[token]}`} />
+      <h2 className="eyebrow">Latest update</h2>
+      {agent.detail && (
+        <p className={`mt-2 text-body ${TILE_DETAIL[token] ?? "text-ink"}`}>{agent.detail}</p>
+      )}
+      {ds === "working" && (
+        <div className="mt-3">
+          <SweepBar />
         </div>
-        <div className="flex items-baseline justify-between gap-4 py-1.5">
-          <span className="shrink-0 text-xs uppercase tracking-wide text-ink-faint">Updated</span>
-          <TimeAgo iso={agent.updatedAt} />
+      )}
+      {result && (
+        <div className="mt-4 rounded-control border border-ok/25 bg-ok/[0.06] px-3.5 py-3">
+          <p className="flex items-center gap-1.5 text-caption font-semibold text-ok">
+            <Icon name="check-circle" size={14} />
+            Result
+          </p>
+          <p className="mt-1 break-words text-small text-ink-dim">{result}</p>
         </div>
-        {agent.firstTerminalAt && (
-          <div className="flex items-baseline justify-between gap-4 py-1.5">
-            <span className="shrink-0 text-xs uppercase tracking-wide text-ink-faint">
-              First terminal
-            </span>
-            <TimeAgo iso={agent.firstTerminalAt} />
-          </div>
-        )}
-      </div>
+      )}
     </section>
+  );
+}
+
+/** Everything else the roster knows, as a definition list beside the story. */
+function AgentFacts({ agent }: { agent: Agent }) {
+  return (
+    <aside
+      aria-label="Agent details"
+      className="rounded-tile border border-line bg-surface px-4 pb-1.5 pt-4 shadow-raised"
+    >
+      <h2 className="eyebrow">Details</h2>
+      <dl className="mt-1 divide-y divide-line">
+        {/* One row for the working directory: the folder it used to repeat
+            above it is the last segment of this path. */}
+        {agent.cwd && (
+          <MetaRow label="Working directory">
+            <span className="break-all font-mono text-caption">{agent.cwd}</span>
+          </MetaRow>
+        )}
+        {agent.template && <MetaRow label="Template">{agent.template}</MetaRow>}
+        {agent.tempo && <MetaRow label="Tempo">{agent.tempo}</MetaRow>}
+        {agent.inFlight && (
+          <MetaRow label="In flight">
+            {agent.inFlight.tasks} tasks · {agent.inFlight.queued} queued
+          </MetaRow>
+        )}
+        {agent.sessionId && (
+          <MetaRow label="Session">
+            <span className="break-all font-mono text-caption">{agent.sessionId}</span>
+          </MetaRow>
+        )}
+        {agent.cliVersion && (
+          <MetaRow label="CLI">
+            <span className="font-mono text-caption">{agent.cliVersion}</span>
+          </MetaRow>
+        )}
+        {agent.pid != null && (
+          <MetaRow label="PID">
+            <span className="font-mono text-caption">{agent.pid}</span>
+          </MetaRow>
+        )}
+        <MetaRow label="Created">
+          <TimeAgo iso={agent.createdAt} />
+        </MetaRow>
+        <MetaRow label="Updated">
+          <TimeAgo iso={agent.updatedAt} />
+        </MetaRow>
+        {agent.firstTerminalAt && (
+          <MetaRow label="First terminal">
+            <TimeAgo iso={agent.firstTerminalAt} />
+          </MetaRow>
+        )}
+      </dl>
+    </aside>
   );
 }
 
 function TimelineItem({ entry, last }: { entry: TimelineEntry; last: boolean }) {
   const [open, setOpen] = useState(false);
-  const state = entry.state ?? "unknown";
+  const state = entry.state;
   const hasText = !!entry.text && entry.text.trim().length > 0;
 
   return (
-    <li className="relative pl-8">
-      {!last && <span className="absolute left-[7px] top-3 h-full w-px bg-line" aria-hidden />}
+    <li className="relative pl-7">
+      {!last && (
+        <span aria-hidden="true" className="absolute bottom-0 left-[5px] top-4 w-px bg-line" />
+      )}
+      {/* An entry with no state is a progress note ("Edited 3 files"), not a
+          change of state: headed "Idle", a working agent's note said it had
+          stopped. It gets a neutral word and a hollow dot, no status colour. */}
       <span
-        className={`absolute left-0 top-1.5 h-3.5 w-3.5 rounded-full ring-4 ${DOT_STYLE[state] ?? DOT_STYLE.unknown}`}
-        aria-hidden
+        aria-hidden="true"
+        className={`absolute left-0 top-[5px] h-[11px] w-[11px] rounded-full ring-4 ring-surface ${
+          state ? (DOT_STYLE[state] ?? DOT_STYLE.unknown) : "border-2 border-ink-faint bg-surface"
+        }`}
       />
-      <div className="pb-5">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <StatusPill status={toDsStatus(state)} />
-          <time className="text-xs text-ink-faint">{formatAt(entry.at)}</time>
+      <div className={last ? "" : "pb-5"}>
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <span className="text-small font-semibold text-ink">
+            {state ? STATUS[toDsStatus(state)].label : "Update"}
+          </span>
+          <span className="text-caption">
+            <TimeAgo iso={entry.at} />
+          </span>
         </div>
-        {entry.detail && <p className="mt-1.5 text-sm text-ink-dim">{entry.detail}</p>}
+        {entry.detail && <p className="mt-1 text-small text-ink-dim">{entry.detail}</p>}
         {hasText && (
-          <div className="mt-2">
-            <button
-              type="button"
+          <div className="mt-1.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              iconRight={open ? "chevron-up" : "chevron-down"}
               onClick={() => setOpen((v) => !v)}
               aria-expanded={open}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-queue ring-1 ring-queue/30 transition hover:bg-queue/10"
+              className="-ml-2.5"
             >
-              <span aria-hidden>{open ? "▾" : "▸"}</span>
               {open ? "Hide details" : "Show details"}
-            </button>
+            </Button>
             {open && (
-              <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap rounded-lg border border-line bg-black/30 p-3 text-xs leading-relaxed text-ink-dim">
+              <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-control border border-line bg-ground-2/60 p-3 font-mono text-caption leading-relaxed text-ink-dim">
                 {entry.text}
               </pre>
             )}
@@ -168,8 +235,13 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
   const hashShort = useHashShort();
   const short = shortProp ?? hashShort;
 
-  const { agents, loading: agentsLoading } = useAgents();
-  const { timeline, loading: timelineLoading, error } = useTimeline(short);
+  const {
+    agents,
+    loading: agentsLoading,
+    error: agentsError,
+    refresh: refreshAgents,
+  } = useAgents();
+  const { timeline, loading: timelineLoading, error, refresh } = useTimeline(short);
 
   const agent = useMemo(
     () => (short ? (agents.find((a) => a.short === short) ?? null) : null),
@@ -181,12 +253,26 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
     [timeline],
   );
 
+  // The tab and the history list name the agent, as the heading does: the
+  // shell's own title for this route can only say "Agent".
+  const name = short ? (agent?.name ?? `Agent ${short}`) : null;
+  useEffect(() => {
+    if (name) document.title = `${name} — Argus`;
+  }, [name]);
+
   if (!short) {
     return (
       <Page title="Agent" crumbs={[{ label: "Command Center", href: "#/command" }]}>
-        <EmptyState>
-          No agent selected. Open{" "}
-          <span className="font-mono text-ink-dim">#/agent/&lt;short&gt;</span> to view one.
+        <EmptyState
+          title="No agent selected"
+          icon="user"
+          action={
+            <ButtonLink href="#/agents" iconRight="arrow-right">
+              Open Agents
+            </ButtonLink>
+          }
+        >
+          Pick an agent from the roster to see what it is doing and how it got there.
         </EmptyState>
       </Page>
     );
@@ -194,7 +280,19 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
 
   return (
     <Page
-      title={`agent ${short}`}
+      // The agent's name, when the roster knows it: the page used to say
+      // "agent 7a1b" in its heading and the name again in a second heading
+      // below it, two titles for one thing.
+      title={name}
+      subtitle={
+        agent ? (
+          <AgentCaption agent={agent} />
+        ) : (
+          <span className="text-caption text-ink-faint">
+            job <span className="font-mono text-ink-dim">{short}</span>
+          </span>
+        )
+      }
       // Pairs with the agent tile on `#/agents`: the tile you clicked morphs into
       // this heading rather than the two views crossfading past each other.
       anchor={transitionName("agent", short)}
@@ -205,44 +303,91 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
     >
       {error && (
         <div className="mb-6">
-          <AlertStrip subject="Error" message={`Couldn't load timeline: ${error}`} />
+          <AlertStrip
+            subject="Timeline"
+            message={loadError("the timeline", error)}
+            action={
+              <Button size="sm" icon="retry" onClick={() => void refresh()}>
+                Retry
+              </Button>
+            }
+          />
         </div>
       )}
 
-      {agent ? (
-        <AgentMeta agent={agent} />
-      ) : (
-        <Handoff busy={agentsLoading} label="the agent" skeleton={<SkeletonTile lines={3} />}>
-          <div className="rounded-xl border border-line bg-surface p-4">
-            <h2 className="text-lg font-semibold text-ink">Unknown agent</h2>
-            <p className="mt-1 font-mono text-xs text-ink-faint">{short}</p>
-            <p className="mt-2 text-sm text-ink-faint">
-              No matching agent metadata — showing its timeline below if any exists.
-            </p>
-          </div>
-        </Handoff>
-      )}
-
-      <section className="mt-8">
-        <h3 className="mb-4 text-xs font-semibold uppercase tracking-wide text-ink-faint">
-          Timeline
-        </h3>
-        <Handoff busy={timelineLoading} label="the timeline" skeleton={<SkeletonRows count={4} />}>
-          {ordered.length === 0 ? (
-            <EmptyState>No timeline entries recorded for this agent yet.</EmptyState>
+      <div
+        className={`grid items-start gap-6 ${agent ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]" : ""}`}
+      >
+        <div className="min-w-0 space-y-6">
+          {agent ? (
+            <AgentSummary agent={agent} />
+          ) : agentsError ? (
+            // A roster that failed to load says nothing about this agent:
+            // "Unknown agent" under it would be a claim about the data.
+            <AlertStrip
+              subject="Agent"
+              message={loadError("the agent", agentsError)}
+              action={
+                <Button size="sm" icon="retry" onClick={() => void refreshAgents()}>
+                  Retry
+                </Button>
+              }
+            />
           ) : (
-            <ol className="relative">
-              {ordered.map((entry, i) => (
-                <TimelineItem
-                  key={`${entry.at}-${i}`}
-                  entry={entry}
-                  last={i === ordered.length - 1}
-                />
-              ))}
-            </ol>
+            <Handoff busy={agentsLoading} label="the agent" skeleton={<SkeletonTile lines={3} />}>
+              <div className="flex items-start gap-3 rounded-tile border border-line bg-surface p-4 shadow-raised">
+                <Icon name="info" size={18} className="mt-0.5 text-ink-faint" />
+                <div className="min-w-0">
+                  <h2 className="text-heading font-semibold text-ink">Unknown agent</h2>
+                  <p className="mt-1 text-small text-ink-dim">
+                    No matching agent metadata for{" "}
+                    <span className="font-mono text-ink">{short}</span> — showing its timeline below
+                    if any exists.
+                  </p>
+                </div>
+              </div>
+            </Handoff>
           )}
-        </Handoff>
-      </section>
+
+          <section aria-label="Timeline">
+            <div className="mb-3 flex min-h-6 items-center justify-between gap-3">
+              <h2 className="eyebrow">Timeline</h2>
+              {ordered.length > 0 && (
+                <span className="text-caption text-ink-faint">
+                  {ordered.length} {ordered.length === 1 ? "entry" : "entries"} · newest first
+                </span>
+              )}
+            </div>
+            <Handoff
+              busy={timelineLoading}
+              label="the timeline"
+              skeleton={<SkeletonRows count={4} />}
+            >
+              {ordered.length === 0 ? (
+                // A failed load is said once, by the strip above — not again as
+                // an empty timeline, which would claim there is nothing to show.
+                error ? null : (
+                  <EmptyState compact icon="history" title="No timeline yet">
+                    No timeline entries recorded for this agent yet.
+                  </EmptyState>
+                )
+              ) : (
+                <ol className="rounded-tile border border-line bg-surface px-4 py-4 shadow-raised sm:px-5">
+                  {ordered.map((entry, i) => (
+                    <TimelineItem
+                      key={`${entry.at}-${i}`}
+                      entry={entry}
+                      last={i === ordered.length - 1}
+                    />
+                  ))}
+                </ol>
+              )}
+            </Handoff>
+          </section>
+        </div>
+
+        {agent && <AgentFacts agent={agent} />}
+      </div>
     </Page>
   );
 }

@@ -1,7 +1,12 @@
 /** Cross-source swimlane timeline. */
 
 export type ChronicleKind = "run" | "agent" | "session";
-export type ChronicleStatus = "working" | "done" | "failed" | "queued" | "idle";
+/**
+ * `stopped`: the work began and was cut short — an interrupted or cancelled
+ * run, a stopped agent. `idle` is work that never ran: a skipped firing, an
+ * agent with nothing to do. Both are neutral; neither is a failure.
+ */
+export type ChronicleStatus = "working" | "done" | "failed" | "queued" | "idle" | "stopped";
 
 export interface ChronicleSpan {
   id: string;

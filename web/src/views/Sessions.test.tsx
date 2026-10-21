@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SessionSummary } from "../useSessions";
 import Sessions from "./Sessions";
+import { UNREACHABLE } from "../live/loadError";
 
 const mockState: { sessions: SessionSummary[]; loading: boolean; error: string | null } = {
   sessions: [],
@@ -140,9 +141,43 @@ describe("Sessions", () => {
     expect(screen.getByText("Fix the migration")).toBeInTheDocument();
   });
 
-  it("surfaces a fetch error", () => {
-    mockState.error = "boom";
+  it("gives the server's reason when the list failed to load", () => {
+    mockState.error = "database is locked";
     render(<Sessions />);
-    expect(screen.getByText(/Couldn't reach the Argus server: boom/)).toBeInTheDocument();
+    expect(screen.getByText("Couldn't load sessions: database is locked")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
+  describe("a transcript", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    const answer = (status: number, error: string) =>
+      vi.fn().mockResolvedValue({ ok: false, status, json: async () => ({ error }) } as Response);
+
+    it("is not found when the server says so, rather than failing to load", async () => {
+      // The server's 404 carries its own words; the page knows it by the status.
+      vi.stubGlobal("fetch", answer(404, "not found"));
+      route.segments = ["sessions", "-home-me-api", "gone"];
+      render(<Sessions />);
+      expect(await screen.findByText("Transcript not found")).toBeInTheDocument();
+      expect(screen.queryByText(/couldn't load/i)).toBeNull();
+    });
+
+    it("gives the server's reason when it fails to load", async () => {
+      vi.stubGlobal("fetch", answer(500, "database is locked"));
+      route.segments = ["sessions", "-home-me-api", "s1"];
+      render(<Sessions />);
+      expect(
+        await screen.findByText("Couldn't load the transcript: database is locked"),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("says the server could not be reached only when no answer came back", () => {
+    mockState.error = UNREACHABLE;
+    render(<Sessions />);
+    expect(screen.getByText("Couldn't reach the Argus server")).toBeInTheDocument();
   });
 });

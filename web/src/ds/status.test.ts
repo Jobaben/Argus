@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { STATUS, toDsStatus, runDsStatus } from "./status";
+import { STATUS, toDsStatus, runDsStatus, runStatusLabel } from "./status";
 
 describe("STATUS record", () => {
   it("maps each status to its color token", () => {
@@ -40,8 +40,10 @@ describe("toDsStatus", () => {
     expect(toDsStatus("idle")).toBe("idle");
   });
 
-  it("folds stopped and unknown into idle", () => {
-    expect(toDsStatus("stopped")).toBe("idle");
+  it("says a stopped agent stopped, and folds unknown into idle", () => {
+    // "Idle" on a job stopped mid-work said it never started.
+    expect(toDsStatus("stopped")).toBe("stopped");
+    expect(STATUS[toDsStatus("stopped")].label).toBe("Stopped");
     expect(toDsStatus("unknown")).toBe("idle");
   });
 });
@@ -55,5 +57,20 @@ describe("runDsStatus", () => {
   it("falls back to the process status when there is no failing outcome", () => {
     expect(runDsStatus({ status: "succeeded", outcome: "succeeded" })).toBe("done");
     expect(runDsStatus({ status: "running" })).toBe("working");
+    expect(runDsStatus({ status: "cancelled" })).toBe("stopped");
+    expect(runDsStatus({ status: "interrupted" })).toBe("stopped");
+  });
+});
+
+describe("runStatusLabel", () => {
+  it("calls a skipped firing skipped, not idle, in the quiet colour", () => {
+    expect(runStatusLabel({ status: "skipped" })).toBe("Skipped");
+    expect(STATUS[runDsStatus({ status: "skipped" })].token).toBe("idle");
+  });
+
+  it("uses the status table's word for everything else", () => {
+    expect(runStatusLabel({ status: "succeeded" })).toBe("Done");
+    expect(runStatusLabel({ status: "cancelled" })).toBe("Stopped");
+    expect(runStatusLabel({ status: "succeeded", outcome: "failed" })).toBe("Failed");
   });
 });

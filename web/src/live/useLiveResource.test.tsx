@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, waitFor, act } from "@testing-library/react";
 import { useLiveResource, retryDelay } from "./useLiveResource";
+import { UNREACHABLE } from "./loadError";
 
 // A controllable fake socket the shared liveSocket singleton will instantiate.
 let sockets: FakeWS[] = [];
@@ -252,7 +253,9 @@ describe("useLiveResource — failure handling", () => {
     await act(async () => {
       sockets[0].emit({ type: "things:changed" });
     });
-    await waitFor(() => expect(result.current.error).toBe("NetworkError"));
+    // No answer came back, so it says so — not the browser's "NetworkError".
+    await waitFor(() => expect(result.current.error).toBe(UNREACHABLE));
+    expect(result.current.errorStatus).toBeNull();
     expect(result.current.data).toEqual([1, 2]); // not blanked
     expect(result.current.stale).toBe(true);
   });
@@ -270,7 +273,7 @@ describe("useLiveResource — failure handling", () => {
     await act(async () => {
       sockets[0].emit({ type: "things:changed" });
     });
-    await waitFor(() => expect(result.current.error).toBe("boom"));
+    await waitFor(() => expect(result.current.error).toBe(UNREACHABLE));
 
     await act(async () => {
       sockets[0].emit({ type: "things:changed" });
@@ -280,7 +283,23 @@ describe("useLiveResource — failure handling", () => {
     expect(result.current.stale).toBe(false);
   });
 
-  it("surfaces a non-2xx status as an error", async () => {
+  it("keeps the server's reason and status when it answers with an error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        headers: { get: () => null },
+        json: async () => ({ error: "database is locked" }),
+      } as unknown as Response),
+    );
+    const { result } = renderHook(() => useLiveResource("/api/things", NUMS));
+    // The server was reached and said why: neither "HTTP 500" nor "unreachable".
+    await waitFor(() => expect(result.current.error).toBe("database is locked"));
+    expect(result.current.errorStatus).toBe(500);
+  });
+
+  it("falls back to the status when an error answer carries no reason", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -292,8 +311,55 @@ describe("useLiveResource — failure handling", () => {
     );
     const { result } = renderHook(() => useLiveResource("/api/things", NUMS));
     await waitFor(() => expect(result.current.error).toBe("HTTP 503"));
+    expect(result.current.errorStatus).toBe(503);
     // Nothing good was ever on screen, so this is not "stale" — it is empty.
     expect(result.current.stale).toBe(false);
+  });
+
+  it("does not carry one path's failure over to the next", async () => {
+    // The first resource answers 404; the next one is still on its way, and
+    // gives up when aborted, as a real request does.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string, init?: RequestInit) =>
+        url === "/api/gates/a"
+          ? Promise.resolve({
+              ok: false,
+              status: 404,
+              headers: { get: () => null },
+              json: async () => ({ error: "no such gate" }),
+            } as unknown as Response)
+          : new Promise<Response>((_res, rej) => {
+              init?.signal?.addEventListener("abort", () => rej(new Error("AbortError")));
+            }),
+      ),
+    );
+    // Every frame drawn, not only the settled one: `rerender` flushes effects,
+    // so `result.current` alone would never see a frame an effect corrected.
+    const frames: { path: string; error: string | null; status: number | null }[] = [];
+    const { result, rerender } = renderHook(
+      ({ p }) => {
+        const state = useLiveResource(p, NUMS);
+        frames.push({ path: p, error: state.error, status: state.errorStatus });
+        return state;
+      },
+      { initialProps: { p: "/api/gates/a" } },
+    );
+    await waitFor(() => expect(result.current.error).toBe("no such gate"));
+
+    // Opening another gate never shows the last one's "no such gate", not
+    // even for a frame.
+    rerender({ p: "/api/gates/b" });
+    const forB = frames.filter((f) => f.path === "/api/gates/b");
+    expect(forB.length).toBeGreaterThan(0);
+    expect(forB.every((f) => f.error === null && f.status === null)).toBe(true);
+    expect(result.current.loading).toBe(true);
+
+    // Nor does coming back show the old failure before its own answer lands.
+    frames.length = 0;
+    rerender({ p: "/api/gates/a" });
+    expect(frames[0]).toEqual({ path: "/api/gates/a", error: null, status: null });
+    await waitFor(() => expect(result.current.errorStatus).toBe(404));
   });
 });
 

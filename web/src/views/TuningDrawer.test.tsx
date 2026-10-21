@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TuningDrawer } from "./TuningDrawer";
+import type { Ask } from "../ds/useAsk";
 import type { PipelineDefinition, PipelineInput, TuningReport } from "../types";
 
 class FakeWS {
@@ -208,6 +209,45 @@ describe("TuningDrawer", () => {
     expect(input.phases[0].steps[0].prompt).toBe("Write a plan.");
     expect(input.phases[1].steps[0].prompt).toBe(SECRET_PROMPT);
     await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("asks inside the drawer mid-save; Escape declines and keeps the drawer open", async () => {
+    const user = userEvent.setup();
+    const { fn } = tuneFetch(report());
+    vi.stubGlobal("fetch", fn);
+    const answers: boolean[] = [];
+    const onApply = vi.fn(async (_input: PipelineInput, ask: Ask) => {
+      answers.push(
+        await ask({
+          title: "1 instance is running under “Nightly”.",
+          confirm: "Apply anyway",
+          tone: "secondary",
+        }),
+      );
+    });
+    const onClose = vi.fn();
+    render(<TuningDrawer def={def} onClose={onClose} onApply={onApply} />);
+    await waitFor(() => expect(screen.getByText(/no changes recommended/i)).toBeTruthy());
+    await user.click(screen.getByRole("checkbox", { name: /apply model for draft/i }));
+    const apply = screen.getByRole("button", { name: /apply selected \(1\)/i });
+    await user.click(apply);
+
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).getByRole("group", { name: "1 instance is running under “Nightly”." }),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(answers).toEqual([false]));
+    // Declined: nothing was applied, so the drawer stays with its ticks.
+    expect(onClose).not.toHaveBeenCalled();
+    expect(apply).toHaveFocus();
+    await waitFor(() => expect(apply).not.toHaveAttribute("aria-disabled"));
+
+    await user.click(apply);
+    await user.click(screen.getByRole("button", { name: "Apply anyway" }));
+    await waitFor(() => expect(answers).toEqual([false, true]));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
   it("explains when passes are disabled instead of starting one", async () => {

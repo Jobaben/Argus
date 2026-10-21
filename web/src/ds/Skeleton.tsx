@@ -198,10 +198,10 @@ export function SkeletonCounters({ count = 4 }: { count?: number }) {
         <div
           key={i}
           aria-hidden="true"
-          className="rounded-tile border border-line bg-ground-2 px-5 py-3.5"
+          className="rounded-tile border border-line bg-surface px-4 py-3.5 shadow-raised"
         >
-          <Skeleton className="mx-auto h-8 w-12" />
-          <Skeleton className="mx-auto mt-2 h-2 w-16" />
+          <Skeleton className="h-7 w-10" />
+          <Skeleton className="mt-3.5 h-2.5 w-16" />
         </div>
       ))}
     </div>
@@ -209,42 +209,51 @@ export function SkeletonCounters({ count = 4 }: { count?: number }) {
 }
 
 /**
- * A pipeline board card: the phase header row, its rule, and one row of step
- * tiles. Matching the real grid matters more here than anywhere else — this is
- * the widest, tallest thing in the app, so a mismatched placeholder produces
- * the most jarring reflow.
+ * A pipeline board card in the shape the real one has: a header line, then the
+ * phase graph's column of nodes beside the focus panel's step tiles. Matching
+ * the real layout matters more here than anywhere else — this is the widest,
+ * tallest thing in the app, so a mismatched placeholder produces the most
+ * jarring reflow, and the old one still drew the phase columns the board
+ * stopped using.
  */
 export function SkeletonBoardCard({ phases = 4 }: { phases?: number }) {
   return (
     <article
       aria-hidden="true"
-      className="rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5"
+      className="rounded-panel border border-line bg-surface px-4 pb-4 pt-3.5 shadow-raised sm:px-5"
     >
       <div className="flex items-center gap-3">
-        <Skeleton className="h-4 w-40" />
-        <Skeleton className="h-3 w-16" />
-        <Skeleton className="ml-auto h-3 w-12" />
+        <Skeleton className="h-5 w-44" />
+        <Skeleton className="h-6 w-24 rounded-full" />
+        <Skeleton className="ml-auto h-3 w-40" />
       </div>
-      <div
-        className="mt-3.5 grid gap-x-3.5 gap-y-2.5"
-        style={{ gridTemplateColumns: `repeat(${phases}, minmax(0, 1fr))` }}
-      >
-        {Array.from({ length: phases }, (_, i) => (
-          <Skeleton key={`h${i}`} className="h-2.5 w-3/4" />
-        ))}
-        {Array.from({ length: phases }, (_, i) => (
-          <div key={`r${i}`} className="h-[2px] rounded-full bg-line" />
-        ))}
-        {Array.from({ length: phases }, (_, i) => (
-          <div
-            key={`t${i}`}
-            className="flex flex-col gap-2 rounded-tile border border-line bg-surface px-3.5 py-3"
-          >
-            <Skeleton className="h-3 w-4/5" />
-            <Skeleton className="h-2 w-2/5" />
-            <Skeleton className="h-2 w-3/5" />
+      <div className="mt-4 flex flex-col gap-4 md:grid md:grid-cols-[minmax(0,220px)_minmax(0,1fr)] md:items-start">
+        <div className="flex flex-col items-center gap-[22px] rounded-tile border border-line/80 bg-ground-2/70 px-3 py-3">
+          {Array.from({ length: phases }, (_, i) => (
+            <div
+              key={`n${i}`}
+              className="flex h-[30px] w-full max-w-[200px] items-center gap-2 rounded-md border border-line bg-surface px-2"
+            >
+              <Skeleton className="h-1.5 w-1.5 rounded-full" />
+              <Skeleton className="h-2.5 w-3/5" />
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-col gap-3">
+          <Skeleton className="h-4 w-48" />
+          <div className="grid gap-3 sm:grid-cols-2">
+            {Array.from({ length: 2 }, (_, i) => (
+              <div
+                key={`t${i}`}
+                className="flex flex-col gap-2.5 rounded-tile border border-line bg-surface-2/50 px-4 py-3"
+              >
+                <Skeleton className="h-3.5 w-4/5" />
+                <Skeleton className="h-2.5 w-2/5" />
+                <Skeleton className="h-2.5 w-3/5" />
+              </div>
+            ))}
           </div>
-        ))}
+        </div>
       </div>
     </article>
   );

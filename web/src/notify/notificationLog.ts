@@ -22,6 +22,8 @@ export interface LoggedNotification {
   tone: NotificationTone;
   title: string;
   detail?: string;
+  /** The detail is machine text (an agent's job id), so it is set in mono. */
+  detailMono?: boolean;
   /** Epoch ms of arrival. */
   at: number;
   /** Hash route this notification is about, if any. */
@@ -55,6 +57,7 @@ export interface NotificationInput {
   tone: NotificationTone;
   title: string;
   detail?: string;
+  detailMono?: boolean;
   href?: string;
   /** Arrival time; injectable for tests. */
   at?: number;
@@ -66,6 +69,7 @@ export function logNotification(input: NotificationInput): void {
     tone: input.tone,
     title: input.title,
     detail: input.detail,
+    detailMono: input.detailMono,
     href: input.href,
     at: input.at ?? Date.now(),
     read: false,

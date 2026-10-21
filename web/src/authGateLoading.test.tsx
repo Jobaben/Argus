@@ -13,7 +13,7 @@ const chunk = vi.hoisted(() => {
 vi.mock("./views/AdminAuthPanel", () => ({
   AdminAuthPanel: () => {
     if (!chunk.loaded) throw chunk.pending;
-    return <form aria-label="Login" />;
+    return <form aria-label="Sign in" />;
   },
 }));
 
@@ -42,7 +42,7 @@ it("keeps the sign-in wall and data isolation while the auth panel loads", async
     chunk.resolve();
     await chunk.pending;
   });
-  expect(await screen.findByRole("form", { name: "Login" })).toBeInTheDocument();
+  expect(await screen.findByRole("form", { name: "Sign in" })).toBeInTheDocument();
   expect(screen.queryByRole("status")).toBeNull();
   expect(fetchMock.mock.calls).toHaveLength(1);
 });

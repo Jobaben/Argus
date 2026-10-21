@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { SituationStrip } from "./SituationStrip";
 import type { Situation } from "../types";
 
@@ -43,9 +43,10 @@ describe("SituationStrip", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("says so explicitly when nothing needs the user", () => {
+  it("says so explicitly when nothing needs the user, as a status, not a sentence", () => {
     render(<SituationStrip situation={situation()} loading={false} />);
-    expect(screen.getByText(/nothing needs you/i)).toBeInTheDocument();
+    const calm = screen.getByText(/nothing needs you/i).parentElement!;
+    expect(calm).toHaveTextContent(/nothing running$/);
   });
 
   it("omits a metric with nothing to report rather than showing a grey zero", () => {
@@ -66,10 +67,66 @@ describe("SituationStrip", () => {
         loading={false}
       />,
     );
-    expect(screen.getByText("awaiting you")).toBeInTheDocument();
+    // The card pill's words, so the strip and the board name one state alike.
+    expect(screen.getByText("need approval")).toBeInTheDocument();
     expect(screen.queryByText("failed")).toBeNull();
     expect(screen.queryByText("open issues")).toBeNull();
     expect(screen.queryByText(/nothing needs you/i)).toBeNull();
+  });
+
+  it("sends the attention chips straight to the review when the board knows which one", () => {
+    render(
+      <SituationStrip
+        situation={situation({
+          counts: {
+            runsInFlight: 2,
+            gatesWaiting: 1,
+            failedInstances: 1,
+            monitorsDown: 0,
+            monitorsFailing: 0,
+            openIssues: 0,
+            liveAgents: 0,
+            anomalies: 0,
+          },
+        })}
+        loading={false}
+        attentionHref="#/command/i1/review"
+        failedHref="#/command/i2/build"
+      />,
+    );
+    expect(screen.getByRole("link", { name: /needs? approval/i })).toHaveAttribute(
+      "href",
+      "#/command/i1/review",
+    );
+    expect(screen.getByRole("link", { name: /failed/i })).toHaveAttribute(
+      "href",
+      "#/command/i2/build",
+    );
+  });
+
+  it("says nothing needs you while work is still running", () => {
+    // Running is the machine at work, not a request of you: the calm message
+    // holds, and only "nothing running" is dropped from it.
+    render(
+      <SituationStrip
+        situation={situation({
+          counts: {
+            runsInFlight: 3,
+            gatesWaiting: 0,
+            failedInstances: 0,
+            monitorsDown: 0,
+            monitorsFailing: 0,
+            openIssues: 0,
+            liveAgents: 0,
+            anomalies: 0,
+          },
+        })}
+        loading={false}
+      />,
+    );
+    expect(screen.getByText(/nothing needs you/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing running/i)).toBeNull();
+    expect(screen.getByRole("link", { name: /3 running/i })).toBeInTheDocument();
   });
 
   it("links each metric to the view that explains it", () => {
@@ -90,12 +147,41 @@ describe("SituationStrip", () => {
         loading={false}
       />,
     );
-    expect(screen.getByRole("link", { name: /awaiting you/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /needs? approval/i })).toHaveAttribute(
       "href",
       "#/command",
     );
     expect(screen.getByRole("link", { name: /down/i })).toHaveAttribute("href", "#/health");
     expect(screen.getByRole("link", { name: /open issues/i })).toHaveAttribute("href", "#/issues");
+  });
+
+  it("colours open issues as the problem count they are, and anomalies as a call to look", () => {
+    render(
+      <SituationStrip
+        situation={situation({
+          counts: {
+            runsInFlight: 0,
+            gatesWaiting: 0,
+            failedInstances: 0,
+            monitorsDown: 0,
+            monitorsFailing: 1,
+            openIssues: 2,
+            liveAgents: 0,
+            anomalies: 1,
+          },
+        })}
+        loading={false}
+      />,
+    );
+    const issues = screen.getByRole("link", { name: "2 open issues" });
+    expect(within(issues).getByText("2").className).toMatch(/text-fail/);
+    const anomaly = screen.getByRole("link", { name: "1 anomaly" });
+    expect(within(anomaly).getByText("1").className).toMatch(/text-await/);
+    // Named as the Health page names it, where the chip leads.
+    expect(screen.getByRole("link", { name: "1 monitor failing" })).toHaveAttribute(
+      "href",
+      "#/health",
+    );
   });
 
   it("counts down to the next firing by name", () => {

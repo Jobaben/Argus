@@ -37,7 +37,7 @@ export function useToastQueue(): {
     ({ key, href, ...toast }: Omit<ToastItem, "id"> & { key: string; href?: string }) => {
       const id = `${key}:${seqRef.current++}`;
       setToasts((ts) => [...ts, { ...toast, id }].slice(-MAX_TOASTS));
-      logNotification({ tone: toast.tone, title: toast.title, detail: toast.detail, href });
+      logNotification({ ...toast, href });
       timers.current.set(
         id,
         setTimeout(() => dismiss(id), TOAST_TTL_MS),

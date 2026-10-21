@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
 import { ActivityRail } from "./ActivityRail";
 import type { Run } from "../types";
 import type { OverviewRow } from "../ds";
@@ -47,6 +47,28 @@ function row(over: Partial<OverviewRow> = {}): OverviewRow {
 
 const NO_ACTIVITY = new Map<string, LiveActivity>();
 
+/** One pipeline row whose single phase is running these steps. */
+function working(steps: { name: string; runId: string | null; startedAt?: string }[]) {
+  return [
+    row({
+      phases: [
+        {
+          id: "p1",
+          name: "Implement",
+          status: "working",
+          reason: null,
+          steps: steps.map((s) => ({ ...s, status: "working" })),
+        },
+      ],
+    } as Partial<OverviewRow>),
+  ];
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
 describe("ActivityRail — live", () => {
   it("says nothing is running rather than showing an empty section", () => {
     render(<ActivityRail rows={[]} liveActivity={NO_ACTIVITY} runs={[]} loading={false} />);
@@ -79,22 +101,56 @@ describe("ActivityRail — live", () => {
     expect(screen.getByText(/Edit src\/replay\.ts/)).toBeInTheDocument();
   });
 
-  it("says 'starting…' for a working step that has not reported activity yet", () => {
-    const rows = [
-      row({
-        phases: [
-          {
-            id: "p1",
-            name: "Implement",
-            status: "working",
-            reason: null,
-            steps: [{ name: "Write the fix", runId: "r9", status: "working" }],
-          },
-        ],
-      } as Partial<OverviewRow>),
-    ];
-    render(<ActivityRail rows={rows} liveActivity={NO_ACTIVITY} runs={[]} loading={false} />);
-    expect(screen.getByText("starting…")).toBeInTheDocument();
+  it("says 'Starting…' for a working step that has not reported activity yet", () => {
+    render(
+      <ActivityRail
+        rows={working([{ name: "Write the fix", runId: "r9" }])}
+        liveActivity={NO_ACTIVITY}
+        runs={[]}
+        loading={false}
+      />,
+    );
+    expect(screen.getByText("Starting…")).toBeInTheDocument();
+  });
+
+  it("shows how long each step has been running, and keeps counting", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-07T10:02:05.000Z"));
+    render(
+      <ActivityRail
+        rows={working([
+          { name: "Write the fix", runId: "r9", startedAt: "2026-07-07T10:00:00.000Z" },
+        ])}
+        liveActivity={NO_ACTIVITY}
+        runs={[]}
+        loading={false}
+      />,
+    );
+    expect(screen.getByTitle("Running for")).toHaveTextContent("02:05");
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByTitle("Running for")).toHaveTextContent("02:06");
+    // Two minutes in with no tool call is not "starting" any more.
+    expect(screen.getByText("Working")).toBeInTheDocument();
+    expect(screen.queryByText("Starting…")).toBeNull();
+  });
+
+  it("calls a step that began seconds ago 'Starting…', with its time beside it", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-07T10:00:04.000Z"));
+    render(
+      <ActivityRail
+        rows={working([
+          { name: "Write the fix", runId: "r9", startedAt: "2026-07-07T10:00:00.000Z" },
+        ])}
+        liveActivity={NO_ACTIVITY}
+        runs={[]}
+        loading={false}
+      />,
+    );
+    expect(screen.getByTitle("Running for")).toHaveTextContent("00:04");
+    expect(screen.getByText("Starting…")).toBeInTheDocument();
   });
 
   it("includes in-flight runs the board does not own, so the rail cannot lie", () => {
@@ -153,6 +209,78 @@ describe("ActivityRail — live", () => {
     expect(screen.getByText("Nightly code review")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /^live ?2$/i })).toBeInTheDocument();
   });
+
+  it("lists a run once when its activity frame repeats", () => {
+    // Every frame that moves any run's line hands the rail a fresh map, and
+    // each poll hands it fresh rows and runs. None of that is a new run.
+    const rows = working([{ name: "Write the fix", runId: "r9" }]);
+    const runs = [run({ id: "r9", status: "running", scheduleName: "Release train · Write" })];
+    const frame = () => new Map([["r9", { label: "Edit src/replay.ts", at: "t" }]]);
+    const { rerender } = render(
+      <ActivityRail rows={rows} liveActivity={frame()} runs={runs} loading={false} />,
+    );
+    rerender(
+      <ActivityRail rows={[...rows]} liveActivity={frame()} runs={[...runs]} loading={false} />,
+    );
+    rerender(
+      <ActivityRail rows={[...rows]} liveActivity={frame()} runs={[...runs]} loading={false} />,
+    );
+    expect(screen.getAllByText("Release train · Write the fix")).toHaveLength(1);
+    expect(screen.getAllByText(/Edit src\/replay\.ts/)).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: /^live ?1$/i })).toBeInTheDocument();
+  });
+
+  it("keeps one row per best-of-N candidate as the board updates", () => {
+    // Candidates are copies of one step, so they share its name. Keyed by
+    // name, React was handed two rows with one key and could duplicate or
+    // drop them on the next update.
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { rerender } = render(
+      <ActivityRail
+        rows={working([
+          { name: "Draft", runId: "run-aaaa1111" },
+          { name: "Draft", runId: "run-bbbb2222" },
+        ])}
+        liveActivity={NO_ACTIVITY}
+        runs={[]}
+        loading={false}
+      />,
+    );
+    rerender(
+      <ActivityRail
+        rows={working([
+          { name: "Draft", runId: "run-bbbb2222" },
+          { name: "Draft", runId: "run-cccc3333" },
+        ])}
+        liveActivity={new Map([["run-bbbb2222", { label: "Edit src/a.ts", at: "t" }]])}
+        runs={[]}
+        loading={false}
+      />,
+    );
+    expect(screen.getAllByText("Release train · Draft")).toHaveLength(2);
+    expect(screen.getAllByText(/Edit src\/a\.ts/)).toHaveLength(1);
+    // The quiet twin names its run, so two identical labels can be told apart.
+    expect(screen.getByText("run-cccc")).toBeInTheDocument();
+    expect(screen.queryByText("run-aaaa")).toBeNull();
+    const keyWarnings = error.mock.calls.filter((c) => String(c[0]).includes("same key"));
+    expect(keyWarnings).toEqual([]);
+  });
+
+  it("keeps one row for a run the board reports on two steps", () => {
+    render(
+      <ActivityRail
+        rows={working([
+          { name: "Write the fix", runId: "r9" },
+          { name: "Write the fix", runId: "r9" },
+        ])}
+        liveActivity={NO_ACTIVITY}
+        runs={[]}
+        loading={false}
+      />,
+    );
+    expect(screen.getAllByText("Release train · Write the fix")).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: /^live ?1$/i })).toBeInTheDocument();
+  });
 });
 
 describe("ActivityRail — recent", () => {
@@ -166,7 +294,8 @@ describe("ActivityRail — recent", () => {
       />,
     );
     expect(screen.getByText("Dependency audit")).toBeInTheDocument();
-    expect(screen.getByText("done")).toBeInTheDocument();
+    // In words, sentence case, like every other status in the app.
+    expect(screen.getByText("Done")).toBeInTheDocument();
     expect(screen.getByText("$0.42")).toBeInTheDocument();
   });
 
@@ -199,7 +328,7 @@ describe("ActivityRail — recent", () => {
         loading={false}
       />,
     );
-    expect(screen.getByText("failed")).toBeInTheDocument();
+    expect(screen.getByText("Failed")).toBeInTheDocument();
   });
 
   it("shows a skeleton while runs load for the first time", () => {
@@ -207,11 +336,21 @@ describe("ActivityRail — recent", () => {
     expect(screen.queryByText(/no completed runs yet/i)).toBeNull();
   });
 
-  it("links to the full run history", () => {
-    render(<ActivityRail rows={[]} liveActivity={NO_ACTIVITY} runs={[]} loading={false} />);
-    expect(screen.getByRole("link", { name: /all runs/i })).toHaveAttribute(
-      "href",
-      "#/schedules/oneoff",
+  it("calls a skipped firing skipped, not idle", () => {
+    render(
+      <ActivityRail
+        rows={[]}
+        liveActivity={NO_ACTIVITY}
+        runs={[run({ status: "skipped" })]}
+        loading={false}
+      />,
     );
+    expect(screen.getByText("Skipped")).toBeInTheDocument();
+    expect(screen.queryByText("Idle")).toBeNull();
+  });
+
+  it("links to the full run history, not the one-off launch form", () => {
+    render(<ActivityRail rows={[]} liveActivity={NO_ACTIVITY} runs={[]} loading={false} />);
+    expect(screen.getByRole("link", { name: /all runs/i })).toHaveAttribute("href", "#/chronicle");
   });
 });

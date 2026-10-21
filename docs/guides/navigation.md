@@ -41,16 +41,25 @@ health, the issues it raised, and the action that fires it now._
   now, mark the Briefing caught up. `↑`/`↓` move, `Enter` runs, `Esc` closes; the rows you use
   float to the top next time you open it with an empty query. An action that
   talks to the server keeps the palette open long enough to report a failure
-  rather than closing over it. The **Jump to… ⌘K** button in the bar opens the
-  same thing.
+  rather than closing over it. An action that changes something (**Run now**,
+  marking the Briefing caught up) is offered only when every word you type
+  appears in its name, so a scattered fuzzy match never puts one forward. When
+  nothing matches, **Search transcripts instead** opens
+  [Search](sessions-and-inventory.md#search) with what you typed already in its
+  box. The **Search** button in the bar (its keycap
+  shows `⌘K` or `Ctrl K`) opens the same thing; type a sentence instead of a
+  search term and `⌘↵` / `Ctrl ↵` shows exactly what Argus would change
+  before it changes anything.
 - **Keyboard shortcuts — `?`.** Lists every binding, and only the ones currently
   available. `g` then a letter jumps: `g c` Command Center, `g b` Briefing,
   `g h` Chronicle, `g l` Launch, `g s` Scheduler, `g m` Monitors, `g i` Issues,
   `g p` Pipelines, `g u` Budget, `g a` Agents. `/` goes to transcript search.
-  Single-letter shortcuts never fire while you are typing in a field.
-- **The connection pill** (top-right) reflects Argus's link to its own server,
-  not the health of your agents. **Green "Live"** = the WebSocket is connected.
-  **Red "Offline · retrying in 8s"** = it dropped, with the actual countdown to
+  Single-letter shortcuts never fire while you are typing in a field. While
+  the palette or the shortcut sheet is open, Tab moves only between its own
+  controls and never reaches the page behind it.
+- **The connection indicator** (top-right) reflects Argus's link to its own
+  server, not the health of your agents. A quiet **green dot and "Live"** = the
+  WebSocket is connected. A **red "Offline · retrying in 8s"** pill = it dropped, with the actual countdown to
   the next attempt and a **Retry** button for when you know you have just fixed
   the server. Reconnects back off to 30s but happen immediately when you return
   to the tab, so coming back never means waiting one out.
@@ -61,22 +70,32 @@ health, the issues it raised, and the action that fires it now._
   without you at all, use [Briefing](monitoring.md#briefing).
 - **Navigation** is split by role: the eight **destination** tabs (Command
   Center, Briefing, Chronicle, Scheduler, Pipelines, Health, Issues, Budget)
-  sit in the bar; the **⋯ More** menu holds Sentinel and the reference pages
-  (Sessions, Stats, Inventory, Fleet, and Users for the root account).
+  sit in the bar; the **More** menu holds Sentinel and the reference pages
+  (Sessions, Stats, Inventory, Fleet, Users for the root account, Experiments
+  and Knowledge).
   Scheduler and Health each carry a sub-tab in the hash — **Schedules |
   One-off** and **Monitors | Watchtower** — so a link lands on the half it
-  means. Drill-down views (Agents, Detail, Flight Recorder) are reached
+  means. Drill-down views (Agents, an agent's page, Flight Recorder) are reached
   through links, breadcrumbs and the palette; Search through `/` and the
   palette. Old hashes (`#/launch`, `#/monitors`, `#/watchtower`,
   `#/projects`, `#/activity`, `#/tasks`) are rewritten to where their content
-  went. On a phone the bar collapses to a **menu** naming your current
-  destination, listing every tab at once with its attention badge.
+  went. When the bar is too narrow for every tab, the tab strip scrolls and
+  fades at the edge that has more. On a phone the bar collapses to a **menu**
+  button naming the page you are on — any page, a drill-down or Search
+  included — with a violet count on its icon of everything waiting on a
+  person; the menu lists every tab at once with its attention badge, and `Esc`
+  closes it. The Briefing's badge is violet — it counts
+  what is waiting on a human, not only failures.
 - **Auto-refresh:** the server pushes a "something changed" ping over a
   WebSocket whenever a watched file mutates, and the UI re-fetches. Those
   re-fetches are conditional, so a ping that did not change what you are looking
   at costs a few bytes and repaints nothing. If the socket drops, each tab polls
   on a timer instead; while a fetch is failing the last good values stay on
-  screen rather than blanking. You rarely need to refresh the browser.
+  screen rather than blanking. You rarely need to refresh the browser. A load
+  that fails says which failure it was: **Couldn't reach the Argus server**
+  when no answer came back at all, or what could not be loaded and the
+  server's own reason when it answered with an error ("Couldn't load the
+  briefing: database is locked").
 - **Notifications:** a bottom-right **toast stack** (max 4, auto-dismiss
   after 8s) fires from any tab when a background agent finishes or fails,
   when a **monitor alert** arrives (down / failing / recovered — see
@@ -90,11 +109,13 @@ health, the issues it raised, and the action that fires it now._
   layout is settled before it lands. Relative timestamps ("3m ago") keep
   themselves current instead of freezing at first render.
 - **When a view breaks**, only that view breaks: it is replaced by a message
-  naming it and a **Try again** button, while the nav, the palette and every
+  naming it, the error, and a **Try again** button, while the nav, the palette and every
   other tab keep working.
 - **Routing** is hash-based (`#/command`, `#/agents`, `#/search`…), so tabs
   are bookmarkable and the back button works. An unknown hash lands on the
-  Command Center.
+  Command Center. When the page changes, a screen reader announces its name;
+  if the link you followed went away with the old view, focus moves to the
+  page content rather than back to the top of the document.
 - **Setup banner:** startup automatically attempts fixable prerequisite repairs. If **Setup incomplete** remains, inspect the per-runtime check details and use **Apply fixes** for the reported fixable items. A missing CLI or malformed configuration needs investigation. Only runtimes used by the default or saved definitions are required. [Installation and setup](../getting-started/README.md#3-check-the-server-and-setup) explains hook differences; OpenCode completes from its finished run record rather than a command hook.
 
 ## Omnibar
@@ -116,7 +137,7 @@ interpret it instead.
 - **`↵` when nothing matched** compiles the sentence.
 - **`⌘↵` at any time** compiles it even when commands did match, so a phrase that
   happens to fuzzy-match is not stuck.
-- **`esc`** leaves intent mode and returns to the list. A second `esc` closes the
+- **`Esc`** leaves intent mode and returns to the list. A second `Esc` closes the
   palette. Losing a typed sentence to a stray keypress is a real cost.
 
 The threshold is deliberately conservative in both directions. "nightly triage"

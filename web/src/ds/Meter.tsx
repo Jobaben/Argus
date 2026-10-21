@@ -18,7 +18,7 @@ export interface MeterProps {
 }
 
 const VALUE = "font-semibold text-ink-dim";
-const UNIT = "text-[0.55em] font-semibold text-ink-faint";
+const BOARD_UNIT = "text-[0.6em] font-semibold text-ink-faint";
 
 function segments(
   durationMs: number | null | undefined,
@@ -76,20 +76,20 @@ function BoardMeter({
   const shownTokens = useCountUp(tokens);
   const shownUsd = useCountUp(usd);
   return (
-    <span className="flex flex-col items-end gap-0.5" title={title}>
-      <span className="font-mono text-meter font-bold uppercase tracking-[0.14em] text-ink-faint">
-        {label ?? "Total spend"}
-      </span>
-      <span className="text-glance-sm font-extrabold leading-none text-ink">
+    // Right-aligned where it sits at the end of a header row; on a phone the
+    // header wraps it under the title, flush left, and so is its label.
+    <span className="flex flex-col items-start gap-1 sm:items-end" title={title}>
+      <span className="eyebrow">{label ?? "Total spend"}</span>
+      <span className="text-[22px] font-semibold leading-none tracking-tight text-ink">
         {tokens != null && (
           <>
-            {formatTokens(shownTokens)} <small className={UNIT}>tok</small>
+            {formatTokens(shownTokens)} <small className={BOARD_UNIT}>tok</small>
           </>
         )}
         {tokens != null && usd != null && <span className="text-ink-faint"> · </span>}
         {usd != null && (
           <>
-            <small className={UNIT}>$</small>
+            <small className={BOARD_UNIT}>$</small>
             {formatUsd(shownUsd).slice(1)}
           </>
         )}
@@ -114,17 +114,14 @@ export function Meter({
     return <BoardMeter tokens={tokens} usd={usd} label={label} title={title} />;
   }
 
-  const scale = level === "row" ? "text-label" : "text-meter";
   return (
     <span
-      className={`inline-flex items-baseline gap-[5px] font-mono ${scale} text-ink-faint${
+      className={`inline-flex items-baseline gap-1.5 whitespace-nowrap text-caption text-ink-faint${
         divider ? " border-l border-line pl-2" : ""
       }`}
       title={title}
     >
-      {level === "row" && (
-        <span className="font-bold uppercase tracking-[0.14em]">{label ?? "run total"}</span>
-      )}
+      {level === "row" && <span>{label ?? "run total"}</span>}
       <span>{segments(durationMs, tokens, usd)}</span>
     </span>
   );

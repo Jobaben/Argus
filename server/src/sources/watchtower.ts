@@ -227,6 +227,15 @@ const NOUN: Record<AnomalyMetric, string> = {
   tokens: "token use",
 };
 
+/** A low anomaly's multiple, said as a comparison. "4.7× of the median
+ *  duration" read as 4.7 times *longer* when the run took a fifth of the time;
+ *  a comparative word leaves the direction in no doubt. */
+const BELOW: Record<AnomalyMetric, string> = {
+  duration: "shorter than the median duration",
+  cost: "cheaper than the median cost",
+  tokens: "fewer tokens than the median",
+};
+
 /**
  * Judge one observation against an envelope. Exported because the threshold
  * logic is the whole feature: it deserves direct tests, not tests of a route
@@ -260,10 +269,12 @@ function describe(
   base: MetricBaseline,
   ratio: number,
 ): string {
+  // Both directions state a multiple of at least one, so the headline number
+  // always grows with how far out the run is.
   const multiple = direction === "high" ? ratio : 1 / ratio;
-  const word = direction === "high" ? "" : "of the ";
+  const compared = direction === "high" ? `median ${NOUN[metric]}` : BELOW[metric];
   return (
-    `${multiple.toFixed(1)}× ${word}median ${NOUN[metric]} ` +
+    `${multiple.toFixed(1)}× ${compared} ` +
     `(${UNIT[metric](value)} vs ${UNIT[metric](base.median)} over ${base.samples} runs)`
   );
 }

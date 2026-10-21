@@ -33,12 +33,12 @@ function unescapeText(text: string): string {
 }
 
 const HEADING_CLASS: Record<number, string> = {
-  1: "mt-5 mb-2 text-[17px] font-semibold text-ink first:mt-0",
-  2: "mt-5 mb-2 text-[15px] font-semibold text-ink first:mt-0",
-  3: "mt-4 mb-1.5 text-[13.5px] font-semibold text-ink first:mt-0",
-  4: "mt-3 mb-1 text-[12.5px] font-semibold uppercase tracking-[0.04em] text-ink-dim first:mt-0",
-  5: "mt-3 mb-1 text-[12px] font-semibold text-ink-dim first:mt-0",
-  6: "mt-3 mb-1 font-mono text-[10.5px] uppercase tracking-[0.1em] text-ink-faint first:mt-0",
+  1: "mt-6 mb-2.5 text-title font-semibold text-ink first:mt-0",
+  2: "mt-6 mb-2 border-b border-line pb-1.5 text-heading font-semibold text-ink first:mt-0",
+  3: "mt-5 mb-1.5 text-sm font-semibold text-ink first:mt-0",
+  4: "mt-4 mb-1 text-small font-semibold text-ink-dim first:mt-0",
+  5: "mt-3 mb-1 text-caption font-semibold text-ink-dim first:mt-0",
+  6: "eyebrow mt-3 mb-1 first:mt-0",
 };
 
 function renderInline(tokens: Token[] | undefined): ReactNode {
@@ -64,7 +64,7 @@ function inline(token: Token): ReactNode {
       return <del className="text-ink-faint">{renderInline(token.tokens)}</del>;
     case "codespan":
       return (
-        <code className="rounded bg-surface-2 px-1 py-px font-mono text-[0.92em] text-ink">
+        <code className="rounded-md border border-line bg-ground-2/80 px-1 py-px font-mono text-[0.88em] text-ink">
           {(token as Tokens.Codespan).text}
         </code>
       );
@@ -80,7 +80,7 @@ function inline(token: Token): ReactNode {
           title={t.title ?? undefined}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-queue underline decoration-queue/40 underline-offset-2 hover:decoration-queue"
+          className="text-queue underline decoration-queue/40 underline-offset-[3px] transition-colors duration-(--duration-quick) hover:decoration-queue"
         >
           {renderInline(t.tokens)}
         </a>
@@ -122,7 +122,7 @@ function block(token: Token, key: number): ReactNode {
     }
     case "paragraph":
       return (
-        <p key={key} className="my-2 leading-relaxed">
+        <p key={key} className="my-2.5 leading-relaxed">
           {renderInline((token as Tokens.Paragraph).tokens)}
         </p>
       );
@@ -139,7 +139,7 @@ function block(token: Token, key: number): ReactNode {
         <pre
           key={key}
           data-lang={t.lang || undefined}
-          className="my-2 overflow-x-auto rounded-lg bg-black/30 p-3 font-mono text-[11.5px] leading-relaxed text-ink-dim"
+          className="my-3 overflow-x-auto rounded-control border border-line bg-ground-2/80 p-3.5 font-mono text-caption leading-relaxed text-ink-dim"
         >
           <code>{t.text}</code>
         </pre>
@@ -147,7 +147,10 @@ function block(token: Token, key: number): ReactNode {
     }
     case "blockquote":
       return (
-        <blockquote key={key} className="my-2 border-l-2 border-line pl-3 text-ink-dim [&>p]:my-1">
+        <blockquote
+          key={key}
+          className="my-3 border-l-2 border-eye/40 pl-3.5 text-ink-dim [&>p]:my-1"
+        >
           {renderBlocks((token as Tokens.Blockquote).tokens)}
         </blockquote>
       );
@@ -185,13 +188,13 @@ function block(token: Token, key: number): ReactNode {
         a === "center" ? "text-center" : a === "right" ? "text-right" : "text-left";
       return (
         <div key={key} className="my-2 overflow-x-auto">
-          <table className="w-full border-collapse text-[12px]">
+          <table className="w-full border-collapse text-caption">
             <thead>
               <tr>
                 {t.header.map((cell, i) => (
                   <th
                     key={i}
-                    className={`border-b border-line px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint ${alignClass(cell.align)}`}
+                    className={`eyebrow border-b border-line-strong px-2.5 py-1.5 ${alignClass(cell.align)}`}
                   >
                     {renderInline(cell.tokens)}
                   </th>
@@ -202,7 +205,7 @@ function block(token: Token, key: number): ReactNode {
               {t.rows.map((row, r) => (
                 <tr key={r} className="border-b border-line/50 last:border-0">
                   {row.map((cell, c) => (
-                    <td key={c} className={`px-2 py-1 align-top ${alignClass(cell.align)}`}>
+                    <td key={c} className={`px-2.5 py-1.5 align-top ${alignClass(cell.align)}`}>
                       {renderInline(cell.tokens)}
                     </td>
                   ))}
@@ -221,7 +224,7 @@ function block(token: Token, key: number): ReactNode {
         <pre
           key={key}
           data-testid="md-raw-html"
-          className="my-2 overflow-x-auto rounded-lg border border-dashed border-line p-2 font-mono text-[11px] text-ink-faint"
+          className="my-2 overflow-x-auto rounded-control border border-dashed border-line p-2.5 font-mono text-caption text-ink-faint"
         >
           {(token as Tokens.HTML).text.trimEnd()}
         </pre>
@@ -230,7 +233,7 @@ function block(token: Token, key: number): ReactNode {
       return null;
     default:
       return (
-        <p key={key} className="my-2 leading-relaxed">
+        <p key={key} className="my-2.5 leading-relaxed">
           {"raw" in token ? (token as { raw: string }).raw : null}
         </p>
       );
@@ -245,7 +248,7 @@ function renderBlocks(tokens: Token[] | undefined): ReactNode {
 export function Markdown({ source, className = "" }: { source: string; className?: string }) {
   const tokens = useMemo(() => marked.lexer(source, { gfm: true }), [source]);
   return (
-    <div data-testid="markdown" className={`text-[12.5px] text-ink-dim ${className}`}>
+    <div data-testid="markdown" className={`text-small leading-relaxed text-ink-dim ${className}`}>
       {renderBlocks(tokens)}
     </div>
   );

@@ -1,4 +1,5 @@
 import type { Trigger } from "../types";
+import { CLOCK_TICK_MS } from "./clock";
 
 export function formatDuration(ms: number): string {
   if (ms <= 0) return "now";
@@ -344,6 +345,12 @@ export function formatCountdown(ms: number): string {
  * "next expected", and treating every instant as past turned a monitor's next
  * slot into `-7138s ago` — a number that looks like corruption and taught the
  * reader to distrust the row.
+ *
+ * "Just now" reaches further forward than back. `now` is usually the shared
+ * clock, which trails the wall clock by up to one tick, so anything stamped
+ * since its last tick is up to a tick *ahead* of it: a notification that had
+ * just arrived read "in 13s", as if it were still to come. A server clock a
+ * few seconds fast lands in the same margin.
  */
 export function formatRelativeTime(
   iso: string | null | undefined,
@@ -353,7 +360,7 @@ export function formatRelativeTime(
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return "—";
   const delta = then - now;
-  if (Math.abs(delta) < 10_000) return "just now";
+  if (delta > -10_000 && delta < CLOCK_TICK_MS) return "just now";
   return delta > 0 ? `in ${coarseDuration(delta)}` : `${coarseDuration(-delta)} ago`;
 }
 

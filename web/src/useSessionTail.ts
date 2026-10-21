@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { subscribeLive } from "./live/liveSocket";
 import { mergeTail } from "./live/mergeTail";
+import { fetchLoad, statusOf } from "./live/loadError";
 import type { SessionMessage, SessionTail } from "@argus/contracts";
 
 /** The transcript metadata a tail response carries, without the message delta. */
@@ -16,7 +17,11 @@ export interface SessionTailState {
   following: boolean;
   setFollowing: (v: boolean) => void;
   loading: boolean;
+  /** Worded as `useLiveResource` words it: the server's reason, or unreachable. */
   error: string | null;
+  /** The HTTP status of that failure, null when no answer came back. A 404 is
+   *  a transcript that is not on disk — an answer, not a failed load. */
+  errorStatus: number | null;
   live: boolean;
 }
 
@@ -32,7 +37,7 @@ export function useSessionTail(project: string | null, id: string | null): Sessi
   const [header, setHeader] = useState<SessionTailHeader | null>(null);
   const [following, setFollowing] = useState(true);
   const [loading, setLoading] = useState(project != null && id != null);
-  const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<{ error: string; status: number | null } | null>(null);
   const [live, setLive] = useState(false);
   const lastIndexRef = useRef(-1);
   const mounted = useRef(true);
@@ -49,17 +54,16 @@ export function useSessionTail(project: string | null, id: string | null): Sessi
       `/api/sessions/${encodeURIComponent(project)}/${encodeURIComponent(id)}` +
       `/tail?after=${lastIndexRef.current}`;
     try {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await fetchLoad(url);
       const { messages: incoming, lastIndex, ...rest } = (await res.json()) as SessionTail;
       if (!mounted.current || epoch !== epochRef.current) return;
       setHeader(rest);
       if (typeof lastIndex === "number") lastIndexRef.current = lastIndex;
       setMessages((prev) => mergeTail(prev, incoming ?? []));
-      setError(null);
+      setFailure(null);
     } catch (e) {
       if (mounted.current && epoch === epochRef.current) {
-        setError(e instanceof Error ? e.message : String(e));
+        setFailure({ error: e instanceof Error ? e.message : String(e), status: statusOf(e) });
       }
     } finally {
       if (mounted.current && epoch === epochRef.current) setLoading(false);
@@ -126,5 +130,14 @@ export function useSessionTail(project: string | null, id: string | null): Sessi
     };
   }, [project, id, following, fetchTail]);
 
-  return { header, messages, following, setFollowing, loading, error, live };
+  return {
+    header,
+    messages,
+    following,
+    setFollowing,
+    loading,
+    error: failure?.error ?? null,
+    errorStatus: failure?.status ?? null,
+    live,
+  };
 }

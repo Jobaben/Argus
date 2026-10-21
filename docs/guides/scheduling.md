@@ -41,7 +41,7 @@ nothing recurs.
 
 - **Prompt** (the field is labelled with the runtime you picked — `claude -p`,
   `codex exec`, `opencode run` or `qwen`) and a **working directory** (absolute path,
-  must exist) — the only two required fields; **▶ Launch** stays disabled
+  must exist) — the only two required fields; **Launch** stays disabled
   until both are filled.
 - **Name** (optional) — how the run is titled everywhere; left empty it
   defaults to the prompt's first line (ellipsized at 60 chars).
@@ -73,7 +73,7 @@ run bucket (pruned to the same 50-run window a schedule gets), appear as a
 single **"One-off runs"** lane in the [Chronicle](monitoring.md#chronicle), a failed
 launch groups into [Issues](health-and-quality.md#issues) and lands in the
 [Briefing](monitoring.md#briefing)'s failure digest, and reported cost counts toward the
-[Budget](budget-and-history.md#budget) and the Command Center's total spend. They never touch
+[Budget](budget-and-history.md#budget) and the Command Center's all-time total. They never touch
 [Monitors](health-and-quality.md#monitors) — there is no expected slot for a one-off.
 
 **Where the data comes from:** `POST /api/launch` (`202` with the run
@@ -91,7 +91,7 @@ audits, periodic report generators, cleanup jobs — then watch their run
 history and logs without leaving the page. Two sub-tabs: **Schedules** (this
 section) and **One-off** (see [One-off runs](#one-off-runs)).
 
-**Creating a schedule** — click **+ New schedule**:
+**Creating a schedule** — click **New schedule**:
 
 ![New schedule form](../screenshots/scheduler-form.png)
 
@@ -100,8 +100,9 @@ section) and **One-off** (see [One-off runs](#one-off-runs)).
   the runtime the schedule will use.
 - **Runtime** — Claude Code, Codex, OpenCode, Qwen Code, or the server default.
 - **Working directory** — absolute path the agent runs in.
-- **Trigger** — one of: **every N minutes** (interval), **daily at HH:MM**,
-  **weekly on a day at HH:MM**, **Webhook**, or **After pipeline** (see below). Windowed triggers are available to pipelines, not schedules.
+- **Trigger** — one of: **On an interval** (every N minutes), **Daily** (at
+  HH:MM), **Weekly** (a day at HH:MM), **On a webhook call**, or **After a
+  pipeline** (see below). Windowed triggers are available to pipelines, not schedules.
   Overlap policy defaults to _skip if still running_.
 - **Catch up a missed run on recovery** — off by default. Normally a slot
   only fires within a short grace window (a few minutes), so if the machine
@@ -120,9 +121,10 @@ Pipelines (see [§8](pipelines.md#pipelines)):
 
 - **Webhook** — this schedule fires when something else `POST`s to a URL
   Argus mints for it, not on any clock. Once saved, the trigger editor shows
-  the hook's **URL** and **token** (each with a Copy button) and a **Rotate**
-  action that invalidates the old token immediately — use it if the token
-  ever leaks. The sender authenticates with `Authorization: Bearer <token>`;
+  the hook's **URL** and **token** (each with a Copy button) and **Rotate
+  token**, which invalidates the old token immediately — use it if the token
+  ever leaks. It asks first, in place: **Rotate now** or **Keep token**. The
+  sender authenticates with `Authorization: Bearer <token>`;
   reaching the hook from another machine needs the same non-default
   `ARGUS_HOST`/`ARGUS_TOKEN` setup any remote access to Argus needs (see
   [the API reference](../API.md#security)) — the hook's own token is a separate
@@ -151,15 +153,16 @@ those schedules, press it again (or **Show all**) to go back. A count with
 nothing behind it is not shown at all, so anything visible there is worth
 reading.
 
-**What each schedule card shows:** a state badge — **failing**, **running**,
-**paused**, **healthy** or **never run** — then the humanised trigger ("every
+**What each schedule card shows:** a state badge — **Failing**, **Working**,
+**Paused**, **Healthy** or **Never run** — then the humanised trigger ("every
 6h", "daily at 02:30"), a countdown to the next firing, when it last ran, the
 median duration of the runs listed below, and a **catch-up** chip when
 missed-run recovery is on. Below that the working directory, and the **last five
 runs** — status pill, relative start time (hover for the exact instant),
 duration, cost and tokens if reported, and a `manual`/`webhook`/`chained` tag
 naming how the run was fired (nothing shown for an ordinary scheduled firing)
-— with a `3/5 passed` ratio beside them.
+— with a `3/5 passed` ratio beside them. A firing skipped by the overlap
+policy or the budget's hard stop shows a **Skipped** pill.
 
 A schedule that has failed **more than once in a row** says so in a red band,
 with the first line of the most recent error, because one failure is already
@@ -168,11 +171,16 @@ schedule says "will not fire" rather than showing a countdown to a slot it will
 ignore, and one with no history at all explains how to test it without waiting
 for a slot.
 
-**What you can do:**
+**What you can do** — from the card's footer, laid out like a pipeline card's:
+**Run now** and **Edit** first, **Disable**/**Enable** and **Delete** at the far
+end. An action the server refuses says why on its own line under the buttons
+(_Couldn't complete that: …_).
 
 - **Run now** — fire immediately, regardless of the trigger.
 - **Enable / Disable** — pause the trigger without deleting anything.
-- **Edit** / **Delete** (with confirm).
+- **Edit** / **Delete**. Delete asks first, on a line of its own under the
+  buttons: **Delete schedule** or **Keep**, with focus on **Keep** so Escape
+  or a stray Enter deletes nothing.
 - **Expand a run** to see its error or result summary, a link to the full
   **transcript** in Sessions, and a **live-tailing log** (refreshes every 3s
   while running). A running run has a **Cancel** button.

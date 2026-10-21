@@ -31,7 +31,10 @@ export function toDsStatus(s: AgentStatus): DsStatus {
     case "queued":
     case "idle":
       return s;
+    // Stopped mid-work, which "Idle" denied: it said the job never started.
+    // Same grey either way; only the word changes.
     case "stopped":
+      return "stopped";
     case "unknown":
       return "idle";
   }
@@ -45,12 +48,14 @@ export function runStatusToDsStatus(s: RunStatus): DsStatus {
       return "done";
     case "failed":
       return "failed";
+    // The quiet colour; `runStatusLabel` says "Skipped" in words.
     case "skipped":
       return "idle";
+    // Stopped short of an outcome. "Idle" said the run never did anything,
+    // which a cancelled or interrupted run did; the colour is the same grey.
     case "interrupted":
-      return "idle";
     case "cancelled":
-      return "idle";
+      return "stopped";
   }
 }
 
@@ -63,4 +68,13 @@ export function runDsStatus(run: {
 }): DsStatus {
   if (run.outcome === "failed" || run.outcome === "blocked") return "failed";
   return runStatusToDsStatus(run.status);
+}
+
+/**
+ * A run's status in words. A firing skipped by its overlap policy borrows the
+ * idle colour, but "Idle" would say it is about to run, which it never will.
+ */
+export function runStatusLabel(run: Parameters<typeof runDsStatus>[0]): string {
+  const ds = runDsStatus(run);
+  return run.status === "skipped" && ds === "idle" ? "Skipped" : STATUS[ds].label;
 }

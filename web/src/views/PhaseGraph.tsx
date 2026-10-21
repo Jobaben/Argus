@@ -1,7 +1,7 @@
-import { useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useState, type HTMLAttributes } from "react";
 import type { DsStatus, PhasePill } from "../ds";
-import { DURATION, STATUS, useSyncedDelay } from "../ds";
-import { fadeEdges, runwayFor } from "./graphFocus";
+import { Button, DURATION, STATUS, useSyncedDelay } from "../ds";
+import { fadeEdges, overflows, runwayFor } from "./graphFocus";
 import {
   LANE_GEOMETRY,
   MAX_TILE_HEIGHT_PX,
@@ -10,6 +10,7 @@ import {
   type LaneLayout,
 } from "./laneGraphLayout";
 import { useGraphFocus } from "./useGraphFocus";
+import { reasonText } from "./text";
 import { useElementWidth } from "./useLaneLayout";
 
 /**
@@ -24,7 +25,7 @@ import { useElementWidth } from "./useLaneLayout";
  * Geometry comes from the pure layout; this component paints it inside a
  * bounded viewport. Whatever the shape, the graph never sizes its container:
  * it is scaled to fit down to {@link MIN_SCALE}, scrolls beyond that, keeps the
- * phase the run is on centred, and fades the edges that have more beyond them.
+ * phase the run is on in view, and fades the edges that have more beyond them.
  */
 
 const PHASE_DOT: Record<DsStatus, string> = {
@@ -54,6 +55,27 @@ const LABEL: Record<EdgeState, string> = {
   skipped: "border-line text-ink-faint opacity-60",
 };
 
+/**
+ * A route's condition as a chip, tinted by whether the edge it governs ran.
+ * The graph draws it on the edge; the focus panel's "from" and "to" lines draw
+ * the same one, so a condition looks like itself wherever it appears.
+ */
+export function RouteCondition({
+  state,
+  hot = false,
+  className = "",
+  ...rest
+}: { state: EdgeState; hot?: boolean } & HTMLAttributes<HTMLSpanElement>) {
+  return (
+    <span
+      {...rest}
+      className={`rounded-md border bg-surface-2 px-1.5 text-micro ${
+        hot ? "border-ink-faint text-ink" : LABEL[state]
+      } ${className}`}
+    />
+  );
+}
+
 /** Best-of-N in the space a phase pill has: "2/3 verified · c2 selected". */
 function candidateNote(c: NonNullable<PhasePill["candidates"]>): string {
   const verified = `${c.verified}/${c.total} verified`;
@@ -70,7 +92,8 @@ function chipTitle(pill: PhasePill, index: number, needNames: string[]): string 
   if ((pill.attempt ?? 0) > 0) bits.push(`attempt ${pill.attempt + 1}`);
   if (pill.retryAt && pill.status === "failed") bits.push("retry queued");
   if (pill.candidates) bits.push(candidateNote(pill.candidates));
-  if (pill.reason) bits.push(pill.reason.split("\n")[0]);
+  // Without the "failed:" the scheduler stores it with: the line already says so.
+  if (pill.reason) bits.push(reasonText(pill.reason.split("\n")[0]));
   if (pill.skipCause) bits.push(`not selected — ${pill.skipCause.source}: ${pill.skipCause.label}`);
   for (const edge of pill.edges ?? []) {
     if (edge.conditional) bits.push(`only if ${edge.phase}: ${edge.label}`);
@@ -109,13 +132,17 @@ function PhaseNode({
   const skipped = pill.skipped === true;
   // Same beat as every other pulsing surface on the board.
   const beat = useSyncedDelay(DURATION.pulse);
-  // Tinted borders only for the states that demand attention while unselected.
+  // Tinted borders for the states that demand attention while unselected, and
+  // for work in flight — a running node used to look exactly like an idle one,
+  // which on a long chain made "where is it now?" a hunt for a 6px dot.
   const border =
     pill.status === "failed"
-      ? "border-fail/40 bg-surface hover:bg-surface-2"
+      ? "border-fail/45 bg-fail/[0.07] hover:bg-fail/[0.12]"
       : pill.status === "await"
-        ? "border-await/40 bg-surface hover:bg-surface-2"
-        : "border-line bg-surface hover:border-ink-faint/60 hover:bg-surface-2";
+        ? "border-await/50 bg-await/[0.08] hover:bg-await/[0.13]"
+        : pill.status === "working"
+          ? "border-run/40 bg-surface hover:bg-surface-2"
+          : "border-line bg-surface hover:border-line-strong hover:bg-surface-2";
   return (
     <button
       type="button"
@@ -125,8 +152,22 @@ function PhaseNode({
       data-lane={lane}
       title={chipTitle(pill, index, needNames)}
       style={{ left: x, top: y, width, height }}
-      className={`absolute flex min-w-0 items-center gap-1.5 rounded-md border px-2 text-left transition-[border-color,background-color] duration-(--duration-quick) ${
-        selected ? "border-ink-faint bg-surface-2" : border
+      // Selected is an outer ring in the eye's colour, not one more shade of
+      // border: it must read at a glance next to a hovered node, which the old
+      // `border-ink-faint` did not. It goes *around* the status tint rather
+      // than replacing it — focus follows attention, so the selected node is
+      // usually the waiting gate or the failure, and painting it the same
+      // cyan as any clicked node hid exactly the status it was selected for.
+      // Focus on the selected node rings outside its selection ring: the
+      // usual 2px offset landed exactly on it, so focusing only brightened it.
+      className={`absolute flex min-w-0 items-center gap-1.5 rounded-md border px-2 text-left transition-[border-color,background-color,box-shadow] duration-(--duration-quick) ${border} ${
+        selected
+          ? `shadow-[0_0_0_2px_var(--color-ground-2),0_0_0_4px_rgb(54_227_232/0.55)] focus-visible:outline-offset-[6px] ${
+              pill.status === "failed" || pill.status === "await" || pill.status === "working"
+                ? ""
+                : "!border-line-strong !bg-surface-2"
+            }`
+          : ""
       }`}
     >
       {/* Hollow, not dim: a skipped phase is terminal, and an outline reads as
@@ -138,12 +179,12 @@ function PhaseNode({
           skipped ? "border border-ink-faint" : PHASE_DOT[pill.status]
         } ${live ? "motion-safe:animate-[pulse_var(--duration-pulse)_ease-in-out_infinite]" : ""}`}
       />
-      <span className="shrink-0 font-mono text-[9px] text-ink-faint">
+      <span className="shrink-0 font-mono text-micro leading-none text-ink-faint">
         {String(index + 1).padStart(2, "0")}
       </span>
       <span
         data-full-name={pill.name}
-        className={`min-w-0 flex-1 truncate text-[11px] font-semibold ${
+        className={`min-w-0 flex-1 truncate text-caption font-semibold ${
           skipped
             ? "text-ink-faint line-through decoration-line"
             : selected
@@ -153,27 +194,19 @@ function PhaseNode({
       >
         {pill.name}
       </span>
-      {skipped && (
-        <span className="shrink-0 font-mono text-[8px] font-bold uppercase tracking-[0.1em] text-ink-faint">
-          skip
-        </span>
-      )}
+      {skipped && <span className={MARKER}>Skipped</span>}
+      {/* Violet only on the gate someone is waiting at: on a gate nobody has
+          reached yet it is a category, and the waiting colour is not one. */}
       {pill.gated && (
-        <span className="shrink-0 font-mono text-[8px] font-bold uppercase tracking-[0.1em] text-await">
-          gate
-        </span>
+        <span className={`${MARKER} ${pill.status === "await" ? "!text-await" : ""}`}>Gate</span>
       )}
-      {(pill.attempt ?? 0) > 0 && (
-        <span className="shrink-0 font-mono text-[8px] uppercase tracking-[0.1em] text-ink-faint">
-          try {pill.attempt + 1}
-        </span>
-      )}
+      {(pill.attempt ?? 0) > 0 && <span className={MARKER}>Try {pill.attempt + 1}</span>}
       {/* Best-of-N replaces the step dots: N dots would all be the same step,
           and what a reader wants is how many of the drafts survived. */}
       {pill.candidates && (
         <span
           data-testid="candidate-summary"
-          className="shrink-0 whitespace-nowrap font-mono text-[8.5px] tracking-[0.02em] text-ink-faint"
+          className="shrink-0 whitespace-nowrap text-micro text-ink-faint"
         >
           {candidateNote(pill.candidates)}
         </span>
@@ -189,7 +222,7 @@ function PhaseNode({
             ))}
           </span>
         ) : (
-          <span className="shrink-0 font-mono text-[9px] text-ink-faint">
+          <span className="shrink-0 text-micro text-ink-faint">
             {pill.steps.filter((s) => s.status === "done").length}/{pill.steps.length}
           </span>
         ))}
@@ -198,8 +231,8 @@ function PhaseNode({
 }
 
 /** Edge fade written straight to the element, so scrolling never re-renders. */
-function applyFade(el: HTMLElement) {
-  const f = fadeEdges(el);
+function applyFade(el: HTMLElement, runway: { x: number; y: number }) {
+  const f = fadeEdges(el, runway);
   el.style.setProperty("--fade-t", `${f.top}px`);
   el.style.setProperty("--fade-r", `${f.right}px`);
   el.style.setProperty("--fade-b", `${f.bottom}px`);
@@ -223,8 +256,8 @@ const SCROLL_KEYS = new Set([
   " ",
 ]);
 
-const CONTROL =
-  "rounded border border-line bg-surface-2/90 px-1.5 font-mono text-[9px] uppercase leading-[18px] tracking-[0.1em] text-ink-dim hover:border-ink-faint hover:text-ink";
+/** A node's small word — "Gate", "Skipped", "Try 2": readable, not shouted. */
+const MARKER = "shrink-0 text-micro font-semibold leading-none text-ink-faint";
 
 function terminatorPath(
   n: { x: number; y: number },
@@ -270,6 +303,10 @@ export function PhaseGraph({
     x: runwayFor(scaledW, viewportW, pad),
     y: runwayFor(scaledH, MAX_TILE_HEIGHT_PX, pad),
   };
+  // Whether the graph scrolls, from geometry alone, so the toolbar is settled
+  // before any input.
+  const scrolls =
+    viewportW > 0 && (overflows(scaledW, viewportW) || overflows(scaledH, MAX_TILE_HEIGHT_PX));
   const { following, pause, resume, centreOn } = useGraphFocus(
     scrollerRef,
     phases,
@@ -281,30 +318,77 @@ export function PhaseGraph({
   useLayoutEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
-    applyFade(el);
+    const empty = { x: runway.x, y: runway.y };
+    applyFade(el, empty);
     if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => applyFade(el));
+    const ro = new ResizeObserver(() => applyFade(el, empty));
     ro.observe(el);
     return () => ro.disconnect();
-  }, [scrollerRef, scaledW, scaledH]);
+  }, [scrollerRef, scaledW, scaledH, runway.x, runway.y]);
 
   const hot = (e: { from: string; to: string }) =>
     selectedId !== null && (e.from === selectedId || e.to === selectedId);
   // Incident edges paint last so they sit over their neighbours.
   const edges = [...layout.edges].sort((a, b) => Number(hot(a)) - Number(hot(b)));
 
+  // The view controls get a row of their own above the graph. Floated over
+  // it, they covered nodes — on a fitted fan-out, the right third of the very
+  // node the board had selected. The row is there whenever the graph scrolls or
+  // can zoom, which depends on the geometry and not on what the user does, so
+  // following and pausing never move the graph under the pointer. Follow goes
+  // with scrolling alone: in a graph that fits there is nothing to follow, and
+  // a Follow left over from a scrolled view vanished from under the press
+  // that switched it back on.
+  const toolbar = fitScale < 1 || scrolls;
+
   return (
     <div
       data-orientation={layout.orientation}
-      className="relative w-full min-w-0 max-w-full rounded-tile border border-line/80 bg-ground-2/70"
+      className="relative w-full min-w-0 max-w-full rounded-tile border border-line bg-ground-2/70 shadow-[inset_0_1px_3px_rgb(0_0_0/0.25)]"
     >
+      {toolbar && (
+        <div className="flex items-center justify-end gap-1 border-b border-line/70 px-1 py-1">
+          {scrolls && (
+            // A toggle rather than a button that appears once the view is
+            // taken over: pressed, the graph keeps the phase the run is on in
+            // view by itself, which is worth knowing when it moves unasked.
+            <Button
+              variant="ghost"
+              size="sm"
+              icon="eye"
+              data-testid="graph-follow"
+              aria-pressed={following}
+              title={
+                following
+                  ? "Keeping the phase the run is on in view. Press to stop following"
+                  : "Bring the phase the run is on into view, and keep following it"
+              }
+              onClick={following ? pause : resume}
+              className="aria-pressed:bg-eye/10 aria-pressed:text-eye"
+            >
+              Follow
+            </Button>
+          )}
+          {fitScale < 1 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid="graph-zoom"
+              title={zoom === "fit" ? "Show the graph at full size" : "Fit the graph to the tile"}
+              onClick={() => setZoom((z) => (z === "fit" ? "actual" : "fit"))}
+            >
+              {zoom === "fit" ? "Full size" : "Fit"}
+            </Button>
+          )}
+        </div>
+      )}
       <div
         ref={scrollerRef}
         role="group"
         aria-label="Phases"
         data-testid="phase-graph"
         data-following={following ? "true" : "false"}
-        onScroll={(e) => applyFade(e.currentTarget)}
+        onScroll={(e) => applyFade(e.currentTarget, runway)}
         onWheel={pause}
         onTouchStart={pause}
         onPointerDown={(e) => {
@@ -410,44 +494,19 @@ export function PhaseGraph({
             {layout.edges
               .filter((e) => e.label)
               .map((e) => (
-                <span
+                <RouteCondition
                   key={`label-${e.from}>${e.to}`}
                   data-testid="route-label"
+                  state={e.state}
+                  hot={hot(e)}
                   style={{ left: e.label!.x, top: e.label!.y }}
-                  className={`absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded border bg-surface-2 px-[5px] font-mono text-[8.5px] leading-[14px] ${
-                    hot(e) ? "border-ink-faint text-ink" : LABEL[e.state]
-                  }`}
+                  className="absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap leading-[14px]"
                 >
                   {e.label!.text}
-                </span>
+                </RouteCondition>
               ))}
           </div>
         </div>
-      </div>
-      {/* Outside the scroller, so they stay put and never fade. */}
-      <div className="absolute right-1.5 top-1.5 flex gap-1">
-        {!following && (
-          <button
-            type="button"
-            data-testid="graph-follow"
-            title="Centre the phase the run is on, and keep following it"
-            onClick={resume}
-            className={CONTROL}
-          >
-            Follow
-          </button>
-        )}
-        {fitScale < 1 && (
-          <button
-            type="button"
-            data-testid="graph-zoom"
-            title={zoom === "fit" ? "Show at full size" : "Fit the graph to the tile"}
-            onClick={() => setZoom((z) => (z === "fit" ? "actual" : "fit"))}
-            className={CONTROL}
-          >
-            {zoom === "fit" ? "1:1" : "Fit"}
-          </button>
-        )}
       </div>
     </div>
   );

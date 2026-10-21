@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useOmnibar } from "../useOmnibar";
 import type { ExecuteStatus, PlannedMutation } from "../types";
+import { Button, Icon } from "../ds";
 
 /**
  * Intent mode: the panel that replaces the command list once you have typed a
@@ -23,12 +24,10 @@ const STATUS_TONE: Record<ExecuteStatus, string> = {
 
 function MutationRow({ mutation }: { mutation: PlannedMutation }) {
   return (
-    <li className="flex flex-wrap items-baseline gap-x-2 border-t border-line px-3 py-2 first:border-t-0">
-      <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
-        {mutation.kind.replace(".", " ")}
-      </span>
+    <li className="flex flex-wrap items-baseline gap-x-2.5 border-t border-line px-3.5 py-2.5 first:border-t-0">
+      <span className="eyebrow">{mutation.kind.replace(".", " ")}</span>
       <span className="min-w-0 flex-1 truncate text-sm text-ink">{mutation.targetLabel}</span>
-      <span className="shrink-0 font-mono text-[11px] text-ink-faint">
+      <span className="shrink-0 font-mono text-caption text-ink-faint">
         {mutation.before} <span aria-hidden="true">→</span>{" "}
         <span className="text-ink-dim">{mutation.after}</span>
       </span>
@@ -59,8 +58,9 @@ export function OmnibarIntent({ intent, onClose }: { intent: string; onClose: ()
   const busy = phase === "planning" || phase === "executing";
 
   return (
-    <div className="max-h-[60vh] overflow-y-auto p-3" aria-busy={busy}>
-      <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-ink-faint">
+    <div className="max-h-[60vh] overflow-y-auto p-4" aria-busy={busy}>
+      <p className="eyebrow mb-2.5 flex items-center gap-1.5">
+        <Icon name="sparkle" size={13} className="text-eye" />
         {phase === "planning"
           ? "Working out what that means…"
           : phase === "answered"
@@ -79,7 +79,7 @@ export function OmnibarIntent({ intent, onClose }: { intent: string; onClose: ()
         )}
 
         {error && (
-          <p role="alert" className="px-1 text-sm text-fail">
+          <p role="alert" className="px-1 text-sm text-fail-ink">
             {error}
           </p>
         )}
@@ -94,7 +94,7 @@ export function OmnibarIntent({ intent, onClose }: { intent: string; onClose: ()
                     key={link.href}
                     href={link.href}
                     onClick={onClose}
-                    className="rounded-md border border-line px-2 py-1 font-mono text-[11px] text-eye hover:border-eye/50"
+                    className="inline-flex h-7 items-center gap-1 rounded-control border border-line-strong bg-surface-3/60 px-2.5 text-caption font-semibold text-ink transition duration-(--duration-quick) hover:border-eye/50"
                   >
                     {link.label}
                   </a>
@@ -110,7 +110,7 @@ export function OmnibarIntent({ intent, onClose }: { intent: string; onClose: ()
               {result.summary}
             </p>
             {result.error && (
-              <p className="mt-1 font-mono text-[11px] text-ink-faint">{result.error}</p>
+              <p className="mt-1 font-mono text-caption text-ink-faint">{result.error}</p>
             )}
           </div>
         )}
@@ -121,13 +121,13 @@ export function OmnibarIntent({ intent, onClose }: { intent: string; onClose: ()
           <p className="mb-2 px-1 text-sm text-ink">{plan.summary}</p>
 
           {plan.mutations.length > 0 ? (
-            <ul className="overflow-hidden rounded-tile border border-line bg-ground-2">
+            <ul className="overflow-hidden rounded-tile border border-line bg-ground-2/80">
               {plan.mutations.map((m) => (
                 <MutationRow key={`${m.kind}:${m.targetId}`} mutation={m} />
               ))}
             </ul>
           ) : (
-            <p className="px-1 text-xs text-ink-faint">
+            <p className="px-1 text-caption text-ink-faint">
               {plan.status === "unavailable"
                 ? "No changes were proposed."
                 : "Nothing would change, so there is nothing to confirm."}
@@ -137,35 +137,32 @@ export function OmnibarIntent({ intent, onClose }: { intent: string; onClose: ()
           {plan.warnings.length > 0 && (
             <ul className="mt-2 space-y-1 px-1">
               {plan.warnings.map((w) => (
-                <li key={w} className="font-mono text-[11px] text-await">
-                  • {w}
+                <li key={w} className="flex items-start gap-1.5 text-caption text-await-ink">
+                  <Icon name="alert" size={13} className="mt-px text-await" />
+                  {w}
                 </li>
               ))}
             </ul>
           )}
 
-          <div className="mt-3 flex items-center gap-2 px-1">
+          <div className="mt-4 flex flex-wrap items-center gap-2 px-1">
             {plan.mutations.length > 0 && (
-              <button
+              <Button
                 ref={confirmRef}
-                type="button"
+                variant="primary"
+                icon="check"
                 disabled={phase === "executing"}
                 onClick={() => void confirm(plan.id)}
-                className="rounded-md border border-eye/40 bg-eye/10 px-3 py-1.5 font-mono text-[11px] font-bold uppercase tracking-[0.1em] text-eye transition hover:bg-eye/20 disabled:opacity-50"
               >
                 {phase === "executing"
                   ? "Applying…"
                   : `Apply ${plan.mutations.length} change${plan.mutations.length === 1 ? "" : "s"}`}
-              </button>
+              </Button>
             )}
-            <button
-              type="button"
-              onClick={onClose}
-              className="font-mono text-[11px] uppercase tracking-[0.1em] text-ink-faint hover:text-ink"
-            >
+            <Button variant="ghost" onClick={onClose}>
               Cancel
-            </button>
-            <span className="ml-auto font-mono text-[10px] text-ink-faint">
+            </Button>
+            <span className="ml-auto text-caption text-ink-faint">
               Argus applies all of it or none of it
             </span>
           </div>
@@ -174,13 +171,7 @@ export function OmnibarIntent({ intent, onClose }: { intent: string; onClose: ()
 
       {phase === "done" && (
         <div className="mt-3 px-1">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.1em] text-ink-dim hover:text-ink"
-          >
-            Close
-          </button>
+          <Button onClick={onClose}>Close</Button>
         </div>
       )}
     </div>

@@ -1,24 +1,26 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useAgents } from "./useAgents";
-import type { Agent, AgentStatus } from "./types";
 import { flushSync } from "react-dom";
 import {
-  AgentTile,
-  EmptyState,
   ErrorBoundary,
-  Handoff,
-  HealthCounter,
+  IrisMark,
   Loading,
   Page,
   routeDirection,
   setRouteDirection,
   SkeletonGrid,
-  staggerDelay,
   startViewTransition,
   supportsViewTransitions,
   ToastRegion,
-  transitionName,
-  useFlip,
 } from "./ds";
 import type { RouteDirection, RouteRole } from "./ds";
 import { useAgentNotifications } from "./notify/useAgentNotifications";
@@ -63,6 +65,7 @@ const DecisionExperiments = lazy(() => import("./views/DecisionExperiments"));
 const KnowledgeView = lazy(() => import("./views/knowledge/KnowledgeView"));
 const Sessions = lazy(() => import("./views/Sessions"));
 const AgentDetail = lazy(() => import("./views/AgentDetail"));
+const AgentsView = lazy(() => import("./views/Agents"));
 const FlightRecorder = lazy(() => import("./views/FlightRecorder"));
 import { useBriefing } from "./useBriefing";
 import { useAuth } from "./useAuth";
@@ -70,87 +73,20 @@ import { applyLegacyRedirect, legacyRedirect } from "./legacyRoutes";
 const AdminAuthPanel = lazy(() =>
   import("./views/AdminAuthPanel").then((m) => ({ default: m.AdminAuthPanel })),
 );
-import {
-  CommandPalette,
-  NAV_CHORDS,
-  ShortcutHelp,
-  useGlobalKeys,
-  usePalette,
-  usePaletteState,
-  useShellBindings,
-} from "./cmd";
+import { NAV_CHORDS, useGlobalKeys, usePaletteState, useShellBindings } from "./cmd";
 
-function AgentsView({
-  agents,
-  loading,
-  error,
-}: {
-  agents: Agent[];
-  loading: boolean;
-  error: string | null;
-}) {
-  // The fleet re-sorts as agents change status; FLIP glides the tiles to their
-  // new places instead of teleporting them.
-  const flip = useFlip();
-  const stats = useMemo(() => {
-    const by = (s: AgentStatus) => agents.filter((a) => a.status === s).length;
-    return {
-      total: agents.length,
-      live: agents.filter((a) => a.live).length,
-      working: by("working"),
-      failed: by("failed"),
-    };
-  }, [agents]);
-
-  return (
-    <Page title="Agents" crumbs={[{ label: "Command Center", href: "#/command" }]}>
-      <section className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <HealthCounter label="Agents" value={stats.total} />
-        <HealthCounter label="Live" value={stats.live} tone="live" />
-        <HealthCounter label="Working" value={stats.working} tone="run" />
-        <HealthCounter label="Failed" value={stats.failed} tone="fail" />
-      </section>
-
-      {error && (
-        <div className="mb-6 rounded-tile border border-fail/30 bg-fail/10 px-4 py-3 text-sm text-fail">
-          Couldn't reach the Argus server: {error}
-        </div>
-      )}
-
-      <Handoff
-        busy={loading}
-        label="agents"
-        skeleton={<SkeletonGrid count={4} columns={2} lines={2} />}
-      >
-        {agents.length === 0 ? (
-          <EmptyState>No background agents found yet. Launch one and it'll appear here.</EmptyState>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {agents.map((a, i) => (
-              <a
-                key={a.short}
-                href={`#/agent/${encodeURIComponent(a.short)}`}
-                ref={flip(a.short)}
-                // The tile and the detail page's header share a transition name, so
-                // where the browser supports it the tile you clicked visibly
-                // *becomes* the page you land on — the strongest available answer to
-                // "where did this come from". Only one element carries any given
-                // name at a time, which is what makes the pairing legal.
-                style={{
-                  animationDelay: staggerDelay(i),
-                  viewTransitionName: transitionName("agent", a.short),
-                }}
-                className="block rounded-tile transition-transform duration-(--duration-quick) hover:-translate-y-0.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both] motion-safe:active:translate-y-0 motion-safe:active:scale-[0.99]"
-              >
-                <AgentTile agent={a} />
-              </a>
-            ))}
-          </div>
-        )}
-      </Handoff>
-    </Page>
-  );
-}
+/**
+ * The palette and the shortcut sheet are their own chunk. Neither is visible
+ * until a key is pressed, so neither belongs in what the first paint has to
+ * download — but both are rendered from the start (closed), which fetches the
+ * chunk straight after that paint, so the first ⌘K still opens at once.
+ */
+const PaletteHost = lazy(() =>
+  import("./cmd/PaletteHost").then((m) => ({ default: m.PaletteHost })),
+);
+const ShortcutHelp = lazy(() =>
+  import("./cmd/ShortcutHelp").then((m) => ({ default: m.ShortcutHelp })),
+);
 
 /**
  * The nav, by role.
@@ -184,7 +120,7 @@ const TAB_META: { id: string; label: string; role: RouteRole }[] = [
   { id: "knowledge", label: "Knowledge", role: "overflow" },
   { id: "search", label: "Search", role: "utility" },
   { id: "agents", label: "Agents", role: "drilldown" },
-  { id: "agent", label: "Detail", role: "drilldown" },
+  { id: "agent", label: "Agent", role: "drilldown" },
   { id: "run", label: "Flight Recorder", role: "drilldown" },
 ];
 
@@ -315,9 +251,36 @@ function Dashboard() {
     [active],
   );
 
-  useEffect(() => {
+  // A layout effect, so it lands before any view's own (passive) effect: the
+  // agent page names its tab after the agent, which this generic label must
+  // not overwrite a moment later.
+  useLayoutEffect(() => {
     document.title = `${activeLabel} — Argus`;
   }, [activeLabel]);
+
+  // Where focus goes on a new view. An in-page link that changes the view
+  // ("Open failed run", an agent tile) is unmounted with the view it was in,
+  // and focus fell to <body>: a screen reader started again from the top of
+  // the document. Main takes it instead, without scrolling, and the live
+  // region below says where you are. Focus that is still somewhere real (the
+  // nav tab that was clicked, a field the new view focused itself) is left
+  // where it is. Compared against the last view rather than skipped once, so
+  // a development double-run of the effect does not take focus on load.
+  //
+  // A new view also opens at its top. The window kept the old view's scroll,
+  // so a run opened from a step drawer partway down the board landed with its
+  // title under the sticky bar. Only here, on a change of view: a hash change
+  // within one (a drawer opening) never reaches this, and keeps its place.
+  const shownRef = useRef(active);
+  useEffect(() => {
+    if (shownRef.current === active) return;
+    shownRef.current = active;
+    window.scrollTo(0, 0);
+    const focused = document.activeElement;
+    if (!focused || focused === document.body || !focused.isConnected) {
+      document.getElementById("main")?.focus({ preventScroll: true });
+    }
+  }, [active]);
 
   const destinations: NavTab[] = useMemo(
     () =>
@@ -328,8 +291,12 @@ function Dashboard() {
       })),
     [briefingState.briefing?.attentionCount],
   );
+  // Users is root's page, so it stays out of everyone else's menu, except
+  // while it is the page on screen: More then still marks where you are.
   const overflow: MoreItem[] = TAB_META.filter(
-    (t) => t.role === "overflow" && (t.id !== "users" || auth.status?.role === "root"),
+    (t) =>
+      t.role === "overflow" &&
+      (t.id !== "users" || auth.status?.role === "root" || active === "users"),
   ).map((t) => ({
     id: t.id,
     label: t.label,
@@ -359,10 +326,12 @@ function Dashboard() {
   );
 
   // Palette entries are the same destinations, annotated with the chord that
-  // also reaches them — so the palette teaches its own shortcuts.
+  // also reaches them — so the palette teaches its own shortcuts. A drill-down
+  // with a chord is a place too: Agents has no tab, and on a phone with no
+  // agent live the palette is the only way to it.
   const paletteDestinations = useMemo(
     () =>
-      TAB_META.filter((t) => t.role === "destination" || t.role === "overflow" || t.id === "search")
+      TAB_META.filter((t) => t.role !== "drilldown" || NAV_CHORDS[t.id])
         .filter((t) => t.id !== "users" || auth.status?.role === "root")
         .map((t) => ({
           id: t.id,
@@ -393,7 +362,6 @@ function Dashboard() {
     }),
     [paletteDestinations, auth.isAdmin, briefingState],
   );
-  const { commands, loading: paletteLoading } = usePalette(palette.open, paletteCtx);
 
   const renderActive = () => {
     switch (active) {
@@ -404,6 +372,7 @@ function Dashboard() {
             loading={briefingState.loading}
             error={briefingState.error}
             ack={briefingState.ack}
+            refresh={briefingState.refresh}
           />
         );
       case "chronicle":
@@ -440,6 +409,7 @@ function Dashboard() {
             agents={agentsState.agents}
             loading={agentsState.loading}
             error={agentsState.error}
+            refresh={agentsState.refresh}
           />
         );
       case "sessions":
@@ -450,21 +420,29 @@ function Dashboard() {
         return <FlightRecorder />;
       case "command":
       default:
-        return <CommandCenter />;
+        // The Briefing's attention list is already here for the nav badge, so
+        // "Needs you" can list what the board has no card for. The two counts
+        // are not the same number: the badge is the Briefing's count, and
+        // "Needs you" adds the board's failed pipelines and folds an issue into
+        // the failed pipeline or monitor row it repeats.
+        return <CommandCenter attention={briefingState.briefing?.attention ?? null} />;
     }
   };
 
   return (
     <div className="min-h-screen">
       {/* A plain fragment href would be swallowed by the hash router, so the
-          skip link moves focus itself. */}
+          skip link moves focus itself. Hidden *unless* focused, rather than
+          revealed on focus with `not-sr-only`: that also resets the padding,
+          and the link showed as a cramped box with its text running into the
+          tab beneath it. Opaque and raised, it reads as a layer over the bar. */}
       <a
         href="#main"
         onClick={(e) => {
           e.preventDefault();
           document.getElementById("main")?.focus();
         }}
-        className="sr-only rounded-md bg-surface-2 px-3 py-2 text-sm text-ink focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50"
+        className="fixed left-4 top-2.5 z-50 flex h-9 items-center rounded-control bg-surface-3 px-3 text-sm font-semibold text-ink shadow-overlay not-focus:sr-only"
       >
         Skip to content
       </a>
@@ -472,6 +450,7 @@ function Dashboard() {
         destinations={destinations}
         overflow={overflow}
         activeId={active}
+        activeLabel={activeLabel}
         live={agentsState.live}
         onOpenPalette={palette.show}
       />
@@ -495,18 +474,26 @@ function Dashboard() {
           </ErrorBoundary>
         </div>
       </main>
+      {/* The route announcer: the page's name, read out when it changes. Its
+          first text is there before anything listens, so loading the page is
+          not announced as a navigation. */}
+      <p aria-live="polite" className="sr-only">
+        {activeLabel}
+      </p>
       <ToastRegion toasts={toasts} onDismiss={dismiss} />
-      <CommandPalette
-        open={palette.open}
-        onClose={palette.hide}
-        commands={commands}
-        loading={paletteLoading}
-      />
-      <ShortcutHelp
-        open={shortcutsOpen}
-        onClose={() => setShortcutsOpen(false)}
-        bindings={bindings}
-      />
+      {/* Its own boundary: a chunk that fails to arrive (the server restarting
+          under a deploy) costs the palette, not the whole dashboard, and
+          opening it again is the retry. */}
+      <ErrorBoundary label="the command palette" resetKey={`${palette.open}:${shortcutsOpen}`}>
+        <Suspense fallback={null}>
+          <PaletteHost open={palette.open} onClose={palette.hide} context={paletteCtx} />
+          <ShortcutHelp
+            open={shortcutsOpen}
+            onClose={() => setShortcutsOpen(false)}
+            bindings={bindings}
+          />
+        </Suspense>
+      </ErrorBoundary>
     </div>
   );
 }
@@ -544,10 +531,22 @@ export default function App() {
   return (
     <div className="flex min-h-screen items-center justify-center p-6">
       <div className="w-full max-w-sm">
-        <h1 className="mb-1 text-lg text-ink">Argus</h1>
-        <p className="mb-6 text-sm text-ink-dim">
-          This server requires an account. Sign in to see the dashboard.
-        </p>
+        {/* The first thing a remote operator sees, so it is the brand's one
+            full-size appearance: the iris, watching, above the way in. */}
+        <div className="mb-8 flex flex-col items-center text-center">
+          <IrisMark size={64} />
+          <h1 className="mt-5 text-display font-semibold tracking-[0.14em] text-ink">
+            ARG<span className="text-eye">U</span>S
+          </h1>
+          {/* Said once, by the panel, on a server with no accounts: "sign in"
+              above "this server has no accounts yet" sent people looking for
+              an account that does not exist. */}
+          <p className="mt-2 text-small text-ink-dim">
+            {status.configured
+              ? "This server requires an account. Sign in to see the dashboard."
+              : "Create the first account to see the dashboard."}
+          </p>
+        </div>
         <ErrorBoundary label="Sign in" resetKey={String(status.configured)}>
           <Suspense
             fallback={
@@ -556,11 +555,17 @@ export default function App() {
               </Loading>
             }
           >
+            {/* The page exists for this form, so it opens focused, and its
+                title is the heading under the wordmark rather than an h3
+                beneath nothing. */}
             <AdminAuthPanel
               configured={status.configured}
               onLogin={login}
               onSetup={setup}
               onRegister={register}
+              purpose="dashboard"
+              autoFocus
+              headingLevel={2}
             />
           </Suspense>
         </ErrorBoundary>

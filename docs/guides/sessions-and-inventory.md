@@ -42,8 +42,9 @@ highlighted.
 
 The count is honest about being a cap. The scan reads newest transcripts first and
 stops at 100 matches, so a common word never reads your whole history — when it
-stops early the line reads **"first 100 matches — narrow the query"** rather than
-"100 matches", which would be a number you could reasonably take literally.
+stops early the line reads **"First 100 matches — narrow the query to see the
+most relevant ones"** rather than "100 matches", which would be a number you
+could reasonably take literally.
 
 **How to use it:** just type — case-insensitive substring matching, not fuzzy. For
 finding a pipeline, schedule or session _by name_, `⌘K` is the better tool; this
@@ -54,7 +55,7 @@ readable Claude Code, Codex and Qwen Code transcripts under their configured hom
 
 ## Sessions
 
-_Browse & read transcripts._ Route: `#/sessions` (⋯ More menu);
+_Browse & read transcripts._ Route: `#/sessions` (More menu);
 `#/sessions/<project>` narrows the list to one working directory.
 
 ![Sessions](../screenshots/sessions.png)

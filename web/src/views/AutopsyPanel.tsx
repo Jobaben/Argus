@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Card, formatMs, formatUsd } from "../ds";
+import { createPortal } from "react-dom";
+import { Button, Card, Icon, Skeleton, chipClass, formatMs, formatUsd } from "../ds";
 import { useAutopsy } from "../useAutopsy";
 import type { FailureClass } from "../types";
 
@@ -33,24 +34,54 @@ function Confidence({ value }: { value: number | null }) {
   if (value == null) return null;
   const pct = Math.round(value * 100);
   // Low confidence is shown, not hidden: an invisible caveat is not a caveat.
-  const tone = pct >= 70 ? "text-ok" : pct >= 40 ? "text-await" : "text-ink-faint";
+  // A neutral chip either way — confidence is not a status — with the figure
+  // drawn as a three-step gauge so a weak diagnosis reads as weak at a glance.
+  const steps = pct >= 70 ? 3 : pct >= 40 ? 2 : 1;
   return (
-    <span
-      className={`font-mono text-[10px] uppercase tracking-[0.12em] ${tone}`}
-      title="How sure the postmortem is"
-    >
+    <span className={chipClass()} title="How sure the postmortem is">
+      <span aria-hidden="true" className="flex items-end gap-px">
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className={`w-[3px] rounded-[1px] ${i < steps ? "bg-ink-dim" : "bg-line-strong"}`}
+            style={{ height: `${5 + i * 2}px` }}
+          />
+        ))}
+      </span>
       {pct}% confident
     </span>
+  );
+}
+
+/** The card's top line: what it is, and what producing it cost. */
+function Header({ children, cost }: { children?: React.ReactNode; cost?: React.ReactNode }) {
+  return (
+    <div className="mb-3 flex min-h-5 flex-wrap items-center gap-x-3 gap-y-1">
+      <h2 className="eyebrow flex items-center gap-1.5">
+        <Icon name="activity" size={13} />
+        Autopsy
+      </h2>
+      {children}
+      {cost && <span className="ml-auto text-caption text-ink-faint">{cost}</span>}
+    </div>
   );
 }
 
 export function AutopsyPanel({
   runId,
   onSeek,
+  fallbackSlot,
 }: {
   runId: string;
   /** Move the Flight Recorder's playhead to the span the postmortem cites. */
   onSeek?: (atMs: number) => void;
+  /**
+   * Where to render when the postmortem pass produced nothing — switched off,
+   * or failed itself. That is a note about the tool, not about the run, so the
+   * recorder sends it below the track rather than letting it headline a failed
+   * run's page. Rendered in place when absent.
+   */
+  fallbackSlot?: HTMLElement | null;
 }) {
   const { autopsy, eligible, unavailable, loading, busy, actionError, analyse, relaunch } =
     useAutopsy(runId);
@@ -58,31 +89,20 @@ export function AutopsyPanel({
 
   if (!eligible && !autopsy) return null;
 
-  const heading = (
-    <div className="mb-2 flex flex-wrap items-center gap-2">
-      <span className="font-mono text-[11px] font-bold uppercase tracking-[0.16em] text-ink-faint">
-        Autopsy
-      </span>
-      {autopsy?.failureClass && (
-        <span className="rounded-full border border-await/40 bg-await/12 px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-[0.1em] text-await">
-          {CLASS_LABEL[autopsy.failureClass]}
-        </span>
-      )}
-      {autopsy && <Confidence value={autopsy.confidence} />}
-      {autopsy?.costUsd != null && (
-        <span className="font-mono text-[10px] text-ink-faint" title="What this postmortem cost">
-          {formatUsd(autopsy.costUsd)}
-          {autopsy.durationMs != null && ` · ${formatMs(autopsy.durationMs)}`}
-        </span>
-      )}
-    </div>
+  const cost = autopsy?.costUsd != null && (
+    <span title="What this postmortem cost">
+      {formatUsd(autopsy.costUsd)}
+      {autopsy.durationMs != null && ` · ${formatMs(autopsy.durationMs)}`}
+    </span>
   );
 
   if (loading && !autopsy) {
     return (
       <Card>
-        {heading}
-        <p className="text-sm text-ink-faint">Looking for a postmortem…</p>
+        <Header />
+        <p className="text-small text-ink-faint">Looking for a postmortem…</p>
+        <Skeleton className="mt-3 h-3 w-3/5" />
+        <Skeleton className="mt-2 h-3 w-2/5" />
       </Card>
     );
   }
@@ -90,86 +110,108 @@ export function AutopsyPanel({
   if (!autopsy) {
     return (
       <Card>
-        {heading}
-        <p className="mb-3 max-w-prose text-sm text-ink-dim">
+        <Header />
+        <p className="mb-4 max-w-prose text-small text-ink-dim">
           {unavailable ??
             "No postmortem yet. Argus writes one automatically for recent failures; you can also ask for one now."}
         </p>
         <ActionRow busy={busy} error={actionError}>
-          <button
-            type="button"
+          <Button
+            variant="primary"
+            icon="sparkle"
             disabled={busy || unavailable != null}
             onClick={() => void analyse()}
-            className="rounded-md border border-line px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.1em] text-ink-dim transition hover:text-ink disabled:opacity-50"
           >
             {busy ? "Analysing…" : "Analyse this failure"}
-          </button>
+          </Button>
         </ActionRow>
       </Card>
     );
   }
 
+  // One quiet line, not a card: the run's own failure is the page's headline,
+  // and this pass's error ("did not answer with JSON") used to sit above it in
+  // a panel of its own.
   if (autopsy.status !== "ready") {
-    return (
-      <Card>
-        {heading}
-        <p className="mb-3 max-w-prose text-sm text-ink-dim">
-          {autopsy.status === "skipped"
-            ? "Postmortems are switched off on this server (ARGUS_ANALYSIS=off)."
-            : `The postmortem pass didn't produce an explanation: ${autopsy.error ?? "unknown reason"}`}
-        </p>
-        <ActionRow busy={busy} error={actionError}>
-          <button
-            type="button"
+    const note = (
+      <div className="rounded-tile bg-ground-2/60 px-4 py-2">
+        <div className="flex flex-wrap items-start gap-x-3 gap-y-1.5 sm:items-center">
+          <Icon name="activity" size={14} className="mt-px shrink-0 text-ink-faint sm:mt-0" />
+          <p className="min-w-0 flex-1 basis-60 text-caption text-ink-faint">
+            <span className="font-semibold text-ink-dim">Autopsy</span>{" "}
+            {autopsy.status === "skipped"
+              ? "Postmortems are switched off on this server (ARGUS_ANALYSIS=off)."
+              : `The postmortem pass didn't produce an explanation: ${autopsy.error ?? "unknown reason"}`}
+            {cost && <span className="whitespace-nowrap"> · {cost}</span>}
+          </p>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="retry"
             disabled={busy}
             onClick={() => void analyse()}
-            className="rounded-md border border-line px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.1em] text-ink-dim transition hover:text-ink disabled:opacity-50"
+            className="-my-0.5"
           >
             {busy ? "Retrying…" : "Try again"}
-          </button>
-        </ActionRow>
-      </Card>
+          </Button>
+        </div>
+        <ActionRow busy={busy} error={actionError} />
+      </div>
     );
+    return fallbackSlot ? createPortal(note, fallbackSlot) : note;
   }
 
   return (
     <Card>
-      {heading}
-      <p className="mb-3 max-w-prose text-sm leading-relaxed text-ink">{autopsy.why}</p>
+      <Header cost={cost} />
+      {/* The diagnosis is the headline: its class, how sure it is, then why. */}
+      <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        {autopsy.failureClass && (
+          <h3 className="text-title font-semibold text-ink">{CLASS_LABEL[autopsy.failureClass]}</h3>
+        )}
+        <Confidence value={autopsy.confidence} />
+      </div>
+      <p className="mb-4 max-w-prose text-body text-ink-dim">{autopsy.why}</p>
 
       {autopsy.span && (
-        <div className="mb-3 rounded-md border border-line bg-ground-2 px-3 py-2">
-          <p className="mb-1 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">
-            Where it went wrong
-          </p>
+        <div className="mb-4 rounded-tile border border-line bg-ground-2/60 px-3.5 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            <p className="eyebrow">Where it went wrong</p>
+            {onSeek && (
+              <Button
+                size="sm"
+                icon="play"
+                className="-my-1"
+                onClick={() => onSeek(autopsy.span!.fromMs)}
+              >
+                Scrub to {(autopsy.span.fromMs / 1000).toFixed(1)}s
+              </Button>
+            )}
+          </div>
           {autopsy.span.quote && (
-            <p className="mb-1.5 break-words font-mono text-[11px] text-ink-dim">
+            <p className="mt-2 break-words font-mono text-caption leading-relaxed text-ink-dim">
               “{autopsy.span.quote}”
             </p>
-          )}
-          {onSeek && (
-            <button
-              type="button"
-              onClick={() => onSeek(autopsy.span!.fromMs)}
-              className="font-mono text-[11px] text-eye hover:underline"
-            >
-              ▶ scrub to {(autopsy.span.fromMs / 1000).toFixed(1)}s
-            </button>
           )}
         </div>
       )}
 
       {autopsy.promptDelta && (
-        <details className="mb-3 rounded-md border border-line">
-          <summary className="cursor-pointer px-3 py-2 font-mono text-[11px] uppercase tracking-[0.12em] text-ink-dim">
-            Proposed prompt
-            {autopsy.deltaRationale && (
-              <span className="ml-2 font-sans text-[11px] normal-case tracking-normal text-ink-faint">
-                — {autopsy.deltaRationale}
-              </span>
-            )}
+        <details className="group mb-4 rounded-tile border border-line bg-ground-2/60">
+          <summary className="flex cursor-pointer list-none select-none items-start gap-2 rounded-tile px-3.5 py-2.5 text-small transition-colors duration-(--duration-quick) hover:bg-surface-2/50 [&::-webkit-details-marker]:hidden">
+            <Icon
+              name="chevron-right"
+              size={15}
+              className="mt-[2px] text-ink-faint transition-transform duration-(--duration-quick) ease-(--ease-out-expo) group-open:rotate-90"
+            />
+            <span className="min-w-0">
+              <span className="text-small font-semibold text-ink">Proposed prompt</span>
+              {autopsy.deltaRationale && (
+                <span className="text-caption text-ink-faint"> — {autopsy.deltaRationale}</span>
+              )}
+            </span>
           </summary>
-          <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words border-t border-line bg-ground-2 p-3 font-mono text-[11px] leading-relaxed text-ink-dim">
+          <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words border-t border-line p-3.5 font-mono text-caption leading-relaxed text-ink-dim">
             {autopsy.promptDelta}
           </pre>
         </details>
@@ -177,39 +219,40 @@ export function AutopsyPanel({
 
       <ActionRow busy={busy} error={actionError}>
         {autopsy.promptDelta && (
-          <button
-            type="button"
+          <Button
+            variant="primary"
+            icon="replay"
             disabled={busy}
             onClick={() => {
               void relaunch().then((id) => setLaunched(id));
             }}
-            className="rounded-md border border-eye/40 bg-eye/10 px-2.5 py-1 font-mono text-[11px] font-bold uppercase tracking-[0.1em] text-eye transition hover:bg-eye/20 disabled:opacity-50"
             title="Fire the proposed prompt once, as a one-off. Your schedule is not changed."
           >
             {busy ? "Launching…" : "Relaunch with fix"}
-          </button>
+          </Button>
         )}
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void analyse()}
-          className="rounded-md border border-line px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.1em] text-ink-dim transition hover:text-ink disabled:opacity-50"
-        >
+        <Button icon="retry" disabled={busy} onClick={() => void analyse()}>
           Re-analyse
-        </button>
+        </Button>
         {autopsy.promptDelta && (
-          <span className="font-mono text-[10px] text-ink-faint">
+          <span className="text-caption text-ink-faint">
             fires once as a one-off — your schedule is untouched
           </span>
         )}
       </ActionRow>
 
       {launched && (
-        <p className="mt-2 text-sm text-ok">
-          Launched.{" "}
-          <a href={`#/run/${encodeURIComponent(launched)}`} className="text-eye hover:underline">
-            Watch it here.
-          </a>
+        <p className="mt-3 flex items-center gap-2 text-small text-ok">
+          <Icon name="check-circle" size={15} />
+          <span>
+            Launched.{" "}
+            <a
+              href={`#/run/${encodeURIComponent(launched)}`}
+              className="text-eye underline decoration-eye/40 underline-offset-2 hover:decoration-eye"
+            >
+              Watch it here.
+            </a>
+          </span>
         </p>
       )}
     </Card>
@@ -223,17 +266,20 @@ function ActionRow({
 }: {
   busy: boolean;
   error: string | null;
-  children: React.ReactNode;
+  children?: React.ReactNode;
 }) {
   return (
     <>
-      <div className="flex flex-wrap items-center gap-2">{children}</div>
+      {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
       {error && (
-        <p role="alert" className="mt-2 text-sm text-fail">
-          {error}
-          {/* The server's 401 body says "auth required", which is true and
-              unhelpful; say what to do about it. */}
-          {/auth/i.test(error) && " — sign in to run agent actions."}
+        <p role="alert" className="mt-3 flex items-start gap-2 text-small text-fail">
+          <Icon name="alert" size={15} className="mt-0.5" />
+          <span className="min-w-0 break-words">
+            {error}
+            {/* The server's 401 body says "auth required", which is true and
+                unhelpful; say what to do about it. */}
+            {/auth/i.test(error) && " — sign in to run agent actions."}
+          </span>
         </p>
       )}
       {busy && <span className="sr-only">Working…</span>}

@@ -12,6 +12,7 @@ import {
   formatRelativeTime,
   parseRunLog,
 } from "./format";
+import { CLOCK_TICK_MS } from "./clock";
 
 describe("formatUsd", () => {
   it("renders cents with two decimals", () => {
@@ -141,6 +142,16 @@ describe("formatRelativeTime", () => {
     expect(formatRelativeTime(at(0), now)).toBe("just now");
     expect(formatRelativeTime(at(-5_000), now)).toBe("just now");
     expect(formatRelativeTime(at(5_000), now)).toBe("just now");
+  });
+
+  it("reaches a whole clock tick forward, the most the shared clock trails by", () => {
+    // Stamped since the shared clock's last tick, so ahead of its "now": it
+    // has happened, and "in 14s" said it had not.
+    expect(formatRelativeTime(at(14_000), now)).toBe("just now");
+    expect(formatRelativeTime(at(CLOCK_TICK_MS - 1), now)).toBe("just now");
+    expect(formatRelativeTime(at(CLOCK_TICK_MS + 5_000), now)).toBe("in 20s");
+    // Backwards it stays as tight as it was.
+    expect(formatRelativeTime(at(-12_000), now)).toBe("12s ago");
   });
 
   it("degrades on a missing or unparseable timestamp", () => {

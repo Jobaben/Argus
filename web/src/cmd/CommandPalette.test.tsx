@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommandPalette } from "./CommandPalette";
 import type { Command } from "./commands";
+import { useGlobalKeys } from "./useGlobalKeys";
 
 const COMMANDS: Command[] = [
-  { id: "go:command", title: "Command Center", group: "Go to", href: "#/command", badge: "g c" },
+  { id: "go:command", title: "Command Center", group: "Go to", href: "#/command", keys: "g c" },
   { id: "go:monitors", title: "Monitors", group: "Go to", href: "#/monitors" },
   {
     id: "approve:i1",
@@ -354,12 +355,42 @@ describe("CommandPalette — intent mode", () => {
 
     await user.keyboard("{Escape}");
     // Losing a typed sentence to a stray keypress is a real cost, so the first
-    // Escape returns to the results.
+    // Escape returns to the results — none, for this sentence — with it kept.
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(
+      screen.getByText("Nothing matches “pause everything touching Spectacle”"),
+    ).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("regression: the app's own Escape shortcut does not close it from intent mode", async () => {
+    stubPlan();
+    // The shell's Escape binding listens on window, after the dialog has had
+    // the key. Both used to act on the one press, so intent mode closed the
+    // whole palette instead of going back to the list.
+    const shellEscape = vi.fn();
+    function WithShellKeys({ onClose }: { onClose: () => void }) {
+      useGlobalKeys([
+        { keys: "Escape", label: "Close", group: "General", allowInInput: true, run: shellEscape },
+      ]);
+      return <CommandPalette open onClose={onClose} commands={COMMANDS} />;
+    }
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(<WithShellKeys onClose={onClose} />);
+    await waitFor(() => expect(screen.getByRole("combobox")).toHaveFocus());
+    await user.keyboard("pause everything touching Spectacle{Enter}");
+    await waitFor(() => expect(screen.getByText("Dependency audit")).toBeInTheDocument());
+
+    await user.keyboard("{Escape}");
+    expect(
+      screen.getByText("Nothing matches “pause everything touching Spectacle”"),
+    ).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(shellEscape).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 });
@@ -374,5 +405,144 @@ describe("CommandPalette — the hand-off", () => {
     // quick beat as the surface sinks.
     expect(screen.getAllByRole("option")[0].className).toContain("bg-eye");
     await waitFor(() => expect(window.location.hash).toBe("#/monitors"));
+  });
+});
+
+describe("CommandPalette — focus stays in the dialog", () => {
+  /** The palette over a page with a control of its own behind the scrim. */
+  async function openOverPage() {
+    const user = userEvent.setup();
+    render(
+      <>
+        <button type="button">Behind the scrim</button>
+        <CommandPalette open onClose={vi.fn()} commands={COMMANDS} />
+      </>,
+    );
+    const input = screen.getByRole("combobox");
+    await waitFor(() => expect(input).toHaveFocus());
+    return { user, input };
+  }
+
+  it("keeps Tab on the field, and never stops on the scrolling list", async () => {
+    const { user, input } = await openOverPage();
+    expect(screen.getByRole("listbox")).toHaveAttribute("tabindex", "-1");
+    await user.tab();
+    expect(input).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(input).toHaveFocus();
+  });
+
+  it("cycles between the field and the hand-off link, in both directions", async () => {
+    const { user, input } = await openOverPage();
+    await user.keyboard("zxqvbn wibble");
+    const link = screen.getByRole("link", { name: /search transcripts instead/i });
+    await user.tab();
+    expect(link).toHaveFocus();
+    await user.tab();
+    expect(input).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(link).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Behind the scrim" })).not.toHaveFocus();
+  });
+});
+
+describe("CommandPalette — nothing matches", () => {
+  it("says so without a full stop, and hands the query to Search", async () => {
+    const { user, onClose } = await open();
+    await user.keyboard("ETIMEDOUT retries/lodash");
+    expect(screen.getByText("Nothing matches “ETIMEDOUT retries/lodash”")).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: /search transcripts instead/i });
+    // A path segment, so the route is still `search`; the slash is escaped
+    // so it stays part of the query.
+    expect(link).toHaveAttribute("href", "#/search/ETIMEDOUT%20retries%2Flodash");
+    await user.click(link);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("puts the hand-off beside the results, never inside the listbox", async () => {
+    const { user } = await open();
+    // A listbox may hold only options and groups, so with results on screen
+    // there is no link inside it…
+    expect(within(screen.getByRole("listbox")).queryByRole("link")).toBeNull();
+
+    // …and with none, there is no listbox for the link to be inside, and the
+    // field no longer claims an open list of results.
+    await user.keyboard("zxqvbn wibble");
+    expect(screen.getByRole("link", { name: /search transcripts instead/i })).toBeInTheDocument();
+    expect(screen.queryByRole("listbox")).toBeNull();
+    const input = screen.getByRole("combobox");
+    expect(input).toHaveAttribute("aria-expanded", "false");
+    expect(input).not.toHaveAttribute("aria-controls");
+
+    // A match brings the list back, wired to the field again.
+    await user.clear(input);
+    await user.keyboard("monitors");
+    expect(input).toHaveAttribute("aria-expanded", "true");
+    expect(input).toHaveAttribute("aria-controls", screen.getByRole("listbox").id);
+    expect(input).toHaveAttribute("aria-activedescendant", screen.getAllByRole("option")[0].id);
+  });
+});
+
+describe("CommandPalette — keycaps", () => {
+  it("draws every shortcut as keycaps, a single key as well as a chord", async () => {
+    await open([
+      { id: "go:command", title: "Command Center", group: "Go to", href: "#/c", keys: "g c" },
+      { id: "action:keys", title: "Keyboard shortcuts", group: "Actions", keys: "?", run: vi.fn() },
+      { id: "entry:s", title: "Docs link check", group: "Schedules", badge: "Paused", href: "#/s" },
+    ]);
+    const keycaps = (name: RegExp) =>
+      Array.from(screen.getByRole("option", { name }).querySelectorAll("kbd")).map(
+        (k) => k.textContent,
+      );
+    expect(keycaps(/command center/i)).toEqual(["G", "C"]);
+    expect(keycaps(/keyboard shortcuts/i)).toEqual(["?"]);
+    // A status word is a badge, never a keycap.
+    expect(keycaps(/docs link check/i)).toEqual([]);
+    expect(screen.getByRole("option", { name: /docs link check/i })).toHaveTextContent("Paused");
+  });
+
+  it("spells Escape the way the shortcut sheet does", async () => {
+    await open();
+    expect(screen.getByText("Esc").tagName).toBe("KBD");
+  });
+});
+
+describe("CommandPalette — actions that change something", () => {
+  const ACTIONS: Command[] = [
+    { id: "entry:pipeline:rt", title: "Release Train", group: "Pipelines", href: "#/command" },
+    {
+      id: "run:cl",
+      title: "Run now — Changelog digest",
+      group: "Actions",
+      literal: true,
+      run: vi.fn(),
+    },
+    {
+      id: "run:rt",
+      title: "Run now — Release Train",
+      group: "Actions",
+      literal: true,
+      run: vi.fn(),
+    },
+  ];
+
+  it("are not surfaced by letters scattered across their title", async () => {
+    const { user } = await open(ACTIONS);
+    // R from "Run", "el" from "Changelog": a scatter, not what was meant.
+    await user.keyboard("rel");
+    const titles = screen.getAllByRole("option").map((o) => o.textContent ?? "");
+    expect(titles.some((t) => t.includes("Changelog"))).toBe(false);
+    expect(titles.some((t) => t.includes("Run now — Release Train"))).toBe(true);
+  });
+
+  it("highlight the words where they appear, not where a scatter landed", async () => {
+    const { user } = await open(ACTIONS);
+    await user.keyboard("run rel");
+    const row = screen.getByRole("option");
+    expect(row).toHaveTextContent("Run now — Release Train");
+    expect(Array.from(row.querySelectorAll(".text-eye")).map((m) => m.textContent)).toEqual([
+      "Run",
+      "Rel",
+    ]);
   });
 });

@@ -13,10 +13,18 @@ export function useBriefing() {
     pollAlways: true,
   });
 
+  // Throws the server's own reason, so the Briefing (and the palette's "Mark
+  // caught up") can say the window did not reset instead of failing silently.
   const ack = useCallback(async () => {
-    await fetch("/api/briefing/ack", { method: "POST" });
+    const res = await fetch("/api/briefing/ack", { method: "POST" });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? `HTTP ${res.status}`);
+    }
     refresh();
   }, [refresh]);
 
-  return { briefing: data, loading, error, ack };
+  // `refresh` is the Briefing's Retry: a failed load otherwise waits out the
+  // backoff with nothing on screen to press.
+  return { briefing: data, loading, error, ack, refresh };
 }
