@@ -17,6 +17,7 @@ import { useKnowledgeAtlas } from "../../useKnowledgeAtlas";
 import {
   NO_FILTER,
   activeClaims,
+  exceptionOf,
   filterClaims,
   groupClaims,
   plural,
@@ -125,7 +126,9 @@ function Summary({ atlas }: { atlas: KnowledgeAtlas }) {
           all <Term id="supported">supported</Term>
         </>
       ) : (
-        <span className="font-semibold text-run">
+        <span
+          className={`font-semibold ${activeClaims(atlas).some((c) => exceptionOf(c)?.tone === "fail") ? "text-fail" : "text-await"}`}
+        >
           {plural(s.exceptions, "needs a look", "need a look")}
         </span>
       )}
@@ -216,10 +219,10 @@ function Explorer({ atlas }: { atlas: KnowledgeAtlas }) {
     filter.query.trim() !== "" ||
     filter.exceptionsOnly;
   const shown = useMemo(() => filterClaims(base, filter), [base, filter]);
-  const exceptions = useMemo(
-    () => filterClaims(base, { ...NO_FILTER, exceptionsOnly: true }).length,
-    [base],
-  );
+  const flagged = useMemo(() => filterClaims(base, { ...NO_FILTER, exceptionsOnly: true }), [base]);
+  const exceptions = flagged.length;
+  // The chip takes the tone of the worst row it would list, as the shelves do.
+  const flaggedFail = flagged.some((c) => exceptionOf(c)?.tone === "fail");
   const selectedClaim = selected
     ? (atlas.claims.find((c) => refKey(c) === selected.key) ?? null)
     : null;
@@ -268,11 +271,16 @@ function Explorer({ atlas }: { atlas: KnowledgeAtlas }) {
             onClick={() => setFilter((f) => ({ ...f, exceptionsOnly: !f.exceptionsOnly }))}
             className={`inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-caption font-semibold transition duration-(--duration-quick) motion-safe:active:scale-[0.97] ${
               filter.exceptionsOnly
-                ? "border-run/50 bg-run/10 text-run"
-                : "border-line-strong text-ink-dim hover:border-run/40 hover:bg-surface-2 hover:text-ink"
+                ? flaggedFail
+                  ? "border-fail/50 bg-fail/10 text-fail"
+                  : "border-await/50 bg-await/10 text-await"
+                : `border-line-strong text-ink-dim hover:bg-surface-2 hover:text-ink ${flaggedFail ? "hover:border-fail/40" : "hover:border-await/40"}`
             }`}
           >
-            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-run" />
+            <span
+              aria-hidden="true"
+              className={`h-1.5 w-1.5 rounded-full ${flaggedFail ? "bg-fail" : "bg-await"}`}
+            />
             Only what needs a look · {exceptions}
           </button>
         )}

@@ -4,6 +4,7 @@ import {
   Button,
   ButtonLink,
   buttonClass,
+  chipClass,
   EmptyState,
   formatTokens,
   formatUsd,
@@ -127,6 +128,27 @@ const STATUS_ORDER: { key: RunStatus; label: string; dot: string }[] = [
   { key: "skipped", label: "Skipped", dot: "bg-idle/60" },
 ];
 
+/**
+ * The window's tallies, counted the way the Failures list below counts them.
+ *
+ * `byStatus` is the exit status, and a run can exit 0 and still report a failed
+ * (or blocked) outcome. The Failures list, Issues and Chronicle all call that a
+ * failure, so the strip did too little: "3 failed" sat right above a list of
+ * four. Each such run moves from the bucket it exited in to Failed. The list is
+ * capped, so past its cap this can undercount, never overcount.
+ */
+function windowTally(win: BriefingData["window"]): Record<RunStatus, number> {
+  const counts = { ...win.byStatus };
+  for (const r of win.failures) {
+    if (r.status === "failed" || r.status === "interrupted" || r.status === "running") continue;
+    if (counts[r.status] > 0) {
+      counts[r.status] -= 1;
+      counts.failed += 1;
+    }
+  }
+  return counts;
+}
+
 /** A finished pipeline's status in the shared vocabulary, so a pipeline that
  *  was stopped reads as stopped, not as a failure. */
 const INSTANCE_STATUS: Record<InstanceStatus, DsStatus> = {
@@ -144,9 +166,56 @@ function failureHref(run: BriefingData["window"]["failures"][number]): string {
     : "#/issues";
 }
 
+/**
+ * The first human line of a run's error or summary. An agent ends its reply
+ * with an `ARGUS_OUTCOME: <outcome> <reason>` line for the scheduler to read;
+ * it is protocol, not prose, so it is skipped — unless it is all there is, and
+ * then its reason is the message.
+ */
 function firstLine(s: string | null | undefined): string | null {
-  const line = s?.split("\n")[0]?.trim();
-  return line ? line : null;
+  const lines = (s ?? "").split("\n").map((l) => l.trim());
+  const prose = lines.find((l) => l !== "" && !l.startsWith("ARGUS_OUTCOME:"));
+  if (prose) return prose;
+  const marker = lines.find((l) => l.startsWith("ARGUS_OUTCOME:"));
+  const reason = marker?.replace(/^ARGUS_OUTCOME:\s*\S+\s*/, "").trim();
+  return reason ? reason : null;
+}
+
+type FailedRun = BriefingData["window"]["failures"][number];
+
+/**
+ * Failures that are the same thing happening again — one schedule, one reason
+ * — as one row with a count. Three identical "Dependency audit · exit code 1"
+ * rows said nothing the first one had not; the count is the news. The newest
+ * run leads each group (the list arrives newest first), so its row opens the
+ * most recent transcript.
+ */
+function groupFailures(
+  runs: FailedRun[],
+): { run: FailedRun; count: number; reason: string | null; summary: string | null }[] {
+  const groups = new Map<
+    string,
+    { run: FailedRun; count: number; reason: string | null; summary: string | null }
+  >();
+  for (const r of runs) {
+    const reason = firstLine(r.error);
+    const summary = firstLine(r.resultSummary);
+    const key = [r.scheduleName, reason ?? "", summary ?? ""].join("\u0000");
+    const g = groups.get(key);
+    if (g) g.count += 1;
+    else groups.set(key, { run: r, count: 1, reason, summary });
+  }
+  return [...groups.values()];
+}
+
+/** A count of runs, as a quantity rather than a status: neutral, like the
+ *  number it is. */
+function RunCount({ n }: { n: number }) {
+  return (
+    <span className={chipClass("neutral")} title={`${n} failed run${n === 1 ? "" : "s"}`}>
+      ×{n}
+    </span>
+  );
 }
 
 function AttentionCard({ item }: { item: AttentionItem }) {
@@ -305,7 +374,11 @@ function Row({
             </span>
           )}
         </div>
-        {detail && <div className="mt-0.5 truncate text-caption text-ink-dim">{detail}</div>}
+        {/* Two lines, not one: the detail is usually the reason, the one part
+            of a failure row worth reading, and a phone cut it to a few words. */}
+        {detail && (
+          <div className="mt-0.5 line-clamp-2 break-words text-caption text-ink-dim">{detail}</div>
+        )}
       </div>
       <Icon
         name="chevron-right"
@@ -317,48 +390,87 @@ function Row({
 }
 
 /**
- * The window's runs as one instrument: the split as a bar, then the tallies.
- * The total is not repeated here — it is in the line under the page title,
- * beside the spend it produced.
+ * The window's runs as one instrument: what the window was (since when, how
+ * many runs, what they cost), then the split as tallies and a bar. The numbers
+ * sit here, under "While you were away", rather than in the page subtitle,
+ * which keeps saying what the page is for.
  */
-function WindowStrip({ win }: { win: BriefingData["window"] }) {
-  const parts = STATUS_ORDER.filter(({ key }) => win.byStatus[key] > 0);
+function WindowStrip({ since, win }: { since: string; win: BriefingData["window"] }) {
+  const counts = windowTally(win);
+  const parts = STATUS_ORDER.filter(({ key }) => counts[key] > 0);
+  const summary = (
+    <p className="text-small text-ink-dim">
+      Since <TimeAgo iso={since} /> — <b className="font-semibold text-ink">{win.totalRuns}</b> run
+      {win.totalRuns === 1 ? "" : "s"}
+      {win.tokens > 0 && (
+        <>
+          {" "}
+          · <b className="font-semibold text-ink">{formatTokens(win.tokens)}</b> tokens
+        </>
+      )}
+      {win.costUsd > 0 && (
+        <>
+          {" "}
+          · <b className="font-semibold text-ink">{formatUsd(win.costUsd)}</b> spent
+        </>
+      )}
+    </p>
+  );
   if (win.totalRuns === 0 || parts.length === 0) {
     return (
       <div className="rounded-tile border border-line bg-surface px-4 py-3.5 text-small text-ink-dim shadow-raised">
-        Nothing ran in this window.
+        Nothing ran since <TimeAgo iso={since} />.
       </div>
     );
   }
   return (
-    <div className="flex flex-col gap-4 rounded-tile border border-line bg-surface px-4 py-4 shadow-raised sm:flex-row sm:items-center sm:gap-8 sm:px-5">
-      <div className="flex flex-wrap gap-x-8 gap-y-3">
-        {parts.map(({ key, label, dot }) => (
-          <div key={key} className="min-w-0">
-            <div className="text-title font-semibold leading-none text-ink">
-              {win.byStatus[key]}
+    <div className="rounded-tile border border-line bg-surface px-4 py-4 shadow-raised sm:px-5">
+      {summary}
+      <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-8">
+        <div className="flex flex-wrap gap-x-8 gap-y-3">
+          {parts.map(({ key, label, dot }) => (
+            <div key={key} className="min-w-0">
+              <div className="text-title font-semibold leading-none text-ink">{counts[key]}</div>
+              <div className="mt-1.5 flex items-center gap-1.5 text-caption text-ink-dim">
+                <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${dot}`} />
+                {label}
+              </div>
             </div>
-            <div className="mt-1.5 flex items-center gap-1.5 text-caption text-ink-dim">
-              <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${dot}`} />
-              {label}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div
-        aria-hidden="true"
-        className="flex h-2 w-full min-w-0 gap-0.5 overflow-hidden rounded-full bg-ground-2 sm:w-auto sm:flex-1"
-      >
-        {parts.map(({ key, label, dot }) => (
-          <span
-            key={key}
-            title={`${win.byStatus[key]} ${label.toLowerCase()}`}
-            className={`h-full first:rounded-l-full last:rounded-r-full ${dot}`}
-            style={{ width: `${(win.byStatus[key] / win.totalRuns) * 100}%` }}
-          />
-        ))}
+          ))}
+        </div>
+        <div
+          aria-hidden="true"
+          className="flex h-2 w-full min-w-0 gap-0.5 overflow-hidden rounded-full bg-ground-2 sm:w-auto sm:flex-1"
+        >
+          {parts.map(({ key, label, dot }) => (
+            <span
+              key={key}
+              title={`${counts[key]} ${label.toLowerCase()}`}
+              className={`h-full first:rounded-l-full last:rounded-r-full ${dot}`}
+              style={{ width: `${(counts[key] / win.totalRuns) * 100}%` }}
+            />
+          ))}
+        </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The server's window when nobody has ever marked caught up. The briefing
+ * carries no lifetime count, so "never caught up, and nothing in the default
+ * window" is the nearest honest reading of a first visit: an empty install, or
+ * one nobody has briefed from yet. Either way there is nothing to be caught up
+ * *on*, and "All caught up" would be good news nobody has earned. Once the
+ * window has been reset it starts at the reset, and a quiet one is calm again.
+ */
+const DEFAULT_WINDOW_MS = 24 * 3_600_000;
+
+function isFirstVisit(b: BriefingData): boolean {
+  return (
+    b.attentionCount === 0 &&
+    b.window.totalRuns === 0 &&
+    Date.parse(b.generatedAt) - Date.parse(b.since) === DEFAULT_WINDOW_MS
   );
 }
 
@@ -367,14 +479,18 @@ export default function Briefing({
   loading,
   error,
   ack,
+  refresh,
 }: {
   briefing: BriefingData | null;
   loading: boolean;
   error: string | null;
   ack: () => Promise<void>;
+  /** Refetches the briefing; when given, a failed load offers Retry. */
+  refresh?: () => void;
 }) {
   const [acking, setAcking] = useState(false);
   const [ackError, setAckError] = useState<string | null>(null);
+  const firstVisit = briefing != null && isFirstVisit(briefing);
   const calm = briefing != null && briefing.attentionCount === 0 && briefing.window.totalRuns === 0;
   // Unavailable rather than `disabled`: a disabled button drops keyboard focus
   // to the page the moment it is pressed. And there is nothing to mark read
@@ -396,30 +512,6 @@ export default function Briefing({
       ? []
       : [...briefing.attention].sort((a, b) => KIND_META[a.kind].rank - KIND_META[b.kind].rank);
 
-  const subtitle =
-    briefing == null ? (
-      "What needs you now, and what ran while you were away."
-    ) : (
-      <>
-        Since <TimeAgo iso={briefing.since} /> —{" "}
-        <b className="font-semibold text-ink">{briefing.window.totalRuns}</b> run
-        {briefing.window.totalRuns === 1 ? "" : "s"}
-        {briefing.window.tokens > 0 && (
-          <>
-            {" "}
-            · <b className="font-semibold text-ink">{formatTokens(briefing.window.tokens)}</b>{" "}
-            tokens
-          </>
-        )}
-        {briefing.window.costUsd > 0 && (
-          <>
-            {" "}
-            · <b className="font-semibold text-ink">{formatUsd(briefing.window.costUsd)}</b> spent
-          </>
-        )}
-      </>
-    );
-
   const win = briefing?.window;
   const windowSections: { key: string; node: ReactNode }[] = [];
   if (win && win.failures.length > 0) {
@@ -440,9 +532,7 @@ export default function Briefing({
                 here the only dead one. A failed run's transcript is where you
                 find out why, so that is the destination when there is one;
                 Issues, which groups it, is the fallback. */}
-            {win.failures.map((r) => {
-              const reason = firstLine(r.error);
-              const summary = firstLine(r.resultSummary);
+            {groupFailures(win.failures).map(({ run: r, count, reason, summary }) => {
               const when = r.endedAt ?? r.startedAt;
               return (
                 <Row
@@ -451,6 +541,7 @@ export default function Briefing({
                   icon="x-circle"
                   iconClass="text-fail"
                   title={r.scheduleName}
+                  badge={count > 1 ? <RunCount n={count} /> : undefined}
                   trailing={when ? <TimeAgo iso={when} /> : undefined}
                   detail={
                     <span title={[reason, summary].filter(Boolean).join("\n") || undefined}>
@@ -468,7 +559,12 @@ export default function Briefing({
       ),
     });
   }
-  if (win && win.newIssues.length > 0) {
+  // An issue that is still open is already a card under "Needs your
+  // attention"; listing it again here would only repeat it. The section keeps
+  // the new issues that are not up there, and goes when there are none.
+  const onCards = new Set(attention.filter((a) => a.kind === "issue-open").map((a) => a.id));
+  const newIssues = win ? win.newIssues.filter((i) => !onCards.has(i.fingerprint)) : [];
+  if (newIssues.length > 0) {
     windowSections.push({
       key: "issues",
       node: (
@@ -476,27 +572,19 @@ export default function Briefing({
           title={
             <>
               New issues
-              <CountBadge n={win.newIssues.length} />
+              <CountBadge n={newIssues.length} />
             </>
           }
         >
           <RowPanel>
-            {win.newIssues.map((i) => (
+            {newIssues.map((i) => (
               <Row
                 key={i.fingerprint}
                 href="#/issues"
                 icon="layers"
                 iconClass={i.state === "open" ? "text-fail" : "text-ink-faint"}
                 title={<span title={i.title}>{i.title}</span>}
-                trailing={
-                  <span
-                    className={`rounded-md px-1.5 py-px text-caption font-semibold ${
-                      i.state === "open" ? "bg-fail/12 text-fail" : "bg-surface-3 text-ink-dim"
-                    }`}
-                  >
-                    ×{i.count}
-                  </span>
-                }
+                trailing={<RunCount n={i.count} />}
                 detail={
                   <>
                     {i.schedules.join(", ")}
@@ -581,21 +669,35 @@ export default function Briefing({
   return (
     <Page
       title="Briefing"
-      subtitle={subtitle}
+      subtitle="What needs you now, and what ran while you were away."
       actions={
-        <Button
-          icon="check"
-          onClick={onAck}
-          aria-disabled={ackUnavailable || undefined}
-          aria-busy={acking || undefined}
-        >
-          Mark caught up
-        </Button>
+        // Nothing to mark read on a first visit: the window is empty and the
+        // button would only move its start.
+        firstVisit ? undefined : (
+          <Button
+            icon="check"
+            onClick={onAck}
+            aria-disabled={ackUnavailable || undefined}
+            aria-busy={acking || undefined}
+          >
+            Mark caught up
+          </Button>
+        )
       }
     >
       {error && (
         <div className="mb-6">
-          <AlertStrip subject="Briefing" message={`Couldn't reach the Argus server: ${error}`} />
+          <AlertStrip
+            subject="Briefing"
+            message={`Couldn't reach the Argus server: ${error}`}
+            action={
+              refresh && (
+                <Button size="sm" icon="retry" onClick={() => refresh()}>
+                  Retry
+                </Button>
+              )
+            }
+          />
         </div>
       )}
       {ackError && (
@@ -618,7 +720,25 @@ export default function Briefing({
           </>
         }
       >
-        {briefing == null ? null : calm ? (
+        {briefing == null ? null : firstVisit ? (
+          <EmptyState
+            icon="inbox"
+            title="Nothing to brief yet."
+            action={
+              <>
+                <ButtonLink href="#/schedules/oneoff" icon="bolt">
+                  Launch a task
+                </ButtonLink>
+                <ButtonLink href="#/schedules" variant="primary" icon="plus">
+                  Create a schedule
+                </ButtonLink>
+              </>
+            }
+          >
+            The briefing fills in once schedules or pipelines run: what needs you first, then what
+            ran while you were away and what it cost.
+          </EmptyState>
+        ) : calm ? (
           <EmptyState
             tone="calm"
             icon="check-circle"
@@ -674,7 +794,7 @@ export default function Briefing({
                 </ButtonLink>
               }
             >
-              <WindowStrip win={briefing.window} />
+              <WindowStrip since={briefing.since} win={briefing.window} />
               {/* Said here, under the window it resets, rather than in a tip
                   beside the button: on a phone the actions wrap to the left
                   edge and a tip anchored to them opened off the screen. */}

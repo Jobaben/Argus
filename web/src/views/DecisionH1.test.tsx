@@ -370,7 +370,11 @@ describe("DecisionH1Section", () => {
   it("renders the collection status, settings and configs", async () => {
     await renderLoaded();
     expect(screen.getByText("Collection off")).toBeTruthy();
-    expect(screen.getByText("ARGUS_H1_COLLECT is not set")).toBeTruthy();
+    // The reason reads as the server said it; the variable in it is set as code.
+    const reason = screen.getByText(
+      (_, el) => el?.tagName === "SPAN" && el.textContent === "ARGUS_H1_COLLECT is not set",
+    );
+    expect(reason.querySelector("code")?.textContent).toBe("ARGUS_H1_COLLECT");
     expect(
       screen.getByText("paused — daily cap reached (until 2026-09-30T00:00:00.000Z)"),
     ).toBeTruthy();

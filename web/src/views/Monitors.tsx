@@ -105,6 +105,33 @@ function cardTone(status: MonitorStatus): string {
   return "border-line";
 }
 
+/**
+ * The run a card in trouble should open: for a failing monitor, its newest
+ * failed run (the one that made it fail); for a late or down one, the last run
+ * that did happen, the nearest evidence of what stopped. Healthy cards get none
+ * — a row of "Open last run" buttons would bury the one that matters.
+ */
+function nextRun(monitor: MonitorHealth): { runId: string; label: string } | null {
+  const beats = monitor.heartbeats;
+  if (monitor.status === "failing") {
+    const failed = [...beats]
+      .reverse()
+      .find(
+        (h) =>
+          h.status === "failed" ||
+          h.status === "interrupted" ||
+          h.outcome === "failed" ||
+          h.outcome === "blocked",
+      );
+    return failed ? { runId: failed.runId, label: "Open failed run" } : null;
+  }
+  if (monitor.status === "down" || monitor.status === "late") {
+    const last = beats[beats.length - 1];
+    return last ? { runId: last.runId, label: "Open last run" } : null;
+  }
+  return null;
+}
+
 function MonitorCard({
   monitor,
   ref,
@@ -113,6 +140,7 @@ function MonitorCard({
   ref?: React.Ref<HTMLDivElement>;
 }) {
   const overdue = monitor.status === "down" || monitor.status === "late";
+  const next = nextRun(monitor);
   return (
     // Not `Card`: an alarming card needs a different border colour, and a second
     // border utility appended to Card's own loses to it in the stylesheet.
@@ -174,6 +202,19 @@ function MonitorCard({
               Next run: <TimeAgo iso={monitor.nextExpected} />
             </span>
           )
+        )}
+        {/* The page asks "is anything quietly broken?"; a card that answers
+            yes says where to look next, rather than leaving the reader on it. */}
+        {next && (
+          <ButtonLink
+            href={`#/run/${encodeURIComponent(next.runId)}`}
+            size="sm"
+            icon="replay"
+            className="-my-1 ml-auto"
+            title="Replay this run, with its postmortem"
+          >
+            {next.label}
+          </ButtonLink>
         )}
       </div>
     </div>

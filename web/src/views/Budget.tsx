@@ -2,10 +2,11 @@ import { useId, useState, type KeyboardEvent } from "react";
 import { useMachineFacet } from "../fleet/useMachineFacet";
 import { MachinePicker, PeerBanner } from "../fleet/MachineFacet";
 import { useBudget } from "../useBudget";
-import type { BudgetConfig, BudgetDay, BudgetState, BudgetWindow } from "../types";
+import type { BudgetConfig, BudgetDay, BudgetResponse, BudgetState, BudgetWindow } from "../types";
 import {
   AlertStrip,
   Button,
+  ButtonLink,
   Card,
   EmptyState,
   formatUsd,
@@ -21,30 +22,42 @@ import {
 import { LedgerPanels } from "./LedgerPanels";
 import { InfoTip } from "../ds/InfoTip";
 
+/**
+ * A load error in the words that fit it: a status code means the server was
+ * reached and failed, anything else (a rejected fetch) that it was not.
+ */
+function loadErrorMessage(what: string, error: string): string {
+  return /^HTTP \d{3}$/.test(error)
+    ? `Couldn't load ${what}: ${error}`
+    : `Couldn't reach the Argus server: ${error}`;
+}
+
 /** Where the budget's alerts fire, as a share of a limit. Drawn on each meter
  *  as a tick, so "approaching" has a place on the bar and not only a word. */
 const ALERT_AT = 0.8;
 
 // The state, in the anatomy of `StatusPill`. The words are lower-case in the
 // DOM (the server's vocabulary, which the tests pin) and set in sentence case by
-// `first-letter:uppercase`, like every other pill in the app.
+// `first-letter:uppercase`, like every other pill in the app. Approaching a
+// limit is violet, the colour of "a person should look at this soon"; amber
+// means a run is working, and a budget near its ceiling is not that.
 const STATE_PILL: Record<BudgetState, { label: string; cls: string }> = {
   unset: { label: "no limits set", cls: "border-line-strong bg-ink-faint/8 text-ink-dim" },
   ok: { label: "under budget", cls: "border-ok/25 bg-ok/10 text-ok" },
-  warning: { label: "approaching limit", cls: "border-run/30 bg-run/10 text-run" },
+  warning: { label: "approaching limit", cls: "border-await/40 bg-await/12 text-await" },
   exceeded: { label: "over budget", cls: "border-fail/35 bg-fail/12 text-fail" },
 };
 
-type Severity = "ok" | "run" | "fail";
+type Severity = "ok" | "warn" | "fail";
 
 function severity(ratio: number | null): Severity | null {
   if (ratio === null) return null;
   if (ratio >= 1) return "fail";
-  if (ratio >= ALERT_AT) return "run";
+  if (ratio >= ALERT_AT) return "warn";
   return "ok";
 }
 
-const FILL: Record<Severity, string> = { ok: "bg-ok/80", run: "bg-run", fail: "bg-fail" };
+const FILL: Record<Severity, string> = { ok: "bg-ok/80", warn: "bg-await", fail: "bg-fail" };
 
 function StatePill({ state }: { state: BudgetState }) {
   const { label, cls } = STATE_PILL[state];
@@ -74,12 +87,16 @@ function shortDate(iso: string): string {
  *
  * Where the month is heading is the Forecast's job, directly below, and only
  * there: a second month-end figure here would sooner or later disagree with it.
+ * What the card does take from it is the verdict — a month on course to pass
+ * its limit tints its bar, so a calm green meter never sits above a forecast
+ * saying the limit will break.
  */
 function WindowCard({
   label,
   window: w,
   limitName,
   onSetLimit,
+  projectedOver = false,
 }: {
   label: string;
   window: BudgetWindow;
@@ -87,15 +104,20 @@ function WindowCard({
   limitName: "daily" | "monthly";
   /** Offered when there is no limit and this machine can set one. */
   onSetLimit?: () => void;
+  /** The forecast below has this window passing its limit before it ends. */
+  projectedOver?: boolean;
 }) {
   const tone = severity(w.ratio);
   const pct = w.ratio === null ? 0 : Math.min(1, w.ratio) * 100;
+  // Only a window still under its alert line needs the forecast's word; one
+  // already approaching or over says more by itself.
+  const heading = projectedOver && tone === "ok";
   return (
     <Card className="relative overflow-hidden">
       {tone && tone !== "ok" && (
         <span
           aria-hidden="true"
-          className={`absolute inset-y-3 left-0 w-[3px] rounded-r-full ${tone === "fail" ? "bg-fail" : "bg-run"}`}
+          className={`absolute inset-y-3 left-0 w-[3px] rounded-r-full ${tone === "fail" ? "bg-fail" : "bg-await"}`}
         />
       )}
       {/* A fixed height, so a meter with a "% used" caption and one without
@@ -105,7 +127,7 @@ function WindowCard({
         {w.ratio != null && (
           <span
             className={`text-caption font-semibold leading-none ${
-              tone === "fail" ? "text-fail" : tone === "run" ? "text-run" : "text-ink-dim"
+              tone === "fail" ? "text-fail" : tone === "warn" ? "text-await" : "text-ink-dim"
             }`}
           >
             {Math.round(w.ratio * 100)}% used
@@ -114,9 +136,9 @@ function WindowCard({
       </div>
       <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
         <span className="text-display font-semibold text-ink">{formatUsd(w.spentUsd)}</span>
-        <span className="text-small text-ink-faint">
-          {w.limitUsd != null ? `of ${formatUsd(w.limitUsd)} limit` : "no limit set"}
-        </span>
+        {w.limitUsd != null && (
+          <span className="text-small text-ink-faint">of {formatUsd(w.limitUsd)} limit</span>
+        )}
       </div>
 
       {w.limitUsd != null ? (
@@ -124,7 +146,7 @@ function WindowCard({
           <div className="relative mt-4 h-2 rounded-full bg-ground-2" aria-hidden="true">
             <div
               className={`absolute inset-y-0 left-0 rounded-full transition-[width] duration-(--duration-slow) ease-(--ease-out-expo) ${
-                tone ? FILL[tone] : "bg-line"
+                heading ? "bg-await/70" : tone ? FILL[tone] : "bg-line"
               }`}
               style={{ width: `${pct}%` }}
             />
@@ -133,21 +155,29 @@ function WindowCard({
               style={{ left: `${ALERT_AT * 100}%` }}
             />
           </div>
-          <div className="mt-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-caption">
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-caption">
             <span className={tone === "fail" ? "font-semibold text-fail-ink" : "text-ink-dim"}>
               {w.ratio != null && w.ratio >= 1
                 ? `${formatUsd(w.spentUsd - w.limitUsd)} over`
                 : `${formatUsd(Math.max(0, w.limitUsd - w.spentUsd))} remaining`}
             </span>
-            <span className="text-ink-faint">Alerts at {ALERT_AT * 100}%</span>
+            {heading ? (
+              <span className="inline-flex items-center gap-1 font-semibold text-await-ink">
+                <Icon name="arrow-down" size={13} className="text-await" />
+                On course to pass it · see the forecast
+              </span>
+            ) : (
+              <span className="text-ink-faint">Alerts at {ALERT_AT * 100}%</span>
+            )}
           </div>
         </>
       ) : (
+        // One sentence for the missing ceiling, next to the control that sets
+        // one; the page's pill is the only other place that says so.
         <div className="mt-4 flex min-h-8 flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-control bg-ground-2/60 px-3 py-1.5">
           <span className="text-caption text-ink-faint">
-            {onSetLimit
-              ? "Nothing to measure against, so no alerts fire."
-              : "No ceiling is set on that machine."}
+            <span className="inline-block first-letter:uppercase">no limit set</span>
+            {onSetLimit ? ", so no alerts fire." : " on that machine."}
           </span>
           {onSetLimit && (
             <Button size="sm" variant="ghost" icon="plus" onClick={onSetLimit}>
@@ -393,6 +423,97 @@ function focusLimit(which: keyof typeof LIMIT_FIELDS) {
   el.focus({ preventScroll: true });
 }
 
+function monthStart(now: number): string {
+  const d = new Date(now);
+  return new Date(d.getFullYear(), d.getMonth() + 1, 1).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+/**
+ * The one sentence the page exists to say when a limit is reached or about to
+ * be: what is happening to scheduled runs because of it, when that stops, and
+ * the control that changes it. The pill in the header is the quiet echo.
+ *
+ * Over a limit with pausing on, scheduled slots are being skipped right now —
+ * the red strip. Near a limit with pausing on, they are about to be — violet,
+ * a person should look soon. Over with pausing off is still red, because the
+ * money is already spent, but says plainly that nothing has been stopped.
+ */
+function LimitNotice({ status, now }: { status: BudgetResponse["status"]; now: number }) {
+  const { today, month, blockScheduled } = status;
+  const overDay = today.ratio != null && today.ratio >= 1;
+  const overMonth = month.ratio != null && month.ratio >= 1;
+  const scheduler = (
+    <ButtonLink size="sm" variant="ghost" href="#/schedules" iconRight="arrow-right">
+      Scheduler
+    </ButtonLink>
+  );
+
+  if (status.state === "exceeded" && (overDay || overMonth)) {
+    // The month is the later of the two to roll over, so it names the resume date.
+    const which: keyof typeof LIMIT_FIELDS = overMonth ? "monthly" : "daily";
+    const over =
+      overDay && overMonth
+        ? `Today's ${formatUsd(today.spentUsd)} and this month's ${formatUsd(month.spentUsd)} are both over their limits.`
+        : overMonth
+          ? `This month's ${formatUsd(month.spentUsd)} is over the ${formatUsd(month.limitUsd ?? 0)} monthly limit.`
+          : `Today's ${formatUsd(today.spentUsd)} is over the ${formatUsd(today.limitUsd ?? 0)} daily limit.`;
+    return (
+      <div className="mb-4">
+        <AlertStrip
+          subject={blockScheduled ? "Scheduled runs are paused." : "Over budget."}
+          message={
+            blockScheduled
+              ? `${over} They resume ${overMonth ? `on ${monthStart(now)}` : "at midnight"}, or as soon as you raise the limit.`
+              : `${over} Scheduled runs keep firing, because pausing is off.`
+          }
+          action={
+            // A line of its own on a phone: beside two buttons, the strip's
+            // message would be squeezed to a letter a line.
+            <span className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+              {blockScheduled && scheduler}
+              <Button size="sm" icon="edit" onClick={() => focusLimit(which)}>
+                Raise the {which} limit
+              </Button>
+            </span>
+          }
+        />
+      </div>
+    );
+  }
+
+  if (status.state === "warning" && blockScheduled) {
+    // The window closest to its ceiling is the one that will pause runs first.
+    const dayFirst = (today.ratio ?? 0) >= (month.ratio ?? 0);
+    const w = dayFirst ? today : month;
+    const which: keyof typeof LIMIT_FIELDS = dayFirst ? "daily" : "monthly";
+    return (
+      <div
+        role="status"
+        className="mb-4 flex w-full flex-wrap items-center gap-x-3 gap-y-2 rounded-tile border border-await/35 bg-gradient-to-r from-await/12 to-await/[0.03] px-4 py-3"
+      >
+        <Icon name="pause" size={18} className="text-await" />
+        <span className="min-w-0 flex-1 text-small">
+          <b className="font-semibold text-ink">Scheduled runs pause at the limit.</b>{" "}
+          <span className="break-words text-await-ink">
+            {dayFirst ? "Today" : "This month"} is at {Math.round((w.ratio ?? 0) * 100)}% of the{" "}
+            {formatUsd(w.limitUsd ?? 0)} {which} limit, with{" "}
+            {formatUsd(Math.max(0, (w.limitUsd ?? 0) - w.spentUsd))} left.
+          </span>
+        </span>
+        <span className="w-full sm:w-auto">
+          <Button size="sm" icon="edit" onClick={() => focusLimit(which)}>
+            Raise the {which} limit
+          </Button>
+        </span>
+      </div>
+    );
+  }
+  return null;
+}
+
 function LimitField({
   id,
   label,
@@ -504,7 +625,7 @@ function BudgetForm({
           <LimitField
             id={LIMIT_FIELDS.daily}
             label="Daily limit"
-            placeholder="10"
+            placeholder="No limit"
             value={daily}
             invalid={dailyVal === undefined}
             onChange={setDaily}
@@ -512,7 +633,7 @@ function BudgetForm({
           <LimitField
             id={LIMIT_FIELDS.monthly}
             label="Monthly limit"
-            placeholder="200"
+            placeholder="No limit"
             value={monthly}
             invalid={monthlyVal === undefined}
             onChange={setMonthly}
@@ -612,6 +733,9 @@ export default function Budget() {
   // The shared clock, so the projection's "days elapsed" rolls over at midnight
   // without reading the wall clock during render.
   const now = useClock();
+  // Whether the forecast has the month passing its limit, reported up by the
+  // ledger panels so the month's meter and the forecast under it agree.
+  const [monthProjectedOver, setMonthProjectedOver] = useState(false);
   // In peer mode the pill describes the machine being shown, not this one. A
   // peer's state arrives as a plain string (it may run a newer Argus), so only
   // a word this page knows is trusted — an own key, so "toString" is not one.
@@ -665,7 +789,7 @@ export default function Budget() {
         <div className="mb-6">
           <AlertStrip
             subject="Budget"
-            message={`Couldn't reach the Argus server: ${error}`}
+            message={loadErrorMessage("the budget", error)}
             action={
               <Button size="sm" icon="retry" onClick={() => void refresh()}>
                 Retry
@@ -695,6 +819,7 @@ export default function Budget() {
         >
           {budget ? (
             <>
+              <LimitNotice status={budget.status} now={now} />
               <section aria-label="Spend" className="mb-10 grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <WindowCard
                   label="Today"
@@ -707,6 +832,7 @@ export default function Budget() {
                   window={budget.status.month}
                   limitName="monthly"
                   onSetLimit={() => focusLimit("monthly")}
+                  projectedOver={monthProjectedOver}
                 />
               </section>
 
@@ -717,6 +843,7 @@ export default function Budget() {
               <LedgerPanels
                 month={budget.status.month}
                 now={now}
+                onProjectedOver={setMonthProjectedOver}
                 history={
                   <Section title="Last 30 days">
                     <SpendChart days={budget.days} dailyLimit={budget.config.dailyUsd} />

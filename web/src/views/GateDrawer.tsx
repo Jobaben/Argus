@@ -149,23 +149,82 @@ function splitPayload(value: Record<string, unknown>) {
  */
 interface PayloadParts {
   reason: string | null;
-  notes: string[];
+  notes: Note[];
   /** Whatever is left to show raw, or `undefined` for nothing. */
   raw: unknown;
   /** The raw part is bookkeeping beside prose, so it starts folded. */
   folded: boolean;
 }
 
+/** One piece of the agent's own writing, named by where it came from. */
+interface Note {
+  label: string;
+  source: string;
+  /** The outcome its `ARGUS_OUTCOME` line reported, if it had one. */
+  outcome: string | null;
+}
+
+const OUTCOME_LINE = /^\s*ARGUS_OUTCOME:\s*(\S+)\s*(.*)$/;
+
+/**
+ * The agent's protocol line taken off its prose.
+ *
+ * Every agent ends with `ARGUS_OUTCOME: <outcome> <reason>`, because the prompt
+ * Argus gives it demands that, and printed under the human message the line
+ * said the same thing again as protocol: "Drafted the changelog… ARGUS_OUTCOME:
+ * succeeded". The outcome is kept to be shown as a chip; the payload itself is
+ * untouched. A note that is nothing but the marker keeps the marker's reason.
+ */
+function splitOutcome(text: string): { prose: string; outcome: string | null } {
+  let outcome: string | null = null;
+  let markerReason = "";
+  const kept = text.split("\n").filter((line) => {
+    const m = OUTCOME_LINE.exec(line);
+    if (!m) return true;
+    outcome = m[1];
+    markerReason = m[2].trim();
+    return false;
+  });
+  const prose = kept.join("\n").trim();
+  return { prose: prose || markerReason, outcome };
+}
+
+/** Loosely the same sentence: case, punctuation, articles and a leading
+ *  "failed:" set aside. */
+function sameSentence(a: string, b: string): boolean {
+  const norm = (t: string) =>
+    t
+      .toLowerCase()
+      .replace(/^\s*(failed|blocked|succeeded)\s*:\s*/, "")
+      .replace(/\b(the|a|an)\b/g, "")
+      .replace(/[^a-z0-9]+/g, "");
+  return norm(a) !== "" && norm(a) === norm(b);
+}
+
+function toNote(label: string, text: string): Note {
+  const { prose, outcome } = splitOutcome(text);
+  return { label, source: prose, outcome };
+}
+
 function payloadParts(value: unknown): PayloadParts {
   const none: PayloadParts = { reason: null, notes: [], raw: undefined, folded: false };
   if (value == null) return none;
-  if (typeof value === "string") return { ...none, notes: [value] };
+  if (typeof value === "string") return { ...none, notes: [toNote("Closing note", value)] };
   if (typeof value !== "object" || Array.isArray(value)) return { ...none, raw: value };
   const { prose, rest } = splitPayload(value as Record<string, unknown>);
   if (Object.keys(prose).length === 0) return { ...none, raw: value };
+  const reason = prose.reason ?? null;
+  const notes = [
+    prose.summary && toNote("Summary", prose.summary),
+    prose.last_assistant_message && toNote("Agent's last message", prose.last_assistant_message),
+  ]
+    .filter((n): n is Note => !!n && n.source !== "")
+    // A note that only repeats the reason above it is the third telling of one
+    // error; the lead panel already said it.
+    .filter((n) => !(reason && sameSentence(n.source, reason)));
   return {
-    reason: prose.reason ?? null,
-    notes: [prose.summary, prose.last_assistant_message].filter((s): s is string => !!s),
+    reason,
+    notes,
     raw: Object.keys(rest).length > 0 ? rest : undefined,
     folded: true,
   };
@@ -224,11 +283,21 @@ function Lead({ status, reason }: { status: PhaseReview["status"]; reason: strin
   );
 }
 
-function ClosingNote({ source }: { source: string }) {
+function ClosingNote({ note }: { note: Note }) {
   return (
     <div data-testid="gate-closing-note" className={`${WELL} px-4 py-3.5 sm:px-5`}>
+      {/* Whose words these are, and what the agent said of its own work — in
+          its words, never as a verdict: a marker is not verification. */}
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="eyebrow">{note.label}</span>
+        {note.outcome && (
+          <span className={chipClass("neutral")} title="The outcome the agent reported">
+            reported {note.outcome}
+          </span>
+        )}
+      </div>
       <Markdown
-        source={source}
+        source={note.source}
         className="!text-small leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
       />
     </div>
@@ -1619,7 +1688,7 @@ function GatePanel({
           <div className="flex flex-col gap-3">
             <Lead status={review.status} reason={parts.reason} />
             {parts.notes.map((n, i) => (
-              <ClosingNote key={i} source={n} />
+              <ClosingNote key={i} note={n} />
             ))}
             {review.payload == null && (
               <p className="text-small text-ink-faint">The agent left no closing note.</p>

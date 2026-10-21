@@ -125,7 +125,8 @@ describe("Pipelines tab", () => {
     render(<Pipelines />);
     await waitFor(() => expect(screen.getByText("Nightly")).toBeTruthy());
     await waitFor(() => expect(screen.getByRole("button", { name: /^stop$/i })).toBeTruthy());
-    expect(screen.getByText(/working/i)).toBeTruthy();
+    // The pill's word exactly: the list summary also counts "1 working".
+    expect(screen.getByText("Working")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /run now/i })).toBeNull();
   });
 
@@ -319,8 +320,10 @@ describe("Pipelines admin gate", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<Pipelines />);
     await waitFor(() => expect(screen.getByRole("button", { name: /sign in/i })).toBeTruthy());
-    await user.type(screen.getByPlaceholderText("Username"), "usha");
-    await user.type(screen.getByPlaceholderText("Password"), "correct horse");
+    // By label: the login panel's fields are labelled now, and their
+    // placeholders are examples rather than names.
+    await user.type(screen.getByLabelText("Username"), "usha");
+    await user.type(screen.getByLabelText(/^password/i), "correct horse");
     await user.click(screen.getByRole("button", { name: /sign in/i }));
     await waitFor(() =>
       expect(
@@ -335,10 +338,15 @@ describe("Pipelines admin gate", () => {
   });
 
   it("shows a Sign out button with the username when signed in", async () => {
+    const user = userEvent.setup();
     vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: null }]));
     render(<Pipelines />);
-    await waitFor(() => expect(screen.getByRole("button", { name: /sign out/i })).toBeTruthy());
-    expect(screen.getByText("admin")).toBeTruthy();
+    // Folded behind the account control, which carries the username, so that
+    // Sign out no longer sits beside New pipeline.
+    const account = await screen.findByRole("button", { name: "admin" });
+    await user.click(account);
+    expect(screen.getByRole("button", { name: /sign out/i })).toBeTruthy();
+    expect(screen.getByText("Signed in as")).toBeTruthy();
   });
 
   it("shows where the latest run got to, per phase", async () => {

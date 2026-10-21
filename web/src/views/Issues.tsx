@@ -36,6 +36,19 @@ const CLASS_LABEL: Record<FailureClass, string> = {
   other: "Unclassified",
 };
 
+/**
+ * Lines an agent writes for the scheduler, not for a person: a reply ends with
+ * `ARGUS_OUTCOME: <outcome> <reason>`, and printed after the human message it
+ * said the same thing twice, the second time as protocol. Display only — the
+ * stored error keeps it. When the marker is all there is, its reason stays.
+ */
+function withoutOutcomeMarker(text: string): string {
+  const lines = text.split("\n");
+  const prose = lines.filter((l) => !l.trim().startsWith("ARGUS_OUTCOME:"));
+  if (prose.some((l) => l.trim() !== "")) return prose.join("\n").trim();
+  return text.replace(/^\s*ARGUS_OUTCOME:\s*\S+\s*/, "").trim() || text;
+}
+
 /** StatusPill's anatomy and colours: open is a failure still standing,
  *  resolved is done, ignored is set aside. */
 const STATE_BADGE: Record<IssueState, string> = {
@@ -112,8 +125,10 @@ function Occurrences({ list }: { list: IssueOccurrence[] }) {
             className="order-last line-clamp-2 min-w-0 basis-full break-words font-mono text-ink-faint sm:order-none sm:basis-auto sm:flex-1"
             title={o.error}
           >
-            {o.error}
+            {withoutOutcomeMarker(o.error)}
           </span>
+          {/* "Open run", not "Replay": it opens the recording, and "Replay" on
+              a failure reads as "run it again". */}
           <ButtonLink
             href={`#/run/${encodeURIComponent(o.runId)}`}
             variant="ghost"
@@ -122,7 +137,7 @@ function Occurrences({ list }: { list: IssueOccurrence[] }) {
             className="ml-auto"
             title="Replay this run, with its postmortem"
           >
-            Replay
+            Open run
           </ButtonLink>
         </li>
       ))}
@@ -221,17 +236,23 @@ function IssueCard({
           </span>
         </button>
         <div className="flex shrink-0 items-center gap-2">
-          {/* Red only while it is still happening to you: a resolved issue's
-              count is history, and a red number on it said otherwise. */}
+          {/* The count is a quantity, not a status, so it is never red: beside
+              a red "Open" pill it made two alarms of one fact. */}
           <span
-            className={`inline-flex h-6 items-center rounded-md px-2 text-caption font-semibold leading-none ${
-              open ? "bg-fail/12 text-fail" : "bg-surface-3 text-ink-dim"
-            }`}
+            className="inline-flex h-6 items-center rounded-md border border-line px-2 text-caption font-semibold leading-none text-ink-dim"
             title={`${issue.count} failed run${issue.count === 1 ? "" : "s"}`}
           >
             ×{issue.count}
           </span>
-          <StateBadge state={issue.state} />
+          {/* Open is what an issue is until someone triages it, so it is not
+              badged — a list of open issues was a column of identical red
+              pills. Resolved and ignored are the exceptions, and say so. A
+              screen reader still hears every row's state. */}
+          {open ? (
+            <span className="sr-only">{issue.state}</span>
+          ) : (
+            <StateBadge state={issue.state} />
+          )}
         </div>
       </div>
 
@@ -332,7 +353,8 @@ function PeerIssues({ facet }: { facet: ReturnType<typeof useMachineFacet> }) {
   );
 }
 
-const COUNTER_GRID = "mb-8 grid grid-cols-3 gap-3 md:max-w-xl";
+/** The same stretching row as every other counter row in the product. */
+const COUNTER_GRID = "mb-8 grid grid-cols-3 gap-3";
 
 export default function Issues() {
   // Rows come and go and change places as health changes; FLIP glides them
@@ -364,6 +386,9 @@ export default function Issues() {
   // A failed load with nothing to show is reported once, by the strip: zeroed
   // counters and "No failures on record" under it would be two false claims.
   const nothingLoaded = error != null && issues.length === 0;
+  // With nothing on record the empty state says so; a row of three zeros above
+  // it said it again, as numbers.
+  const allZero = counters.every(({ state }) => summary[state] === 0);
 
   return (
     <Page
@@ -418,27 +443,29 @@ export default function Issues() {
           >
             {nothingLoaded ? null : (
               <>
-                <section aria-label="Issues by state" className={COUNTER_GRID}>
-                  {counters.map(({ state, label, tone }) => (
-                    <HealthCounter
-                      key={state}
-                      label={label}
-                      value={summary[state]}
-                      tone={tone}
-                      selected={filter === state}
-                      onClick={
-                        summary[state] > 0
-                          ? () => setFilter(filter === state ? null : state)
-                          : undefined
-                      }
-                      title={
-                        summary[state] > 0
-                          ? `Show only the ${label.toLowerCase()} issues`
-                          : undefined
-                      }
-                    />
-                  ))}
-                </section>
+                {!(issues.length === 0 && allZero) && (
+                  <section aria-label="Issues by state" className={COUNTER_GRID}>
+                    {counters.map(({ state, label, tone }) => (
+                      <HealthCounter
+                        key={state}
+                        label={label}
+                        value={summary[state]}
+                        tone={tone}
+                        selected={filter === state}
+                        onClick={
+                          summary[state] > 0
+                            ? () => setFilter(filter === state ? null : state)
+                            : undefined
+                        }
+                        title={
+                          summary[state] > 0
+                            ? `Show only the ${label.toLowerCase()} issues`
+                            : undefined
+                        }
+                      />
+                    ))}
+                  </section>
+                )}
 
                 {filter !== null && (
                   <div className="mb-3 flex items-center gap-2 text-caption text-ink-faint">

@@ -71,7 +71,9 @@ function NextFireLabel({ at }: { at: string | null }) {
  */
 const STATE_PILL: Record<ScheduleState, { label: string; className: string }> = {
   failing: { label: "Failing", className: "border-fail/35 bg-fail/12 text-fail" },
-  running: { label: "Running", className: "border-run/30 bg-run/10 text-run" },
+  // The run's own word, as StatusPill and the run rows say it: one state used
+  // to go by "Running", "Working" and "running" on the same card.
+  running: { label: "Working", className: "border-run/30 bg-run/10 text-run" },
   paused: { label: "Paused", className: "border-line-strong bg-ink-faint/8 text-ink-dim" },
   unproven: { label: "Never run", className: "border-dashed border-line-strong text-ink-faint" },
   healthy: { label: "Healthy", className: "border-ok/25 bg-ok/10 text-ok" },
@@ -182,7 +184,7 @@ function SchedulerSummaryStrip({
         {summary.running > 0 && (
           <span className="inline-flex items-center gap-1.5 pl-1 text-caption font-semibold text-run">
             <LiveDot />
-            {summary.running} running
+            {summary.running} working
           </span>
         )}
       </div>
@@ -496,6 +498,25 @@ function ScheduleForm({
   );
 }
 
+/** The first line of a run's summary that is prose — not the `ARGUS_OUTCOME:`
+ *  protocol line the agent prints for the scheduler, whose verdict the card's
+ *  pill already shows. */
+function failureProse(text: string | null | undefined): string {
+  return (
+    (text ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line !== "" && !line.startsWith("ARGUS_OUTCOME:")) ?? ""
+  );
+}
+
+/** The last two segments of a path — "…/home-v1/repo" — which are the part
+ *  that tells one schedule's directory from another's. */
+function pathTail(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  return parts.length > 2 ? `…/${parts.slice(-2).join("/")}` : path;
+}
+
 /** Median duration of the recent conclusive runs — what "normal" costs, so a
  *  run that is taking four times that is visibly abnormal. Median, not mean: one
  *  pathological 40-minute run should not redefine normal. */
@@ -613,6 +634,8 @@ function ScheduleCard({
   };
 
   const lastFailure = health.consecutiveFailures > 1 ? health.lastConclusive : null;
+  const failureReason = failureProse(lastFailure?.resultSummary);
+  const failureCode = lastFailure?.error?.split("\n")[0] ?? "";
   const eventDriven = schedule.trigger.kind === "webhook" || schedule.trigger.kind === "after";
 
   // What the trigger line says after the trigger itself.
@@ -684,96 +707,122 @@ function ScheduleCard({
   return (
     <div
       ref={ref}
-      className={`flex min-w-0 flex-col rounded-tile border shadow-raised ${cardTone(health.state)}`}
+      className={`@container flex min-w-0 flex-col rounded-tile border shadow-raised ${cardTone(health.state)}`}
     >
-      <div className="flex-1 p-4 sm:p-5">
-        <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
-          <div className="min-w-0 flex-1 basis-64">
-            <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
-              <h3 className="min-w-0 max-w-full truncate text-title font-semibold text-ink">
-                {schedule.name}
-              </h3>
-              <HealthPill state={health.state} />
-              {running.length > 0 && health.state !== "running" && (
-                <span
-                  className="inline-flex items-center gap-1.5 text-caption font-semibold text-run"
-                  title="A run is in flight"
-                >
-                  <LiveDot />
-                  run in flight
+      {/* Full width, one card per row, in priority order. A wide card puts its
+          history beside what the schedule is, rather than a second card beside
+          it: two columns of unequal cards left holes, and a scan for state
+          zigzagged between them. Laid out by the card's own width. */}
+      <div className="grid flex-1 grid-cols-1 gap-x-8 p-4 sm:p-5 @5xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+        <div className="min-w-0">
+          <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+            <div className="min-w-0 flex-1 basis-64">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
+                <h3 className="min-w-0 max-w-full truncate text-title font-semibold text-ink">
+                  {schedule.name}
+                </h3>
+                <HealthPill state={health.state} />
+                {running.length > 0 && health.state !== "running" && (
+                  <span
+                    className="inline-flex items-center gap-1.5 text-caption font-semibold text-run"
+                    title="A run is in flight"
+                  >
+                    <LiveDot />
+                    run in flight
+                  </span>
+                )}
+                <CardVerdict trend={trend} />
+              </div>
+              <FactLine
+                lead={
+                  <span className="inline-block max-w-[calc(100%-0.875rem)] truncate align-bottom font-semibold text-ink-dim first-letter:uppercase">
+                    {triggerLabel}
+                  </span>
+                }
+                facts={facts}
+                className="mt-1.5 text-caption leading-5 text-ink-faint"
+              />
+              {/* The machine half: where it runs, and on which model. Mono, and
+                the path's tail rather than its head: schedules share a prefix
+                and differ at the end, so a path cut off at the end showed every
+                card the same "/tmp/claude-0/-home-u…". The whole path is in the
+                tooltip. */}
+              <p className="mt-1 flex min-w-0 items-center gap-1.5 font-mono text-caption text-ink-faint">
+                <Icon name="folder" size={13} />
+                <span className="min-w-0 truncate" title={schedule.cwd}>
+                  {pathTail(schedule.cwd)}
                 </span>
-              )}
-              <CardVerdict trend={trend} />
+                {schedule.model && (
+                  <span className="flex shrink-0 items-center gap-1.5" title="Model override">
+                    <span aria-hidden="true">·</span>
+                    {schedule.model}
+                  </span>
+                )}
+              </p>
             </div>
-            <FactLine
-              lead={
-                <span className="inline-block max-w-[calc(100%-0.875rem)] truncate align-bottom font-semibold text-ink-dim first-letter:uppercase">
-                  {triggerLabel}
-                </span>
-              }
-              facts={facts}
-              className="mt-1.5 text-caption leading-5 text-ink-faint"
-            />
-            {/* The machine half: where it runs, and on which model. Mono, and
-                the path gives way first — its tail is in the tooltip. */}
-            <p className="mt-1 flex min-w-0 items-center gap-1.5 font-mono text-caption text-ink-faint">
-              <Icon name="folder" size={13} />
-              <span className="min-w-0 truncate" title={schedule.cwd}>
-                {schedule.cwd}
-              </span>
-              {schedule.model && (
-                <span className="flex shrink-0 items-center gap-1.5" title="Model override">
-                  <span aria-hidden="true">·</span>
-                  {schedule.model}
-                </span>
-              )}
-            </p>
-          </div>
-          <Button
-            size="sm"
-            icon="play"
-            disabled={pending === "run"}
-            onClick={act("run", () => runNow(schedule.id))}
-            title="Fire this schedule once now, outside its cadence"
-          >
-            {pending === "run" ? "Starting…" : "Run now"}
-          </Button>
-        </header>
+            <Button
+              size="sm"
+              icon="play"
+              disabled={pending === "run"}
+              onClick={act("run", () => runNow(schedule.id))}
+              title="Fire this schedule once now, outside its cadence"
+            >
+              {pending === "run" ? "Starting…" : "Run now"}
+            </Button>
+          </header>
 
-        {/* The one thing a card must not make you count for yourself. A single
+          {/* The one thing a card must not make you count for yourself. A single
             failure is visible in the rows below; a streak is a different problem
             and deserves to be stated — with the reason, and the way to look. */}
-        {lastFailure && (
-          <div className="mt-4 flex flex-wrap items-start gap-x-3 gap-y-2 rounded-control border border-fail/25 bg-fail/[0.08] px-3.5 py-3">
-            <Icon name="alert" size={16} className="mt-0.5 text-fail" />
-            <div className="min-w-0 flex-1 basis-48">
-              <p className="text-small font-semibold text-fail">
-                {health.consecutiveFailures} consecutive failures
-              </p>
-              {lastFailure.error ? (
-                <p className="mt-1 line-clamp-2 break-words font-mono text-caption text-fail-ink">
-                  {lastFailure.error.split("\n")[0]}
+          {lastFailure && (
+            <div className="mt-4 flex flex-wrap items-start gap-x-3 gap-y-2 rounded-control border border-fail/25 bg-fail/[0.08] px-3.5 py-3">
+              <Icon name="alert" size={16} className="mt-0.5 text-fail" />
+              <div className="min-w-0 flex-1 basis-48">
+                <p className="text-small font-semibold text-fail">
+                  {health.consecutiveFailures} consecutive failures
                 </p>
-              ) : (
-                <p className="mt-1 text-caption text-fail-ink">
-                  Expand a run below for the reason.
-                </p>
-              )}
+                {/* The agent's own account of why leads; the process's exit is
+                  the footnote. "exit code 1" was the headline, and the reason
+                  was one expand away. */}
+                {failureReason ? (
+                  <>
+                    <p className="mt-1 line-clamp-2 break-words text-small text-fail-ink">
+                      {failureReason}
+                    </p>
+                    {failureCode && (
+                      <p className="mt-1 break-words font-mono text-caption text-ink-faint">
+                        {failureCode}
+                      </p>
+                    )}
+                  </>
+                ) : failureCode ? (
+                  <p className="mt-1 line-clamp-2 break-words font-mono text-caption text-fail-ink">
+                    {failureCode}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-caption text-fail-ink">
+                    Expand a run below for the reason.
+                  </p>
+                )}
+              </div>
+              {/* Opens the recording; it fires nothing. "Replay last failure",
+                under Run now, read as a way to run it again. */}
+              <ButtonLink
+                href={`#/run/${encodeURIComponent(lastFailure.id)}`}
+                variant="ghost"
+                size="sm"
+                icon="history"
+                className="-my-0.5"
+                title="Open the last failure's recording on the Flight Recorder"
+              >
+                Open last failure
+              </ButtonLink>
             </div>
-            <ButtonLink
-              href={`#/run/${encodeURIComponent(lastFailure.id)}`}
-              variant="ghost"
-              size="sm"
-              icon="history"
-              className="-my-0.5"
-            >
-              Replay last failure
-            </ButtonLink>
-          </div>
-        )}
+          )}
+        </div>
 
         {recent.length > 0 ? (
-          <div className="mt-4">
+          <div className="mt-4 min-w-0 @5xl:mt-0">
             <div className="mb-2 flex items-baseline justify-between gap-2">
               <h4 className="eyebrow">
                 {recent.length === 1 ? "Last run" : `Last ${recent.length} runs`}
@@ -796,7 +845,7 @@ function ScheduleCard({
         ) : (
           // A schedule with no history is the state a new one is in for hours.
           // Saying so, with the way to test it, beats an empty gap under the card.
-          <p className="mt-4 flex items-start gap-2 rounded-control bg-ground-2/60 px-3 py-2.5 text-caption text-ink-faint">
+          <p className="mt-4 flex items-start gap-2 self-start rounded-control bg-ground-2/60 px-3 py-2.5 text-caption text-ink-faint @5xl:mt-0">
             <Icon name="info" size={14} className="mt-px" />
             <span>
               No runs recorded yet.{" "}
@@ -851,26 +900,25 @@ function ScheduleCard({
 }
 
 /**
- * The cards, one column or two, as keyed children of one grid.
+ * The cards, one per row, as keyed children of one parent.
  *
- * One parent on purpose. The cards used to sit in two independent stacks, so
- * a short card did not leave a hole beside a tall one — but React keeps a
- * child's state only among its own siblings, so every re-sort (a schedule
- * starting to fail, one paused, a filter) remounted whichever cards changed
- * stack: an open edit form lost what had been typed, expanded runs closed, and
- * the tab order ran down one stack and then the other instead of in priority
- * order. A grid keeps every card mounted through a re-order and reads in the
- * order it is drawn; `items-start` stops a short card stretching to match its
- * neighbour, at the cost of a gap under it.
+ * One parent on purpose. The cards once sat in two independent stacks — and
+ * React keeps a child's state only among its own siblings, so every re-sort (a
+ * schedule starting to fail, one paused, a filter) remounted whichever cards
+ * changed stack: an open edit form lost what had been typed, expanded runs
+ * closed, and the tab order ran down one stack and then the other instead of
+ * in priority order. One column also reads top to bottom in that order, which
+ * two columns of unequal cards did not: they zigzagged, with holes under the
+ * short ones. A wide card uses its width inside itself instead.
  */
 function CardGrid({ children }: { children: ReactNode }) {
-  return <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">{children}</div>;
+  return <div className="grid grid-cols-1 gap-4">{children}</div>;
 }
 
-/** Card-shaped placeholders in the grid the cards will land in. */
+/** Card-shaped placeholders in the list the cards will land in. */
 function ScheduleSkeleton() {
   return (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+    <div className="grid grid-cols-1 gap-4">
       {Array.from({ length: 4 }, (_, i) => (
         <div
           key={i}
@@ -1104,13 +1152,11 @@ export default function Schedules() {
                     </Button>
                   }
                 >
-                  A schedule is a prompt, a working directory and a cadence: Argus runs your chosen
-                  agent — <code className="font-mono text-ink-dim">claude -p</code>,{" "}
-                  <code className="font-mono text-ink-dim">codex exec</code>,{" "}
-                  <code className="font-mono text-ink-dim">opencode run</code> or{" "}
-                  <code className="font-mono text-ink-dim">qwen</code> — in that directory on time
-                  and keeps every run&apos;s transcript, cost and result. A first one worth having
-                  is a nightly review of yesterday&apos;s commits.
+                  {/* Two sentences; which agents it can run, and how, are in "How
+                      schedules work" at the end of the tab rule above. */}
+                  A prompt, a directory and a cadence: Argus runs your agent there on time and keeps
+                  every run&apos;s transcript, cost and result. A first one worth having is a
+                  nightly review of yesterday&apos;s commits.
                 </EmptyState>
               )
             ) : shown.length === 0 && schedules.length > 0 ? (

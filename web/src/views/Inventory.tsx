@@ -12,6 +12,9 @@ import {
 } from "../ds";
 import { useInventory, type InventoryItem, type PluginItem } from "../useInventory";
 
+/** A path is machine text, in the mono face like the subtitle's. */
+const PATH = "font-mono text-caption text-ink";
+
 interface Row {
   key: string;
   name: string;
@@ -224,23 +227,29 @@ export default function Inventory() {
           // With an error up top, "nothing found" would be a guess.
           error ? null : (
             <EmptyState icon="folder" title="No extensions found yet">
-              Argus lists what Claude Code has installed under ~/.claude. Nothing has been reported
-              yet.
+              Argus lists what Claude Code has installed under{" "}
+              <code className={PATH}>~/.claude</code>. Nothing has been reported yet.
             </EmptyState>
           )
         ) : total === 0 ? (
           <EmptyState
             icon="folder"
-            title="Nothing installed under ~/.claude yet"
+            title={
+              <>
+                Nothing installed under <code className="font-mono text-ink">~/.claude</code> yet
+              </>
+            }
             action={
               <Button icon="retry" onClick={() => refresh()}>
                 Check again
               </Button>
             }
           >
-            Agents, commands and skills are Markdown files in ~/.claude/agents, ~/.claude/commands
-            and ~/.claude/skills; plugins arrive from a marketplace through Claude Code. This page
-            picks them up as soon as they appear.
+            Agents, commands and skills are Markdown files in{" "}
+            <code className={PATH}>~/.claude/agents</code>,{" "}
+            <code className={PATH}>~/.claude/commands</code> and{" "}
+            <code className={PATH}>~/.claude/skills</code>; plugins arrive from a marketplace
+            through Claude Code. This page picks them up as soon as they appear.
           </EmptyState>
         ) : visible.length === 0 ? (
           <EmptyState

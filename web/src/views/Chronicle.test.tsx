@@ -104,6 +104,66 @@ describe("Chronicle", () => {
     expect(mockHours.at(-1)).toBe(6);
   });
 
+  it("names a pipeline lane after the pipeline, not its latest phase", () => {
+    mockState.chronicle = {
+      windowStart: "2026-07-09T00:00:00.000Z",
+      windowEnd: "2026-07-09T12:00:00.000Z",
+      groups: [
+        {
+          key: "run:pipeline:i1",
+          label: "Release Train · Draft release notes",
+          kind: "run",
+          rows: [[span("p1", { label: "Release Train · Plan" })]],
+        },
+      ],
+      totals: { spans: 1, active: 0, failed: 0, costUsd: null, tokens: null },
+    };
+    render(<Chronicle />);
+    expect(screen.getByText("Release Train")).toBeInTheDocument();
+    expect(screen.queryByText("Release Train · Draft release notes")).not.toBeInTheDocument();
+    expect(screen.getByText("Runs")).toBeInTheDocument();
+  });
+
+  it("never draws two bars over each other, even when they are seconds apart", () => {
+    // Both are under the minimum bar width, so they would share pixels; the
+    // server, packing by time, put them on one row.
+    mockState.chronicle = {
+      windowStart: "2026-07-09T00:00:00.000Z",
+      windowEnd: "2026-07-16T00:00:00.000Z",
+      groups: [
+        {
+          key: "run:pipeline:i2",
+          label: "Audit · Triage",
+          kind: "run",
+          rows: [
+            [
+              span("scan", {
+                label: "Audit · Scan",
+                startedAt: "2026-07-15T10:00:00.000Z",
+                endedAt: "2026-07-15T10:00:02.000Z",
+              }),
+              span("triage", {
+                label: "Audit · Triage",
+                status: "failed",
+                startedAt: "2026-07-15T10:00:03.000Z",
+                endedAt: "2026-07-15T10:00:05.000Z",
+                detail: "timed out\nARGUS_OUTCOME: failed timed out",
+              }),
+            ],
+          ],
+        },
+      ],
+      totals: { spans: 2, active: 0, failed: 1, costUsd: null, tokens: null },
+    };
+    render(<Chronicle />);
+    const scan = screen.getByRole("link", { name: "Audit · Scan, done" });
+    const triage = screen.getByRole("link", { name: "Audit · Triage, failed" });
+    expect(scan.parentElement).not.toBe(triage.parentElement);
+    // The tooltip states the status once, not again as the agent's protocol line.
+    expect(triage.getAttribute("title")).toContain("timed out");
+    expect(triage.getAttribute("title")).not.toContain("ARGUS_OUTCOME");
+  });
+
   it("surfaces a fetch error", () => {
     mockState.error = "HTTP 500";
     render(<Chronicle />);

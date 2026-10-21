@@ -1,13 +1,15 @@
 import type { AtlasClaim, ClaimKind } from "@argus/contracts";
 import { Icon, staggerDelay } from "../../ds";
 import { KIND_TERMS } from "../knowledgeGlossary";
-import { kindCounts, plural, type ClaimGroup } from "../knowledgeModel";
+import { exceptionOf, kindCounts, plural, type ClaimGroup } from "../knowledgeModel";
 import { KindMark } from "./marks";
 import { InfoTip } from "../../ds/InfoTip";
 
 /**
  * The overview: one quiet card per shelf. A card only draws the eye (an
- * accent edge and a count) when something on it needs attention.
+ * accent edge and a count) when something on it needs attention — violet for
+ * a look, red once a claim on it is contested or violated, the same tone its
+ * worst row carries in the list.
  */
 export function ModuleShelves({
   groups,
@@ -18,62 +20,67 @@ export function ModuleShelves({
 }) {
   return (
     <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {groups.map((g, i) => (
-        <li
-          key={g.key}
-          style={{ animationDelay: staggerDelay(i) }}
-          className="motion-safe:animate-[rise-in_var(--duration-base)_var(--ease-out-expo)_both]"
-        >
-          <button
-            type="button"
-            onClick={() => onOpen(g.key)}
-            className="group relative flex h-full w-full flex-col gap-3 overflow-hidden rounded-tile border border-line bg-surface p-4 text-left shadow-raised transition duration-(--duration-quick) hover:border-line-strong hover:bg-surface-2 motion-safe:active:scale-[0.99]"
+      {groups.map((g, i) => {
+        const fail = g.claims.some((c) => exceptionOf(c)?.tone === "fail");
+        return (
+          <li
+            key={g.key}
+            style={{ animationDelay: staggerDelay(i) }}
+            className="motion-safe:animate-[rise-in_var(--duration-base)_var(--ease-out-expo)_both]"
           >
-            {/* The accent edge, the same rule `HealthCounter` draws on a tile
+            <button
+              type="button"
+              onClick={() => onOpen(g.key)}
+              className="group relative flex h-full w-full flex-col gap-3 overflow-hidden rounded-tile border border-line bg-surface p-4 text-left shadow-raised transition duration-(--duration-quick) hover:border-line-strong hover:bg-surface-2 motion-safe:active:scale-[0.99]"
+            >
+              {/* The accent edge, the same rule `HealthCounter` draws on a tile
                 that has something to say. */}
-            {g.exceptions > 0 && (
-              <span
-                aria-hidden="true"
-                className="absolute inset-y-3 left-0 w-[3px] rounded-r-full bg-run"
-              />
-            )}
-            <span className="flex items-start justify-between gap-3">
-              <span className="min-w-0">
-                <span className="block truncate text-heading font-semibold text-ink">
-                  {g.label}
-                </span>
-                {g.detail && (
-                  <span className="mt-0.5 block truncate font-mono text-caption text-ink-faint">
-                    {g.detail}
-                  </span>
-                )}
-              </span>
-              <span className="text-glance-sm font-semibold leading-none tabular-nums text-ink-dim transition-colors duration-(--duration-quick) group-hover:text-ink">
-                {g.claims.length}
-              </span>
-            </span>
-            <KindDots claims={g.claims} />
-            <span className="mt-auto flex items-center justify-between gap-3 border-t border-line pt-3 text-caption">
-              <span className="min-w-0 truncate font-mono text-ink-faint">
-                {g.topFiles.join(" · ")}
-              </span>
-              <span className="flex shrink-0 items-center gap-2">
-                {g.exceptions > 0 && (
-                  <span className="inline-flex items-center gap-1.5 font-semibold text-run">
-                    <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
-                    {plural(g.exceptions, "needs a look", "need a look")}
-                  </span>
-                )}
-                <Icon
-                  name="chevron-right"
-                  size={15}
-                  className="text-ink-faint transition-transform duration-(--duration-quick) group-hover:translate-x-0.5 group-hover:text-ink-dim"
+              {g.exceptions > 0 && (
+                <span
+                  aria-hidden="true"
+                  className={`absolute inset-y-3 left-0 w-[3px] rounded-r-full ${fail ? "bg-fail" : "bg-await"}`}
                 />
+              )}
+              <span className="flex items-start justify-between gap-3">
+                <span className="min-w-0">
+                  <span className="block truncate text-heading font-semibold text-ink">
+                    {g.label}
+                  </span>
+                  {g.detail && (
+                    <span className="mt-0.5 block truncate font-mono text-caption text-ink-faint">
+                      {g.detail}
+                    </span>
+                  )}
+                </span>
+                <span className="text-glance-sm font-semibold leading-none tabular-nums text-ink-dim transition-colors duration-(--duration-quick) group-hover:text-ink">
+                  {g.claims.length}
+                </span>
               </span>
-            </span>
-          </button>
-        </li>
-      ))}
+              <KindDots claims={g.claims} />
+              <span className="mt-auto flex items-center justify-between gap-3 border-t border-line pt-3 text-caption">
+                <span className="min-w-0 truncate font-mono text-ink-faint">
+                  {g.topFiles.join(" · ")}
+                </span>
+                <span className="flex shrink-0 items-center gap-2">
+                  {g.exceptions > 0 && (
+                    <span
+                      className={`inline-flex items-center gap-1.5 font-semibold ${fail ? "text-fail" : "text-await"}`}
+                    >
+                      <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
+                      {plural(g.exceptions, "needs a look", "need a look")}
+                    </span>
+                  )}
+                  <Icon
+                    name="chevron-right"
+                    size={15}
+                    className="text-ink-faint transition-transform duration-(--duration-quick) group-hover:translate-x-0.5 group-hover:text-ink-dim"
+                  />
+                </span>
+              </span>
+            </button>
+          </li>
+        );
+      })}
     </ul>
   );
 }

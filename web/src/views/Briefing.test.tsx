@@ -181,7 +181,8 @@ describe("Briefing", () => {
             anomalies: [],
             failures: [
               { ...failedRun, id: "a", sessionId: "sess-1", project: "-home-me-api" },
-              { ...failedRun, id: "b", sessionId: null, project: null },
+              // A different failure: the same one twice is one row (below).
+              { ...failedRun, id: "b", sessionId: null, project: null, error: "disk full" },
             ],
           },
         })}
@@ -194,6 +195,145 @@ describe("Briefing", () => {
     const hrefs = links.map((l) => l.getAttribute("href"));
     expect(hrefs).toContain("#/sessions/-home-me-api/sess-1");
     expect(hrefs).toContain("#/issues");
+  });
+});
+
+describe("Briefing — numbers that agree", () => {
+  const win = (over: Partial<BriefingData["window"]>): BriefingData["window"] => ({
+    ...briefing().window,
+    ...over,
+  });
+
+  it("counts a run that exited cleanly but reported a failed outcome as failed", () => {
+    // The Failures list (and Issues, and Chronicle) call it a failure; the
+    // strip said "1 succeeded, 1 failed" right above a list of two.
+    render(
+      <Briefing
+        briefing={briefing({
+          window: win({
+            totalRuns: 2,
+            byStatus: {
+              running: 0,
+              succeeded: 1,
+              failed: 1,
+              skipped: 0,
+              interrupted: 0,
+              cancelled: 0,
+            },
+            failures: [
+              failedRun,
+              { ...failedRun, id: "r2", scheduleName: "Audit", status: "succeeded", error: null },
+            ],
+          }),
+        })}
+        loading={false}
+        error={null}
+        ack={async () => {}}
+      />,
+    );
+    const failed = screen.getByText("Failed").parentElement!;
+    expect(failed).toHaveTextContent("2");
+    expect(screen.queryByText("Succeeded")).not.toBeInTheDocument();
+  });
+
+  it("collapses the same failure on the same schedule into one row with a count", () => {
+    render(
+      <Briefing
+        briefing={briefing({
+          window: win({
+            totalRuns: 3,
+            byStatus: {
+              running: 0,
+              succeeded: 0,
+              failed: 3,
+              skipped: 0,
+              interrupted: 0,
+              cancelled: 0,
+            },
+            failures: [failedRun, { ...failedRun, id: "r2" }, { ...failedRun, id: "r3" }],
+          }),
+        })}
+        loading={false}
+        error={null}
+        ack={async () => {}}
+      />,
+    );
+    expect(screen.getAllByText("timeout after 42s")).toHaveLength(1);
+    expect(screen.getByText("×3")).toBeInTheDocument();
+  });
+
+  it("does not list a new issue again when it is already an attention card", () => {
+    const newIssue = {
+      fingerprint: "abcdefabcdefabcd",
+      title: "timeout after 42s",
+      count: 2,
+      firstSeen: "2026-07-11T02:05:00.000Z",
+      lastSeen: "2026-07-11T04:05:00.000Z",
+      schedules: ["Nightly triage"],
+      state: "open" as const,
+      members: ["abcdef0123456789"],
+      failureClass: null,
+      lastRunId: "r1",
+    };
+    render(
+      <Briefing
+        briefing={briefing({
+          attention: [
+            {
+              kind: "issue-open",
+              id: "abcdefabcdefabcd",
+              title: "timeout after 42s",
+              detail: "2× across Nightly triage",
+              at: "2026-07-11T04:05:00.000Z",
+            },
+          ],
+          attentionCount: 1,
+          window: win({ totalRuns: 1, newIssues: [newIssue] }),
+        })}
+        loading={false}
+        error={null}
+        ack={async () => {}}
+      />,
+    );
+    expect(screen.queryByText(/New issues/)).not.toBeInTheDocument();
+    expect(screen.getAllByText("timeout after 42s")).toHaveLength(1);
+  });
+});
+
+describe("Briefing — first visit", () => {
+  // Never caught up: the window is the server's default day, to the millisecond.
+  const fresh = () =>
+    briefing({ since: "2026-07-10T08:00:00.000Z", generatedAt: "2026-07-11T08:00:00.000Z" });
+
+  it("welcomes a first visit with the next step instead of claiming all is well", () => {
+    render(<Briefing briefing={fresh()} loading={false} error={null} ack={async () => {}} />);
+    expect(screen.getByText(/Nothing to brief yet/)).toBeInTheDocument();
+    expect(screen.queryByText(/All caught up/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /create a schedule/i })).toHaveAttribute(
+      "href",
+      "#/schedules",
+    );
+    expect(screen.queryByRole("button", { name: /mark caught up/i })).not.toBeInTheDocument();
+  });
+
+  it("keeps saying what the page is for once it has loaded", () => {
+    render(<Briefing briefing={fresh()} loading={false} error={null} ack={async () => {}} />);
+    expect(screen.getByText(/What needs you now/)).toBeInTheDocument();
+  });
+
+  it("offers Retry on a failed load when it can refetch", () => {
+    const refresh = vi.fn();
+    render(
+      <Briefing
+        briefing={null}
+        loading={false}
+        error="HTTP 502"
+        ack={async () => {}}
+        refresh={refresh}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refresh).toHaveBeenCalledOnce();
   });
 });
 

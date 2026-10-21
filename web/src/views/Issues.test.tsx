@@ -123,6 +123,44 @@ describe("Issues", () => {
     expect(screen.getByText(/Showing 1 open of 2/)).toBeInTheDocument();
   });
 
+  it("does not badge an open issue, and never colours its count as a status", () => {
+    mockState.issues = [issue(), issue({ fingerprint: "bbbbbbbbbbbbbbbb", state: "resolved" })];
+    mockState.summary = { open: 1, resolved: 1, ignored: 0 };
+    render(<Issues />);
+    // The resolved row is badged; the open one is open by default, said to a
+    // screen reader rather than as one more red pill.
+    expect(screen.getByText("resolved").className).toMatch(/text-ok/);
+    expect(screen.getByText("open").className).toMatch(/sr-only/);
+    for (const count of screen.getAllByText("×7")) {
+      expect(count.className).not.toMatch(/fail/);
+    }
+  });
+
+  it("strips the scheduler's outcome marker from an occurrence's error", async () => {
+    const user = userEvent.setup();
+    loadOccurrences.mockResolvedValueOnce([
+      {
+        runId: "r9",
+        scheduleId: "s1",
+        scheduleName: "Nightly triage",
+        at: "2026-07-10T06:00:00.000Z",
+        status: "failed" as const,
+        outcome: null,
+        error: "could not reach the database\nARGUS_OUTCOME: failed db timeout",
+      },
+    ]);
+    mockState.issues = [issue()];
+    render(<Issues />);
+    await user.click(screen.getByRole("button", { expanded: false }));
+    expect(await screen.findByText("could not reach the database")).toBeInTheDocument();
+    expect(screen.queryByText(/ARGUS_OUTCOME/)).not.toBeInTheDocument();
+  });
+
+  it("hides the counter row when there is nothing on record", () => {
+    render(<Issues />);
+    expect(screen.queryByRole("region", { name: "Issues by state" })).not.toBeInTheDocument();
+  });
+
   it("leaves a zero counter inert", () => {
     mockState.issues = [issue()];
     mockState.summary = { open: 1, resolved: 0, ignored: 0 };
@@ -157,7 +195,10 @@ describe("Issues — Autopsy integration", () => {
     mockState.issues = [issue()];
     render(<Issues />);
     await user.click(screen.getByRole("button", { expanded: false }));
-    const link = await screen.findByRole("link", { name: /replay/i });
+    // "Open run", not "Replay": the link opens the recording, and "Replay" on
+    // a failure read as "run it again".
+    const link = await screen.findByRole("link", { name: /open run/i });
     expect(link).toHaveAttribute("href", "#/run/r9");
+    expect(link).toHaveAttribute("title", expect.stringMatching(/replay this run/i));
   });
 });

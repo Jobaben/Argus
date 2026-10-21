@@ -29,14 +29,16 @@ import { InfoTip } from "../ds/InfoTip";
  * quietly shrinking the denominator.
  */
 
-type Tone = "ok" | "idle" | "await" | "fail";
+type Tone = "ok" | "idle" | "fail";
 
 const STATUS_COPY: Record<PeerStatus, { label: string; tone: Tone; help: string }> = {
   paired: { label: "paired", tone: "ok", help: "answering, and the answer verified" },
   pending: { label: "pending", tone: "idle", help: "added, not yet reached" },
+  // Grey, not violet: a quiet peer is a connection state, not a person being
+  // waited on, and its "seen … ago" already says how old the figures are.
   stale: {
     label: "stale",
-    tone: "await",
+    tone: "idle",
     help: "last answer is older than five minutes — the figures below are that old",
   },
   unauthorized: {
@@ -51,7 +53,6 @@ const STATUS_COPY: Record<PeerStatus, { label: string; tone: Tone; help: string 
 const PILL: Record<Tone, string> = {
   ok: "border-ok/25 bg-ok/10 text-ok",
   idle: "border-line-strong bg-ink-faint/8 text-ink-dim",
-  await: "border-await/40 bg-await/12 text-await",
   fail: "border-fail/35 bg-fail/12 text-fail",
 };
 
@@ -70,14 +71,15 @@ function PeerPill({ status }: { status: PeerStatus }) {
   );
 }
 
-/** The five counts a machine reports, as one inset well. A zero is neutral. */
+/** The five counts a machine reports, as one inset well. A zero is neutral.
+ *  The words are the fleet totals' own, shortened to fit a fifth of a card. */
 function MachineCounts({ summary }: { summary: MachineSummary }) {
   const cells: { label: string; value: number; tone: string }[] = [
     { label: "Down", value: summary.monitorsDown, tone: "text-fail" },
     { label: "Failing", value: summary.monitorsFailing, tone: "text-fail" },
     { label: "Issues", value: summary.openIssues, tone: "text-ink" },
     { label: "Running", value: summary.liveInstances, tone: "text-run" },
-    { label: "Gated", value: summary.gatedInstances, tone: "text-await" },
+    { label: "Awaiting", value: summary.gatedInstances, tone: "text-await" },
   ];
   return (
     <dl className="mt-3 grid grid-cols-5 divide-x divide-line rounded-control bg-ground-2/60">
@@ -95,6 +97,34 @@ function MachineCounts({ summary }: { summary: MachineSummary }) {
   );
 }
 
+/**
+ * Where a machine sits in the list: the ones that need a look first — no
+ * answer, a failed pairing, monitors down or failing, a critical incident —
+ * then those with a gate waiting on someone, then the rest. This machine
+ * always leads, as the reference the others are read against.
+ */
+function rank(m: FleetMachine): number {
+  if (m.isSelf) return -1;
+  const s = m.summary;
+  if (
+    STATUS_COPY[m.peer.status].tone === "fail" ||
+    (s != null &&
+      (s.monitorsDown > 0 ||
+        s.monitorsFailing > 0 ||
+        (s.worstIncident != null && /^critical\b/i.test(s.worstIncident))))
+  )
+    return 0;
+  if (s != null && s.gatedInstances > 0) return 1;
+  return 2;
+}
+
+function byAttention(a: FleetMachine, b: FleetMachine): number {
+  return (
+    rank(a) - rank(b) ||
+    (a.summary?.label ?? a.peer.label).localeCompare(b.summary?.label ?? b.peer.label)
+  );
+}
+
 function MachineCard({ machine, onUnpair }: { machine: FleetMachine; onUnpair: () => void }) {
   const { peer, summary, isSelf } = machine;
   const tone = isSelf ? null : STATUS_COPY[peer.status].tone;
@@ -102,10 +132,10 @@ function MachineCard({ machine, onUnpair }: { machine: FleetMachine; onUnpair: (
   const critical = summary?.worstIncident != null && /^critical\b/i.test(summary.worstIncident);
   return (
     <Card className="relative overflow-hidden">
-      {(tone === "fail" || tone === "await") && (
+      {tone === "fail" && (
         <span
           aria-hidden="true"
-          className={`absolute inset-y-3 left-0 w-[3px] rounded-r-full ${tone === "fail" ? "bg-fail" : "bg-await"}`}
+          className="absolute inset-y-3 left-0 w-[3px] rounded-r-full bg-fail"
         />
       )}
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
@@ -173,9 +203,14 @@ function MachineCard({ machine, onUnpair }: { machine: FleetMachine; onUnpair: (
                 size={14}
                 className={`mt-px ${critical ? "text-fail" : "text-ink-faint"}`}
               />
-              <span className="min-w-0 break-words first-letter:uppercase">
+              {/* The incident lives on the machine that has it: this one's Issues
+                  page, or the peer's own Argus. */}
+              <a
+                href={isSelf ? "#/issues" : `${peer.url.replace(/\/+$/, "")}/#/issues`}
+                className="min-w-0 break-words underline decoration-line-strong underline-offset-2 transition-colors duration-(--duration-quick) first-letter:uppercase hover:decoration-current"
+              >
                 {summary.worstIncident}
-              </span>
+              </a>
             </p>
           )}
         </>
@@ -248,8 +283,6 @@ function PairingSecret({ secret, instructions }: { secret: string; instructions:
   );
 }
 
-const MINT_ID = "fleet-mint-secret";
-
 export default function Fleet() {
   const {
     fleet,
@@ -269,6 +302,7 @@ export default function Fleet() {
   const [name, setName] = useState("");
 
   const self = fleet.machines.find((m) => m.isSelf);
+  const formReady = form.label.trim() !== "" && form.url.trim() !== "" && form.secret.trim() !== "";
   const t = fleet.totals;
   const partial = t.reporting < t.machines;
 
@@ -279,12 +313,6 @@ export default function Fleet() {
     : `${t.reporting} of ${t.machines} machines reporting` +
       (t.monitorsDown > 0 ? `, ${t.monitorsDown} monitors down` : "") +
       (t.gatedInstances > 0 ? `, ${t.gatedInstances} awaiting approval` : "");
-
-  const toPairing = () => {
-    const el = document.getElementById(MINT_ID);
-    el?.scrollIntoView({ block: "center" });
-    el?.focus({ preventScroll: true });
-  };
 
   return (
     <Page
@@ -314,7 +342,11 @@ export default function Fleet() {
         <div className="mb-6">
           <AlertStrip
             subject="Fleet"
-            message={`Couldn't reach the Argus server: ${error}`}
+            message={
+              /^HTTP \d{3}$/.test(error)
+                ? `Couldn't load the fleet: ${error}`
+                : `Couldn't reach the Argus server: ${error}`
+            }
             action={
               <Button size="sm" icon="retry" onClick={() => refresh()}>
                 Retry
@@ -384,7 +416,7 @@ export default function Fleet() {
             </>
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
-              {fleet.machines.map((m) => (
+              {[...fleet.machines].sort(byAttention).map((m) => (
                 <MachineCard key={m.peer.id} machine={m} onUnpair={() => void unpair(m.peer.id)} />
               ))}
             </div>
@@ -394,13 +426,11 @@ export default function Fleet() {
           {fleet.soloMode && !(loading && fleet.machines.length === 0) && (
             <div className="mt-4 flex flex-col gap-3 rounded-tile border border-line bg-surface/50 px-4 py-3.5 sm:flex-row sm:items-center sm:gap-4">
               <Icon name="link" size={18} className="hidden text-ink-faint sm:block" />
+              {/* No button: pairing is the very next section on the page. */}
               <p className="min-w-0 flex-1 text-small text-ink-dim">
                 No peers yet, and nothing is being published. Federation is entirely opt-in: with no
                 peers configured Argus makes no outbound requests and answers no summary.
               </p>
-              <Button size="sm" icon="plus" onClick={toPairing} className="self-start sm:self-auto">
-                Pair a machine
-              </Button>
             </div>
           )}
         </Section>
@@ -416,12 +446,7 @@ export default function Fleet() {
                   to pairings it holds.
                 </p>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <Button
-                    id={MINT_ID}
-                    icon="shield"
-                    onClick={() => void mintPairing()}
-                    disabled={busy}
-                  >
+                  <Button icon="shield" onClick={() => void mintPairing()} disabled={busy}>
                     Mint a pairing secret
                   </Button>
                   {pairing && (
@@ -474,12 +499,14 @@ export default function Fleet() {
                       className={`${fieldClass} h-9 w-full font-mono`}
                     />
                   </label>
+                  {/* Primary only once it can be pressed: a disabled solid button is
+                      the heaviest thing in the card, louder than step one. */}
                   <Button
                     type="submit"
-                    variant="primary"
+                    variant={formReady ? "primary" : "secondary"}
                     icon="plus"
                     className="h-9 justify-self-start"
-                    disabled={busy || !form.label.trim() || !form.url.trim() || !form.secret.trim()}
+                    disabled={busy || !formReady}
                   >
                     Add peer
                   </Button>

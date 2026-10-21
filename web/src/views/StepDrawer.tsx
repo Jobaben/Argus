@@ -139,7 +139,59 @@ function useRunDetail(runId: string | null, running: boolean) {
   return state;
 }
 
-function RunLog({ log }: { log: string }) {
+/**
+ * The agent's prose without its protocol line. A run's summary ends with
+ * `ARGUS_OUTCOME: <outcome> <reason>` for the scheduler to read, and printed
+ * under the human sentence it said the same thing again as protocol. Display
+ * only; a summary that is nothing but the marker keeps the marker's reason.
+ */
+function withoutOutcomeMarker(text: string): string {
+  const marker = /^\s*ARGUS_OUTCOME:\s*\S+\s*/;
+  const lines = text.split("\n");
+  const prose = lines
+    .filter((l) => !marker.test(l))
+    .join("\n")
+    .trim();
+  if (prose) return prose;
+  return text.replace(marker, "").trim() || text;
+}
+
+/**
+ * The envelope's fields that are not already in the readout above it.
+ *
+ * Its cost and tokens are the stat row's figures again (in other units), and
+ * its "Status" is the CLI process's exit — a failed step whose process exited
+ * cleanly showed a red "Failed" pill over a log reading "Status success". The
+ * process's word is kept, said as what it is.
+ */
+function envelopeFields(
+  fields: { label: string; value: string }[],
+  shown: { cost: boolean; tokens: boolean; duration: boolean },
+) {
+  return fields.flatMap((f) => {
+    if (f.label === "Cost" && shown.cost) return [];
+    if (f.label === "Tokens" && shown.tokens) return [];
+    if (f.label === "Duration" && shown.duration) return [];
+    // Claude Code's envelope: "success", or "error (<subtype>)".
+    if (f.label === "Status" && f.value === "success") {
+      return [{ label: "Process", value: "exited cleanly" }];
+    }
+    if (f.label === "Status" && f.value.startsWith("error")) return [{ ...f, label: "Process" }];
+    return [f];
+  });
+}
+
+/** Envelope fields whose value is an identifier. */
+const MACHINE_FIELDS = new Set(["Session", "Thread", "API error"]);
+
+function RunLog({
+  log,
+  shown,
+}: {
+  log: string;
+  /** Which figures the drawer's readout already shows. */
+  shown: { cost: boolean; tokens: boolean; duration: boolean };
+}) {
   const parsed = parseRunLog(log);
   if (parsed.kind === "empty") {
     return <p className={`${WELL} px-4 py-4 text-small text-ink-faint`}>No output recorded yet.</p>;
@@ -154,10 +206,18 @@ function RunLog({ log }: { log: string }) {
       )}
       {parsed.kind === "envelope" ? (
         <dl className="grid grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-6 gap-y-2 px-4 py-3.5">
-          {parsed.fields.map((f) => (
+          {envelopeFields(parsed.fields, shown).map((f) => (
             <Fragment key={f.label}>
               <dt className="text-caption text-ink-faint">{f.label}</dt>
-              <dd className="break-words font-mono text-caption text-ink-dim">{f.value}</dd>
+              {/* Mono for the ids only: durations, counts and the process's
+                  word are read, not copied. */}
+              <dd
+                className={`break-words text-caption text-ink-dim ${
+                  MACHINE_FIELDS.has(f.label) ? "font-mono" : ""
+                }`}
+              >
+                {f.value}
+              </dd>
             </Fragment>
           ))}
         </dl>
@@ -191,6 +251,7 @@ export function StepDrawer({
     return <Drawer open={false} title="" onClose={onClose} children={null} />;
 
   const run = detail.run;
+  const summary = run?.resultSummary ? withoutOutcomeMarker(run.resultSummary) : null;
   const transcriptHref =
     run?.sessionId && run.project
       ? `#/sessions/${encodeURIComponent(run.project)}/${encodeURIComponent(run.sessionId)}`
@@ -258,12 +319,12 @@ export function StepDrawer({
           </div>
         )}
 
-        {run?.resultSummary &&
+        {summary &&
           (step.status === "done" ? (
             <div className="flex items-start gap-2.5 rounded-tile border border-ok/25 bg-ok/[0.06] px-4 py-3">
               <Icon name="check-circle" size={17} className="mt-0.5 text-ok" />
               <p className="min-w-0 whitespace-pre-wrap break-words text-small leading-relaxed text-ink">
-                {run.resultSummary}
+                {summary}
               </p>
             </div>
           ) : (
@@ -273,7 +334,7 @@ export function StepDrawer({
             <div className={`${WELL} flex items-start gap-2.5 px-4 py-3`}>
               <Icon name="message" size={17} className="mt-0.5 text-ink-faint" />
               <p className="min-w-0 whitespace-pre-wrap break-words text-small leading-relaxed text-ink-dim">
-                {run.resultSummary}
+                {summary}
               </p>
             </div>
           ))}
@@ -395,7 +456,14 @@ export function StepDrawer({
               <span className="min-w-0 break-words">Couldn't load the run: {detail.error}</span>
             </p>
           ) : (
-            <RunLog log={detail.log} />
+            <RunLog
+              log={detail.log}
+              shown={{
+                cost: step.costUsd != null,
+                tokens: step.tokens != null,
+                duration: step.durationMs != null,
+              }}
+            />
           )}
         </section>
       </div>

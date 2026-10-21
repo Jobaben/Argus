@@ -74,14 +74,63 @@ function ShareBar({ share }: { share: number }) {
  * first, so they keep their place at every width; runs, the per-run rate and
  * tokens fold into a line under the name on a phone.
  */
+/** A long path with its middle elided, so both the root it hangs from and the
+ *  folder it names stay readable; the whole path is the cell's `title`. */
+function middleEllipsis(text: string, max = 56): string {
+  if (text.length <= max) return text;
+  const tail = Math.ceil(max * 0.6);
+  return `${text.slice(0, max - tail - 1)}…${text.slice(-tail)}`;
+}
+
+/**
+ * A slice's name. Schedules, pipelines and agents have names people gave them;
+ * a project is a path and a model is an id, machine text in the mono face — a
+ * project led by the folder it names, with the path it sits in under it.
+ */
+function SliceLabel({
+  label,
+  kind,
+  other,
+}: {
+  label: string;
+  kind: CostDimension;
+  other: boolean;
+}) {
+  if (other) return <div className="truncate text-small text-ink-dim">{label}</div>;
+  if (kind === "project") {
+    const parts = label.split("/").filter(Boolean);
+    const base = parts[parts.length - 1] ?? label;
+    return (
+      <div className="min-w-0" title={label}>
+        <div className="truncate font-mono text-small font-semibold text-ink">{base}</div>
+        {parts.length > 1 && (
+          <div className="truncate font-mono text-caption text-ink-faint">
+            {middleEllipsis(label)}
+          </div>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div
+      className={`truncate text-small font-semibold text-ink ${kind === "model" ? "font-mono" : ""}`}
+      title={label}
+    >
+      {label}
+    </div>
+  );
+}
+
 function AttributionTable({
   attribution,
   dimension,
+  kind,
   onSimulate,
   triggerRef,
 }: {
   attribution: Attribution;
   dimension: string;
+  kind: CostDimension;
   onSimulate: (key: string, label: string) => void;
   /** Registers each row's "What if…" button, so closing the simulator can hand
    *  focus back to the one that opened it. */
@@ -140,12 +189,7 @@ function AttributionTable({
                 </td>
                 {/* max-w-0 lets the label truncate instead of widening the table. */}
                 <td className="max-w-0 py-3 pr-3 align-top">
-                  <div
-                    className={`truncate text-small ${other ? "text-ink-dim" : "font-semibold text-ink"}`}
-                    title={s.label}
-                  >
-                    {s.label}
-                  </div>
+                  <SliceLabel label={s.label} kind={kind} other={other} />
                   <div className="mt-2">
                     <ShareBar share={s.share} />
                   </div>
@@ -251,26 +295,47 @@ function straightLineSentence(p: MonthProjection, w: BudgetWindow): ReactNode {
   );
 }
 
+/**
+ * How loudly a forecast speaks about the limit. A month already past it is a
+ * fact, in red; a month only projected to pass it is a straight line through
+ * noisy days, so it is a violet heads-up — the near-breach on today's meter,
+ * which is real, should never be quieter than a projection.
+ */
+type Overrun = "none" | "projected" | "exceeded";
+
+function overrunOf(projectedOver: boolean, month?: BudgetWindow): Overrun {
+  if (month?.ratio != null && month.ratio >= 1) return "exceeded";
+  return projectedOver ? "projected" : "none";
+}
+
 /** The figure column every forecast shares: eyebrow, the number, its basis. */
 function MonthEnd({
   usd,
-  overLimit,
+  overrun,
   aside,
   basis,
 }: {
   usd: number;
-  overLimit: boolean;
+  overrun: Overrun;
   aside?: ReactNode;
   basis?: ReactNode;
 }) {
   return (
     <div className="shrink-0">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <span className="eyebrow">Month end</span>
-        {overLimit && <span className={chipClass("fail")}>Over the limit</span>}
+        {overrun === "exceeded" && <span className={chipClass("fail")}>Over the limit</span>}
+        {overrun === "projected" && (
+          <span className={chipClass("await")}>
+            <Icon name="alert" size={11} />
+            Projected over
+          </span>
+        )}
       </div>
       <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className={`text-display font-semibold ${overLimit ? "text-fail" : "text-ink"}`}>
+        <span
+          className={`text-display font-semibold ${overrun === "exceeded" ? "text-fail" : "text-ink"}`}
+        >
           {formatUsd(usd)}
         </span>
         {aside}
@@ -280,10 +345,10 @@ function MonthEnd({
   );
 }
 
-function ForecastCard({ overLimit, children }: { overLimit: boolean; children: ReactNode }) {
+function ForecastCard({ overrun, children }: { overrun: Overrun; children: ReactNode }) {
   return (
     <Card className="relative overflow-hidden">
-      {overLimit && (
+      {overrun === "exceeded" && (
         <span
           aria-hidden="true"
           className="absolute inset-y-3 left-0 w-[3px] rounded-r-full bg-fail"
@@ -316,11 +381,12 @@ function ForecastPanel({
   pending: "loading" | "failed" | null;
 }) {
   if (forecast.monthEndUsd != null) {
+    const overrun = overrunOf(forecast.overLimit, month);
     return (
-      <ForecastCard overLimit={forecast.overLimit}>
+      <ForecastCard overrun={overrun}>
         <MonthEnd
           usd={forecast.monthEndUsd}
-          overLimit={forecast.overLimit}
+          overrun={overrun}
           aside={
             forecast.confidence != null && (
               <span
@@ -351,11 +417,12 @@ function ForecastPanel({
   }
 
   if (straight && month) {
+    const overrun = overrunOf(straight.overLimit, month);
     return (
-      <ForecastCard overLimit={straight.overLimit}>
+      <ForecastCard overrun={overrun}>
         <MonthEnd
           usd={straight.projectedUsd}
-          overLimit={straight.overLimit}
+          overrun={overrun}
           basis={`straight-line from ${straight.daysElapsed} ${straight.daysElapsed === 1 ? "day" : "days"}`}
         />
         <div className="min-w-0 lg:border-l lg:border-line lg:pl-8">
@@ -461,6 +528,7 @@ export function LedgerPanels({
   month,
   now,
   history,
+  onProjectedOver,
 }: {
   /** The month's spend window, for the straight-line projection that stands
    *  in until the median forecast has enough days. */
@@ -470,6 +538,9 @@ export function LedgerPanels({
   /** The page's own day-by-day history, which reads between where the month
    *  is heading and where the money went. */
   history?: ReactNode;
+  /** Told whether the forecast on show has the month passing its limit, so
+   *  the page's month meter can say the same thing. */
+  onProjectedOver?: (over: boolean) => void;
 }) {
   const { report, loading, error, refresh, simulation, simulating, simError, simulate } =
     useLedger();
@@ -503,6 +574,15 @@ export function LedgerPanels({
   const failed = error != null && !report.generatedAt;
   const straight = month && now != null ? projectMonth(month, new Date(now)) : null;
   const showStraight = report.forecast.monthEndUsd == null && straight != null && month != null;
+  // The verdict of whichever forecast is on screen — the median once it has
+  // days enough, the straight line until then — and nothing while neither is.
+  const projectedOver =
+    report.forecast.monthEndUsd != null
+      ? report.forecast.overLimit
+      : showStraight && straight.overLimit;
+  useEffect(() => {
+    onProjectedOver?.(projectedOver);
+  }, [projectedOver, onProjectedOver]);
 
   return (
     <>
@@ -573,6 +653,7 @@ export function LedgerPanels({
             <AttributionTable
               attribution={attribution}
               dimension={active.label}
+              kind={active.key}
               onSimulate={(key, label) => setTarget({ key, label })}
               triggerRef={triggerRef}
             />

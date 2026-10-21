@@ -69,6 +69,9 @@ function NextFire({ at, name, kind }: { at: string; name: string; kind: string }
       title={`Next ${kind}: ${name} at ${new Date(at).toLocaleString()}`}
     >
       <Icon name="clock" size={14} className="shrink-0 self-center text-ink-faint" />
+      {/* Said, not implied: a bare clock beside a schedule name read as
+          "last ran", "running for" or "next" depending on who was looking. */}
+      <span className="shrink-0 text-small text-ink-faint">next</span>
       <span className="truncate text-small text-ink-dim">{name}</span>
       <span className="shrink-0 text-small font-semibold text-ink">{formatCountdown(ms)}</span>
     </span>
@@ -166,6 +169,8 @@ function Throughput({ buckets }: { buckets: ThroughputBucket[] }) {
   );
 }
 
+const noun = (n: number, one: string) => (n === 1 ? one : `${one}s`);
+
 export function SituationStrip({
   situation,
   loading,
@@ -208,14 +213,41 @@ export function SituationStrip({
   // a failure, a monitor down; the right is the machine going about its work.
   // Only what is true is shown: a zero would be noise competing with the
   // numbers that matter, and the left side's silence is itself the message.
+  // Each chip names its noun: "1 failed" beside "1 failing" in the same red
+  // left a newcomer to work out that one was a pipeline and one a schedule.
   const attention: { count: number; label: string; tone: Tone; href: string }[] = (
     [
       { count: c.gatesWaiting, label: "awaiting you", tone: "attention", href: attentionHref },
-      { count: c.failedInstances, label: "failed", tone: "bad", href: failedHref },
-      { count: c.monitorsDown, label: "down", tone: "bad", href: "#/health" },
-      { count: c.monitorsFailing, label: "failing", tone: "bad", href: "#/health" },
-      { count: c.openIssues, label: "open issues", tone: "attention", href: "#/issues" },
-      { count: c.anomalies, label: "anomalies", tone: "attention", href: "#/health/watchtower" },
+      {
+        count: c.failedInstances,
+        label: `${noun(c.failedInstances, "pipeline")} failed`,
+        tone: "bad",
+        href: failedHref,
+      },
+      {
+        count: c.monitorsDown,
+        label: `${noun(c.monitorsDown, "monitor")} down`,
+        tone: "bad",
+        href: "#/health",
+      },
+      {
+        count: c.monitorsFailing,
+        label: `${noun(c.monitorsFailing, "schedule")} failing`,
+        tone: "bad",
+        href: "#/health",
+      },
+      {
+        count: c.openIssues,
+        label: `open ${noun(c.openIssues, "issue")}`,
+        tone: "attention",
+        href: "#/issues",
+      },
+      {
+        count: c.anomalies,
+        label: c.anomalies === 1 ? "anomaly" : "anomalies",
+        tone: "attention",
+        href: "#/health/watchtower",
+      },
     ] satisfies { count: number; label: string; tone: Tone; href: string }[]
   ).filter((s) => s.count > 0);
   const activity: { count: number; label: string; tone: Tone; href: string }[] = (

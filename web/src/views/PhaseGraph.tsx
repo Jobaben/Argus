@@ -129,11 +129,20 @@ function PhaseNode({
       data-lane={lane}
       title={chipTitle(pill, index, needNames)}
       style={{ left: x, top: y, width, height }}
-      // Selected is a ring in the eye's colour, not one more shade of border:
-      // it must read at a glance next to a hovered node, which the old
-      // `border-ink-faint` did not.
-      className={`absolute flex min-w-0 items-center gap-1.5 rounded-md border px-2 text-left transition-[border-color,background-color,box-shadow] duration-(--duration-quick) ${
-        selected ? "border-eye/70 bg-surface-2 shadow-[0_0_0_3px_rgb(54_227_232/0.14)]" : border
+      // Selected is an outer ring in the eye's colour, not one more shade of
+      // border: it must read at a glance next to a hovered node, which the old
+      // `border-ink-faint` did not. It goes *around* the status tint rather
+      // than replacing it — focus follows attention, so the selected node is
+      // usually the waiting gate or the failure, and painting it the same
+      // cyan as any clicked node hid exactly the status it was selected for.
+      className={`absolute flex min-w-0 items-center gap-1.5 rounded-md border px-2 text-left transition-[border-color,background-color,box-shadow] duration-(--duration-quick) ${border} ${
+        selected
+          ? `shadow-[0_0_0_2px_var(--color-ground-2),0_0_0_4px_rgb(54_227_232/0.55)] ${
+              pill.status === "failed" || pill.status === "await" || pill.status === "working"
+                ? ""
+                : "!border-line-strong !bg-surface-2"
+            }`
+          : ""
       }`}
     >
       {/* Hollow, not dim: a skipped phase is terminal, and an outline reads as
@@ -161,7 +170,11 @@ function PhaseNode({
         {pill.name}
       </span>
       {skipped && <span className={MARKER}>skip</span>}
-      {pill.gated && <span className={`${MARKER} !text-await`}>gate</span>}
+      {/* Violet only on the gate someone is waiting at: on a gate nobody has
+          reached yet it is a category, and the waiting colour is not one. */}
+      {pill.gated && (
+        <span className={`${MARKER} ${pill.status === "await" ? "!text-await" : ""}`}>gate</span>
+      )}
       {(pill.attempt ?? 0) > 0 && <span className={MARKER}>try {pill.attempt + 1}</span>}
       {/* Best-of-N replaces the step dots: N dots would all be the same step,
           and what a reader wants is how many of the drafts survived. */}

@@ -180,13 +180,13 @@ export function ReliabilityCard({ pipelineId, days = 30 }: { pipelineId: string;
       ) : (
         <>
           <div className="flex flex-wrap items-start gap-x-8 gap-y-3">
-            {/* Green is earned, not given: a pipeline that passes its own checks
-                first time less than half the time is not "healthy" in any
-                sense worth colouring. */}
+            {/* A rate is a score, not a status, so it is set in ink. Green is
+                kept for a pipeline that is healthy by any reading — nine first
+                passes in ten — where a 64% in green read as "fine". */}
             <Stat
               label="First-attempt pass"
               value={pct(firstRate)}
-              tone={firstRate != null && firstRate >= 0.5 ? "text-ok" : "text-ink"}
+              tone={firstRate != null && firstRate >= 0.9 ? "text-ok" : "text-ink"}
             />
             <Stat label="Lucky pass" value={pct(reliability.luckyPassRate)} />
             <Stat label="Settled" value={String(reliability.instances)} />

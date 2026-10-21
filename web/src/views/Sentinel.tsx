@@ -638,6 +638,17 @@ export default function Sentinel() {
   // showing it — "Sentinel is on", no escalation levels — would state settings
   // nobody has read, one click away from saving them over the real ones.
   const policyKnown = state.generatedAt !== "";
+  // Nothing has ever opened: "Nothing is on fire" says so, and a row of four
+  // zeros above it said it again, as numbers. The row comes back with the first
+  // incident, and stays (zeros and all) once there is a history to count.
+  const neverAnything =
+    !firstLoad &&
+    state.incidents.length === 0 &&
+    state.summary.open +
+      state.summary.acknowledged +
+      state.summary.critical +
+      state.summary.resolved ===
+      0;
 
   const save = (patch: Parameters<typeof savePolicy>[0]) => {
     setSaving((n) => n + 1);
@@ -672,7 +683,7 @@ export default function Sentinel() {
         </div>
       )}
 
-      {!nothingLoaded && (
+      {!nothingLoaded && !neverAnything && (
         <div className="mb-8">
           <Handoff
             busy={firstLoad}

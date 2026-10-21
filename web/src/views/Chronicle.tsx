@@ -22,7 +22,7 @@ import {
   useSyncedDelay,
 } from "../ds";
 import type { IconName } from "../ds";
-import { axisTicks, shortenLanePath, spanGeometry } from "../ds/chronicleLayout";
+import { axisTicks, shortenLanePath, spanGeometry, type SpanGeometry } from "../ds/chronicleLayout";
 import { Legend, type LegendItem } from "../ds/Legend";
 
 const WINDOWS = [
@@ -122,31 +122,84 @@ const KIND_KEY: LegendItem[] = (Object.keys(KIND) as ChronicleKind[]).map((k) =>
  * landed on each other. The column waits for `md` because below it the 15rem
  * column would leave a track narrower than a phone's.
  */
-const LANE_COL = "md:w-60 md:shrink-0";
+const LANE_COL = "md:w-60 md:shrink-0 xl:w-72";
+
+/**
+ * A run's summary without the line the agent wrote for the scheduler
+ * (`ARGUS_OUTCOME: succeeded`): the tooltip already states the status, and the
+ * protocol line said it again in machine form.
+ */
+function withoutOutcomeMarker(text: string): string {
+  return text
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("ARGUS_OUTCOME:"))
+    .join("\n")
+    .trim();
+}
 
 function spanTitle(span: ChronicleSpan): string {
   const start = new Date(span.startedAt).toLocaleString();
   const end = span.endedAt ? new Date(span.endedAt).toLocaleString() : "now";
   const parts = [`${span.label}`, `${start} → ${end}`, span.status];
-  if (span.detail) parts.push(span.detail);
+  const detail = span.detail ? withoutOutcomeMarker(span.detail) : "";
+  if (detail) parts.push(detail);
   if (span.costUsd != null) parts.push(formatUsd(span.costUsd));
   return parts.join("\n");
 }
 
-function SpanBar({
-  span,
-  windowStartMs,
-  windowEndMs,
-}: {
-  span: ChronicleSpan;
-  windowStartMs: number;
-  windowEndMs: number;
-}) {
-  // Every still-running span on the timeline breathes on the same beat. Read
-  // before the early return below, because hooks are not conditional.
+/**
+ * A pipeline's lane is the pipeline. The server names it after the instance's
+ * latest phase ("Release Train · Draft release notes"), which read as though
+ * the lane held only that phase when it holds every one; each bar keeps its
+ * phase in its own label and tooltip.
+ */
+function laneLabel(group: ChronicleGroup): string {
+  if (!group.key.startsWith("run:pipeline:")) return group.label;
+  const cut = group.label.lastIndexOf(" · ");
+  return cut > 0 ? group.label.slice(0, cut) : group.label;
+}
+
+/** Room between two bars on one sub-row, in percent of the track. */
+const PACK_GAP_PCT = 0.3;
+
+/**
+ * The lane's bars, packed into sub-rows by where they are *drawn*, not by when
+ * they ran. The server packs by time, but a bar is never narrower than its
+ * minimum width, so two runs seconds apart — a pipeline's Scan and Triage —
+ * landed on one row as one pill over another, and a red outline on a green
+ * fill matched no colour in the key. Greedy first-fit, left to right.
+ */
+function packByRect(
+  group: ChronicleGroup,
+  windowStartMs: number,
+  windowEndMs: number,
+): { span: ChronicleSpan; geo: SpanGeometry }[][] {
+  const placed = group.rows
+    .flat()
+    .map((span) => ({
+      span,
+      geo: spanGeometry(span.startedAt, span.endedAt, windowStartMs, windowEndMs),
+    }))
+    .filter((p): p is { span: ChronicleSpan; geo: SpanGeometry } => p.geo != null)
+    .sort((a, b) => a.geo.left - b.geo.left);
+  const rows: { span: ChronicleSpan; geo: SpanGeometry }[][] = [];
+  const ends: number[] = [];
+  for (const p of placed) {
+    const i = ends.findIndex((end) => end + PACK_GAP_PCT <= p.geo.left);
+    if (i === -1) {
+      rows.push([p]);
+      ends.push(p.geo.left + p.geo.width);
+    } else {
+      rows[i].push(p);
+      ends[i] = p.geo.left + p.geo.width;
+    }
+  }
+  return rows;
+}
+
+function SpanBar({ span, geo }: { span: ChronicleSpan; geo: SpanGeometry }) {
+  // Every still-running span on the timeline breathes on the same beat.
   const beat = useSyncedDelay(DURATION.pulse);
-  const geo = spanGeometry(span.startedAt, span.endedAt, windowStartMs, windowEndMs);
-  if (!geo) return null;
   const body = (
     <>
       {geo.openEnded && (
@@ -161,7 +214,13 @@ function SpanBar({
           container, so the label shows once the bar itself is wide enough to
           carry a word — whatever share of whatever track that is — rather than
           guessing from the viewport. */}
-      <span className="hidden truncate px-1.5 text-micro font-semibold @min-[3rem]:block">
+      {/* A live bar keeps room for its dot, so the label's ellipsis lands
+          before it rather than running underneath. */}
+      <span
+        className={`hidden truncate pl-1.5 text-micro font-semibold @min-[3rem]:block ${
+          geo.openEnded ? "pr-4" : "pr-1.5"
+        }`}
+      >
         {span.label}
       </span>
     </>
@@ -197,6 +256,8 @@ function GroupLanes({
   windowEndMs: number;
 }) {
   const spanCount = group.rows.reduce((n, row) => n + row.length, 0);
+  const rows = packByRect(group, windowStartMs, windowEndMs);
+  const label = laneLabel(group);
   return (
     <div className="border-t border-line/60 md:flex">
       {/* On a phone the label is a band above the lane; `bg-surface` keeps the
@@ -207,24 +268,19 @@ function GroupLanes({
         <KindChip kind={group.kind} />
         <span
           className="min-w-0 flex-1 truncate text-caption font-semibold text-ink-dim"
-          title={group.label}
+          title={label}
         >
-          {shortenLanePath(group.label)}
+          {shortenLanePath(label)}
         </span>
-        <span className="shrink-0 text-micro text-ink-faint" title="Spans in this lane">
+        <span className="shrink-0 text-micro text-ink-faint" title="Runs in this lane">
           {spanCount}
         </span>
       </div>
       <div className="min-w-0 flex-1 py-1">
-        {group.rows.map((row, i) => (
+        {rows.map((row, i) => (
           <div key={i} className="relative h-7">
-            {row.map((span) => (
-              <SpanBar
-                key={span.id}
-                span={span}
-                windowStartMs={windowStartMs}
-                windowEndMs={windowEndMs}
-              />
+            {row.map(({ span, geo }) => (
+              <SpanBar key={span.id} span={span} geo={geo} />
             ))}
           </div>
         ))}
@@ -376,7 +432,7 @@ export default function Chronicle() {
                   aria-label="Totals for this window"
                   className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4"
                 >
-                  <HealthCounter label="Spans" value={chronicle.totals.spans} />
+                  <HealthCounter label="Runs" value={chronicle.totals.spans} />
                   {/* Amber, like the bars it counts — it was cyan, a colour no
                       working bar on the chart ever is. */}
                   <HealthCounter label="In flight" value={chronicle.totals.active} tone="run" />
@@ -391,7 +447,7 @@ export default function Chronicle() {
 
                 <div className="rounded-panel border border-line bg-surface px-4 pb-3 pt-3.5 shadow-raised">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
-                    <Legend variant="inline" label="Span status" items={STATUS_KEY} />
+                    <Legend variant="inline" label="Run status" items={STATUS_KEY} />
                     <Legend variant="inline" label="Lane kind" items={KIND_KEY} />
                   </div>
 

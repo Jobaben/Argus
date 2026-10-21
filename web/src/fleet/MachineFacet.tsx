@@ -83,12 +83,14 @@ export function MachinePicker({ facet, label }: { facet: MachineFacetState; labe
 export function PeerBanner({ facet }: { facet: MachineFacetState }) {
   const peer = facet.peer;
   if (!peer) return null;
+  // A stale peer is a connection state, so it is told apart by its clock and
+  // its words, not by violet, which means a person is being waited on.
   const stale = peer.peer.status === "stale";
   return (
     <div
       className={`mb-6 flex items-start gap-2.5 rounded-tile border px-4 py-3 text-small ${
         stale
-          ? "border-await/35 bg-await/8 text-await-ink"
+          ? "border-line-strong bg-ground-2/60 text-ink-dim"
           : "border-line bg-surface/60 text-ink-dim"
       }`}
       role="status"
@@ -96,7 +98,7 @@ export function PeerBanner({ facet }: { facet: MachineFacetState }) {
       <Icon
         name={stale ? "clock" : "eye"}
         size={16}
-        className={`mt-0.5 ${stale ? "text-await" : "text-ink-faint"}`}
+        className={`mt-0.5 ${stale ? "text-ink-dim" : "text-ink-faint"}`}
       />
       <p className="min-w-0">
         Showing{" "}

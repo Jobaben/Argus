@@ -110,16 +110,37 @@ function MetricCell({
           median
         </span>
       </p>
-      <div className="my-1.5">
-        <EnvelopeBar base={base} warming={warming} />
-      </div>
-      <p className="truncate text-caption text-ink-faint">
-        {formatMetric(metric, base.p05)} – {formatMetric(metric, base.p95)}
-        <span className="sr-only sm:not-sr-only sm:whitespace-nowrap">
-          {" "}
-          · {base.samples} {base.samples === 1 ? "run" : "runs"}
-        </span>
-      </p>
+      {/* An envelope with no spread yet — one run, or several that read the
+          same — has no range to draw: the bar was a centred tick under a
+          median that already said the number, and "1.9s – 1.9s" said it a
+          third time. Compared as printed, so 15m 0s against 15m 0s is no
+          spread either. */}
+      {formatMetric(metric, base.p95) !== formatMetric(metric, base.p05) ? (
+        <>
+          <div className="my-1.5">
+            <EnvelopeBar base={base} warming={warming} />
+          </div>
+          <p className="truncate text-caption text-ink-faint">
+            {formatMetric(metric, base.p05)} – {formatMetric(metric, base.p95)}
+            <span className="sr-only sm:not-sr-only sm:whitespace-nowrap">
+              {" "}
+              · {base.samples} {base.samples === 1 ? "run" : "runs"}
+            </span>
+          </p>
+        </>
+      ) : (
+        <p className="mt-1 truncate text-caption text-ink-faint">
+          {base.samples === 1 ? (
+            <>
+              <span className="sr-only sm:not-sr-only">Only </span>1 run so far
+            </>
+          ) : (
+            <>
+              {base.samples} runs<span className="sr-only sm:not-sr-only">, no spread yet</span>
+            </>
+          )}
+        </p>
+      )}
     </div>
   );
 }
@@ -219,6 +240,12 @@ function AnomalyRow({ anomaly }: { anomaly: Anomaly }) {
  *  reason: an `auto` track would size per row. */
 const ENVELOPE_GRID = "lg:grid-cols-[minmax(0,1.35fr)_repeat(3,minmax(0,1fr))_9.5rem]";
 
+/** The reset control's reveal: there on a touch screen, which has no hover to
+ *  find it by, and on a desktop under the pointer or the keyboard — so the
+ *  table is not a column of identical, mildly destructive buttons. */
+const REVEAL =
+  "transition-opacity duration-(--duration-quick) pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100";
+
 function BaselineRow({
   baseline,
   onReset,
@@ -232,7 +259,11 @@ function BaselineRow({
 }) {
   const warming = baseline.warmupRemaining > 0;
   return (
-    <li className={`grid grid-cols-1 gap-x-6 gap-y-3 px-4 py-3.5 lg:items-center ${ENVELOPE_GRID}`}>
+    // Below `lg` the name and the actions share the first line and the metrics
+    // take the second; at `lg` everything falls into the table's columns.
+    <li
+      className={`group grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-3 px-4 py-3.5 lg:items-center lg:gap-x-6 ${ENVELOPE_GRID}`}
+    >
       <div className="min-w-0">
         <p className="truncate text-small font-semibold text-ink" title={baseline.name}>
           {baseline.name}
@@ -263,32 +294,29 @@ function BaselineRow({
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4 lg:contents">
+      <div className="col-span-2 row-start-2 grid grid-cols-3 gap-4 lg:contents">
         {METRICS.map((m) => (
           <MetricCell key={m} metric={m} base={baseline[m]} warming={warming} />
         ))}
       </div>
 
-      {/* Restore undoes a reset, so it reads as the alternative it is; Reset is
-          quiet until hovered, so a column of them does not shout. */}
-      <div className="flex flex-wrap items-center gap-1.5 lg:flex-col lg:items-end">
+      {/* Restore undoes a reset, so it reads as the alternative it is and
+          stays in view; Reset is an icon that waits to be looked for. */}
+      <div className="col-start-2 row-start-1 flex items-start justify-end gap-1.5 lg:col-start-auto lg:row-start-auto lg:items-center">
         {baseline.resetAt && (
           <Button size="sm" icon="history" disabled={busy} onClick={onRestore}>
             Restore full history
           </Button>
         )}
-        <Button
-          size="sm"
-          variant="ghost"
+        <IconButton
           icon="retry"
+          label="Reset baseline"
+          size="sm"
           disabled={busy}
           onClick={onReset}
-          title="Forget every run before now and learn the envelope again"
-          // Flush with the text above while it leads the row on a narrow screen.
-          className={baseline.resetAt ? "" : "-ml-2.5 lg:ml-0"}
-        >
-          Reset baseline
-        </Button>
+          title="Reset baseline — forget every run before now and learn the envelope again"
+          className={REVEAL}
+        />
       </div>
     </li>
   );
@@ -460,7 +488,9 @@ export function WatchtowerPanel() {
             >
               <HealthCounter label="Anomalies" value={report.summary.anomalies} tone="await" />
               <HealthCounter label="Critical" value={report.summary.critical} tone="fail" />
-              <HealthCounter label="Envelopes" value={report.summary.ready} />
+              {/* Envelopes warm enough to judge a run — not every envelope,
+                  which the table below lists, warm or not. */}
+              <HealthCounter label="Ready" value={report.summary.ready} tone="ok" />
               <HealthCounter label="Warming up" value={report.summary.warming} tone="queue" />
             </section>
 
@@ -524,7 +554,7 @@ export function WatchtowerPanel() {
             <QualityTrends />
 
             <Section
-              title="Learned envelopes"
+              title={`Learned envelopes · ${report.summary.ready} of ${report.baselines.length} ready`}
               action={
                 <InfoTip
                   title="What's an envelope?"

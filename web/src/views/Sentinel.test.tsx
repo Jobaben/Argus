@@ -90,6 +90,21 @@ describe("Sentinel", () => {
     expect(screen.getByText(/escalates it on a clock/)).toBeInTheDocument();
   });
 
+  it("does not stack a row of zero counters above the empty state", () => {
+    render(<Sentinel />);
+    expect(screen.queryByRole("region", { name: "Incidents by state" })).not.toBeInTheDocument();
+  });
+
+  it("counts incidents once there are any", () => {
+    state.state = {
+      ...emptyState(),
+      incidents: [incident()],
+      summary: { open: 1, acknowledged: 0, resolved: 0, critical: 1 },
+    };
+    render(<Sentinel />);
+    expect(screen.getByRole("region", { name: "Incidents by state" })).toBeInTheDocument();
+  });
+
   it("shows a live incident with its status, severity and timeline", () => {
     state.state = { ...emptyState(), incidents: [incident()] };
     render(<Sentinel />);

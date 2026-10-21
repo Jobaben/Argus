@@ -104,24 +104,34 @@ function ResultRow({ result, query }: { result: SearchResult; query: string }) {
  * have pruned. They are shown as separate sections for that reason.
  */
 function VaultHitRow({ hit, query }: { hit: VaultSearchHit; query: string }) {
+  // A run opens where every other run link in the app opens: its recording.
+  // The hit's own link is the raw transcript, which is a dead end once it has
+  // been pruned — so it is offered beside the recording, not instead of it.
+  const isRun = hit.kind === "run";
+  const href = isRun ? `#/run/${encodeURIComponent(hit.ref)}` : hit.href;
+  const transcript = isRun && hit.href.startsWith("#/sessions/") ? hit.href : null;
   return (
-    <a
-      href={hit.href}
-      className="group block px-4 py-3 transition-colors duration-(--duration-quick) hover:bg-surface-2/60"
-    >
+    // The row is one link, stretched over it; the transcript link sits above
+    // that layer rather than inside it, since a link cannot hold a link.
+    <div className="group relative px-4 py-3 transition-colors duration-(--duration-quick) hover:bg-surface-2/60">
       <div className="flex min-w-0 items-center gap-2">
-        <Icon
-          name={hit.kind === "run" ? "history" : "bell"}
-          size={14}
-          className="shrink-0 text-ink-faint"
-        />
-        <span className="sr-only">{hit.kind === "run" ? "Run:" : "Event:"}</span>
-        <span className="min-w-0 flex-1 truncate text-small font-semibold text-ink">
+        <Icon name={isRun ? "history" : "bell"} size={14} className="shrink-0 text-ink-faint" />
+        <a
+          href={href}
+          className="min-w-0 flex-1 truncate rounded-sm text-small font-semibold text-ink after:absolute after:inset-0 after:content-['']"
+        >
+          <span className="sr-only">{isRun ? "Run:" : "Event:"}</span>
           {hit.title}
-        </span>
+        </a>
         <span className="shrink-0 text-caption">
           <TimeAgo iso={hit.at} />
         </span>
+        {/* Runs of one schedule share a title; the id tells them apart. */}
+        {isRun && (
+          <span className="shrink-0 font-mono text-caption text-ink-faint">
+            {hit.ref.slice(0, 8)}
+          </span>
+        )}
         <Icon
           name="chevron-right"
           size={15}
@@ -139,7 +149,16 @@ function VaultHitRow({ hit, query }: { hit: VaultSearchHit; query: string }) {
         )}
         <Highlight text={hit.snippet} query={query} />
       </p>
-    </a>
+      {transcript && (
+        <a
+          href={transcript}
+          className="relative z-10 mt-1.5 ml-[22px] inline-flex items-center gap-1.5 rounded-sm text-caption text-ink-faint transition-colors duration-(--duration-quick) hover:text-ink"
+        >
+          <Icon name="terminal" size={13} />
+          Transcript
+        </a>
+      )}
+    </div>
   );
 }
 
@@ -263,7 +282,7 @@ function SearchIntro() {
       {/* A keyboard chord is no help on a phone. */}
       <p className="mt-5 hidden flex-wrap items-center gap-x-1.5 gap-y-1 border-t border-line pt-4 text-caption text-ink-faint sm:flex">
         Looking for a pipeline, schedule or session by name? Press
-        <kbd className="kbd">{PALETTE_KEYS}</kbd>
+        <kbd className="kbd text-micro!">{PALETTE_KEYS}</kbd>
         to jump straight to it.
       </p>
     </div>
@@ -313,8 +332,8 @@ function TranscriptResults({
             <EmptyState compact icon="search" title={<>No matches for &ldquo;{query}&rdquo;.</>}>
               The search is literal, not fuzzy — try a shorter fragment
               <span className="hidden sm:inline">
-                , or press <kbd className="kbd">{PALETTE_KEYS}</kbd> to jump to a pipeline, schedule
-                or session by name
+                , or press <kbd className="kbd text-micro!">{PALETTE_KEYS}</kbd> to jump to a
+                pipeline, schedule or session by name
               </span>
               .
             </EmptyState>

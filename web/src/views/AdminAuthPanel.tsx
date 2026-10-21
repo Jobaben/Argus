@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import { Button, Icon, fieldClass } from "../ds";
+import { useId, useState, type FormEvent } from "react";
+import { Button, Icon, fieldClass, labelClass } from "../ds";
 
 const FIELD = `${fieldClass} h-10 w-full px-3 text-sm`;
 
@@ -10,6 +10,13 @@ type Mode = "login" | "register";
  * the one-time root-bootstrap form (localhost only, enforced server-side);
  * configured servers get login with a switch to request a new account, which
  * lands pending until root approves it on the Users page.
+ *
+ * It says why before it asks. On a fresh install this is what "Build a
+ * pipeline" lands on, and a bare credentials form there read as a detour; the
+ * first line now names what the account is for. Where there is room (the
+ * Pipelines page) the reason and the fields sit side by side, so the panel
+ * spans the page like the content around it; in the narrow sign-in wall they
+ * stack.
  */
 export function AdminAuthPanel({
   configured,
@@ -30,6 +37,9 @@ export function AdminAuthPanel({
   const [notice, setNotice] = useState<string | null>(null);
 
   const registering = configured && mode === "register";
+  const userId = useId();
+  const passId = useId();
+  const choosing = !configured || registering;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -63,85 +73,115 @@ export function AdminAuthPanel({
   return (
     <form
       onSubmit={(e) => void submit(e)}
-      className="max-w-md rounded-panel border border-line bg-surface p-5 shadow-raised"
+      className="@container rounded-panel border border-line bg-surface p-5 shadow-raised sm:p-6"
       aria-label={title}
     >
-      <h3 className="text-heading font-semibold text-ink">{title}</h3>
-      <p className="mt-1.5 text-small text-ink-dim">
-        {!configured
-          ? "First run: choose the root credentials that will guard pipeline editing, runs, " +
-            "and account approvals. Only works from the server's own machine. " +
-            "The password is stored only as a salted scrypt hash."
-          : registering
-            ? "Your account will be created immediately but stays locked until the root user approves it."
-            : "Editing or running pipelines requires a signed-in, root-approved account."}
-      </p>
-
-      <div className="mt-4 grid gap-2.5">
-        {/* A placeholder is not a label: it disappears the moment you type, and
-            a screen reader gets nothing to announce the field by. */}
-        <input
-          className={FIELD}
-          aria-label="Username"
-          placeholder="Username"
-          autoComplete="username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          required
-        />
-        <input
-          className={FIELD}
-          type="password"
-          aria-label="Password"
-          placeholder={configured && !registering ? "Password" : "Password (min 8 characters)"}
-          autoComplete={configured && !registering ? "current-password" : "new-password"}
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          minLength={configured && !registering ? undefined : 8}
-          required
-        />
-      </div>
-
-      {error && (
-        <p role="alert" className="mt-3 flex items-center gap-1.5 text-small text-fail-ink">
-          <Icon name="alert" size={15} className="text-fail" />
-          {error}
-        </p>
-      )}
-      {notice && (
-        <p className="mt-3 flex items-center gap-1.5 text-small text-ok">
-          <Icon name="check-circle" size={15} />
-          {notice}
-        </p>
-      )}
-
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <Button type="submit" variant="primary" size="lg" disabled={busy}>
-          {!configured
-            ? busy
-              ? "Creating…"
-              : "Create & sign in"
-            : registering
-              ? busy
-                ? "Requesting…"
-                : "Request account"
-              : busy
-                ? "Signing in…"
-                : "Sign in"}
-        </Button>
-        {configured && (
-          <button
-            type="button"
-            className="text-small text-ink-dim underline decoration-line-strong underline-offset-4 transition hover:text-ink hover:decoration-ink-faint"
-            onClick={() => {
-              setMode(registering ? "login" : "register");
-              setError(null);
-              setNotice(null);
-            }}
+      <div className="grid gap-x-10 gap-y-5 @2xl:grid-cols-[minmax(0,1fr)_minmax(0,22rem)] @2xl:items-start">
+        <div className="flex min-w-0 gap-3.5">
+          <span
+            aria-hidden="true"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-line-strong bg-surface-2 text-ink-dim"
           >
-            {registering ? "Back to login" : "Need access? Request an account"}
-          </button>
-        )}
+            <Icon name={configured && !registering ? "user" : "shield"} size={19} />
+          </span>
+          <div className="min-w-0">
+            <h3 className="text-heading font-semibold text-ink">{title}</h3>
+            <p className="mt-1 max-w-prose text-small text-ink-dim">
+              {!configured
+                ? "Building, running and approving pipelines needs an admin account. This first one is root: it also approves every account after it."
+                : registering
+                  ? "Your account will be created immediately but stays locked until the root user approves it."
+                  : "Editing or running pipelines requires a signed-in, root-approved account."}
+            </p>
+            {!configured && (
+              <p className="mt-2.5 flex items-start gap-1.5 text-caption text-ink-faint">
+                <Icon name="info" size={13} className="mt-px shrink-0" />
+                Only works from the server's own machine. The password is stored only as a salted
+                scrypt hash.
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="flex min-w-0 flex-col gap-3">
+          {/* A placeholder is not a label: it disappears the moment you type,
+              and a screen reader gets nothing to announce the field by. */}
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor={userId} className={labelClass}>
+              Username
+            </label>
+            <input
+              id={userId}
+              className={FIELD}
+              placeholder={choosing ? "Choose a username" : "Your username"}
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor={passId} className={labelClass}>
+              Password
+              {choosing && (
+                <span className="font-normal text-ink-faint"> · at least 8 characters</span>
+              )}
+            </label>
+            <input
+              id={passId}
+              className={FIELD}
+              type="password"
+              placeholder={choosing ? "Choose a password" : "Your password"}
+              autoComplete={choosing ? "new-password" : "current-password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              minLength={choosing ? 8 : undefined}
+              required
+            />
+          </div>
+
+          {error && (
+            <p role="alert" className="flex items-center gap-1.5 text-small text-fail-ink">
+              <Icon name="alert" size={15} className="text-fail" />
+              {error}
+            </p>
+          )}
+          {notice && (
+            <p className="flex items-center gap-1.5 text-small text-ok">
+              <Icon name="check-circle" size={15} />
+              {notice}
+            </p>
+          )}
+
+          <div className="mt-1 flex flex-wrap items-center gap-3">
+            <Button type="submit" variant="primary" size="lg" disabled={busy}>
+              {!configured
+                ? busy
+                  ? "Creating…"
+                  : "Create & sign in"
+                : registering
+                  ? busy
+                    ? "Requesting…"
+                    : "Request account"
+                  : busy
+                    ? "Signing in…"
+                    : "Sign in"}
+            </Button>
+            {configured && (
+              <button
+                type="button"
+                className="text-small text-ink-dim underline decoration-line-strong underline-offset-4 transition hover:text-ink hover:decoration-ink-faint"
+                onClick={() => {
+                  setMode(registering ? "login" : "register");
+                  setError(null);
+                  setNotice(null);
+                }}
+              >
+                {registering ? "Back to login" : "Need access? Request an account"}
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </form>
   );

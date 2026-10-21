@@ -73,7 +73,7 @@ import { applyLegacyRedirect, legacyRedirect } from "./legacyRoutes";
 const AdminAuthPanel = lazy(() =>
   import("./views/AdminAuthPanel").then((m) => ({ default: m.AdminAuthPanel })),
 );
-import { NAV_CHORDS, useGlobalKeys, usePalette, usePaletteState, useShellBindings } from "./cmd";
+import { NAV_CHORDS, useGlobalKeys, usePaletteState, useShellBindings } from "./cmd";
 
 /**
  * The palette and the shortcut sheet are their own chunk. Neither is visible
@@ -81,8 +81,8 @@ import { NAV_CHORDS, useGlobalKeys, usePalette, usePaletteState, useShellBinding
  * download — but both are rendered from the start (closed), which fetches the
  * chunk straight after that paint, so the first ⌘K still opens at once.
  */
-const CommandPalette = lazy(() =>
-  import("./cmd/CommandPalette").then((m) => ({ default: m.CommandPalette })),
+const PaletteHost = lazy(() =>
+  import("./cmd/PaletteHost").then((m) => ({ default: m.PaletteHost })),
 );
 const ShortcutHelp = lazy(() =>
   import("./cmd/ShortcutHelp").then((m) => ({ default: m.ShortcutHelp })),
@@ -412,7 +412,6 @@ function Dashboard() {
     }),
     [paletteDestinations, auth.isAdmin, briefingState],
   );
-  const { commands, loading: paletteLoading } = usePalette(palette.open, paletteCtx);
 
   const renderActive = () => {
     switch (active) {
@@ -469,7 +468,9 @@ function Dashboard() {
         return <FlightRecorder />;
       case "command":
       default:
-        return <CommandCenter />;
+        // The Briefing's attention list is already here for the nav badge; the
+        // board's "Needs you" lists the same set, so the two counts agree.
+        return <CommandCenter attention={briefingState.briefing?.attention ?? null} />;
     }
   };
 
@@ -520,12 +521,7 @@ function Dashboard() {
           opening it again is the retry. */}
       <ErrorBoundary label="the command palette" resetKey={`${palette.open}:${shortcutsOpen}`}>
         <Suspense fallback={null}>
-          <CommandPalette
-            open={palette.open}
-            onClose={palette.hide}
-            commands={commands}
-            loading={paletteLoading}
-          />
+          <PaletteHost open={palette.open} onClose={palette.hide} context={paletteCtx} />
           <ShortcutHelp
             open={shortcutsOpen}
             onClose={() => setShortcutsOpen(false)}

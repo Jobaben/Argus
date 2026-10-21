@@ -6,14 +6,64 @@ export interface MoreItem {
   id: string;
   label: string;
   href: string;
+  /** Attention count, drawn as the nav bar draws it; hidden when 0/absent. */
+  badge?: number;
+}
+
+/** The nav bar's attention count: violet, the colour of "waiting on you". */
+function Count({ n }: { n: number }) {
+  return (
+    <span className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-await/18 px-1.5 text-micro font-semibold leading-none text-await">
+      {n}
+    </span>
+  );
+}
+
+function Item({
+  item,
+  activeId,
+  onPick,
+}: {
+  item: MoreItem;
+  activeId?: string;
+  onPick: () => void;
+}) {
+  const current = item.id === activeId;
+  return (
+    <a
+      href={item.href}
+      role="menuitem"
+      aria-current={current ? "page" : undefined}
+      onClick={onPick}
+      // Focus is the eye's ring, inset, not just a background tint: a
+      // `surface-3` row on a `surface-2` menu was a keyboard user's only cue
+      // and it was nearly invisible.
+      className={`flex items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-sm transition duration-(--duration-quick) hover:bg-surface-3 hover:text-ink focus:bg-surface-3 focus:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-eye/70 motion-safe:active:scale-[0.98] ${
+        current ? "text-ink" : "text-ink-dim"
+      }`}
+    >
+      {item.label}
+      <span className="flex items-center gap-2">
+        {item.badge != null && item.badge > 0 && <Count n={item.badge} />}
+        {current && <Icon name="check" size={14} className="text-eye" />}
+      </span>
+    </a>
+  );
 }
 
 export function MoreMenu({
   items,
+  lead = [],
   active,
   activeId,
 }: {
   items: MoreItem[];
+  /**
+   * Primary destinations that did not fit the bar, listed first and set apart
+   * from `items` by a rule. Their badges add up on the trigger, so a count
+   * that left the bar is still on screen.
+   */
+  lead?: MoreItem[];
   active: boolean;
   /** Id of the currently-active overflow route, marked aria-current in the menu. */
   activeId?: string;
@@ -43,6 +93,8 @@ export function MoreMenu({
     setOpen(false);
     if (returnFocus) buttonRef.current?.focus();
   };
+
+  const leadCount = lead.reduce((n, it) => n + (it.badge ?? 0), 0);
 
   const onMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const links = Array.from(
@@ -93,6 +145,11 @@ export function MoreMenu({
         }`}
       >
         More
+        {leadCount > 0 && !open && (
+          <span className="ml-1">
+            <Count n={leadCount} />
+          </span>
+        )}
         <Icon
           name="chevron-down"
           size={14}
@@ -121,23 +178,14 @@ export function MoreMenu({
             aria-hidden={open ? undefined : true}
             className="absolute right-0 z-20 mt-1.5 min-w-48 rounded-tile bg-surface-2 p-1.5 shadow-overlay"
           >
+            {lead.map((it) => (
+              <Item key={it.id} item={it} activeId={activeId} onPick={() => close(false)} />
+            ))}
+            {lead.length > 0 && items.length > 0 && (
+              <div role="separator" className="mx-1 my-1.5 h-px bg-line" />
+            )}
             {items.map((it) => (
-              <a
-                key={it.id}
-                href={it.href}
-                role="menuitem"
-                aria-current={it.id === activeId ? "page" : undefined}
-                onClick={() => close(false)}
-                // Focus is the eye's ring, inset, not just a background tint: a
-                // `surface-3` row on a `surface-2` menu was a keyboard user's only
-                // cue and it was nearly invisible.
-                className={`flex items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-sm transition duration-(--duration-quick) hover:bg-surface-3 hover:text-ink focus:bg-surface-3 focus:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-eye/70 motion-safe:active:scale-[0.98] ${
-                  it.id === activeId ? "text-ink" : "text-ink-dim"
-                }`}
-              >
-                {it.label}
-                {it.id === activeId && <Icon name="check" size={14} className="text-eye" />}
-              </a>
+              <Item key={it.id} item={it} activeId={activeId} onPick={() => close(false)} />
             ))}
           </div>
         </>

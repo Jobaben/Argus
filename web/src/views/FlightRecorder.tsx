@@ -22,6 +22,7 @@ import {
   StatusPill,
   TimeAgo,
   useSyncedDelay,
+  useTicker,
   type IconName,
 } from "../ds";
 import { AutopsyPanel } from "./AutopsyPanel";
@@ -120,6 +121,27 @@ const UNAVAILABLE_COPY: Record<RecorderUnavailable, string> = {
 
 function isError(event: RecorderEvent): boolean {
   return event.errored === true || event.kind === "error";
+}
+
+const FAILURE_MESSAGE_MAX = 240;
+
+/**
+ * What the failure strip says: the failing event's label — minus a leading
+ * "Failed —", which the strip's own badge already says — and the first line of
+ * its detail when that adds anything. The protocol line an agent prints for
+ * the scheduler (`ARGUS_OUTCOME: …`) is not a reason a person needs to read.
+ */
+function failureSummary(event: RecorderEvent): { subject: string; message: string } {
+  const stripped = event.label.replace(/^Failed\s*[—–-]\s*/, "").trim();
+  const subject = stripped ? stripped[0].toUpperCase() + stripped.slice(1) : event.label;
+  const first =
+    (event.detail ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line !== "" && !line.startsWith("ARGUS_OUTCOME:")) ?? "";
+  const clipped =
+    first.length > FAILURE_MESSAGE_MAX ? `${first.slice(0, FAILURE_MESSAGE_MAX - 1)}…` : first;
+  return { subject, message: clipped && !subject.includes(clipped) ? clipped : "" };
 }
 
 /**
@@ -409,7 +431,9 @@ function Totals({ recording }: { recording: Recording }) {
       tone: t.files > 0 ? "text-ink" : "text-ink-faint",
     },
     {
-      label: "Errors",
+      // What the count is: tool calls that came back as errors. Labelled
+      // "Errors", a failed run read "Errors 0" under a red Failed pill.
+      label: "Tool errors",
       value: String(t.errors),
       tone: t.errors > 0 ? "text-fail" : "text-ink-faint",
     },
@@ -441,8 +465,36 @@ function Totals({ recording }: { recording: Recording }) {
   );
 }
 
-/** Status, provenance, start and length — the line under the run's name. */
-function RunCaption({ recording }: { recording: Recording }) {
+/**
+ * The live run's toggle. Pressed, it says so with the eye's breathing dot —
+ * cyan is the colour of "live" — and pressing it again parks the playhead where
+ * it is. Released, it is the row's one solid button: the way back to the edge.
+ */
+function FollowLive({ following, onToggle }: { following: boolean; onToggle: () => void }) {
+  const beat = useSyncedDelay(DURATION.pulse);
+  if (!following) {
+    return (
+      <Button variant="primary" aria-pressed={false} onClick={onToggle} className="sm:mr-3">
+        <span aria-hidden="true" className="h-2 w-2 rounded-full border-[1.5px] border-current" />
+        Follow live
+      </Button>
+    );
+  }
+  return (
+    <Button aria-pressed onClick={onToggle} className="border-eye/40! bg-eye/10! text-eye! sm:mr-3">
+      <span
+        aria-hidden="true"
+        style={{ animationDelay: beat }}
+        className="h-2 w-2 rounded-full bg-current motion-safe:animate-[pulse_var(--duration-pulse)_ease-in-out_infinite]"
+      />
+      Following live
+    </Button>
+  );
+}
+
+/** Status, provenance, start and length — the line under the run's name.
+ *  `durationMs` is the recorder's own, which keeps counting while a run is live. */
+function RunCaption({ recording, durationMs }: { recording: Recording; durationMs: number }) {
   const source = sourceOf(recording.scheduleId);
   const running = recording.status === "running";
   return (
@@ -464,7 +516,7 @@ function RunCaption({ recording }: { recording: Recording }) {
       <span className="inline-flex items-center gap-1.5">
         <Icon name="clock" size={14} />
         {running ? "Running for" : "Took"}{" "}
-        <span className="text-ink-dim">{formatMs(recording.durationMs)}</span>
+        <span className="text-ink-dim">{formatMs(durationMs)}</span>
       </span>
     </span>
   );
@@ -554,6 +606,13 @@ export default function FlightRecorder() {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<(typeof SPEEDS)[number]["value"]>("20");
   const [copied, setCopied] = useState(false);
+  // A live run opens parked on its newest moment and stays there as it grows,
+  // until the reader takes the playhead somewhere else. Opened at 00:00 with a
+  // Play button, a run that was working read as a finished, empty recording.
+  const [following, setFollowing] = useState(false);
+  // The node a postmortem with nothing to say is portalled into, below the
+  // track. State rather than a ref, so the panel re-renders once it exists.
+  const [autopsySlot, setAutopsySlot] = useState<HTMLDivElement | null>(null);
   // The deep-link position is applied exactly once per run: re-applying it on
   // every refresh (a live run refetches as it grows) would yank the scrubber
   // back out from under the person dragging it.
@@ -562,17 +621,36 @@ export default function FlightRecorder() {
   // Referentially stable when there is no recording: a fresh `[]` per render
   // would invalidate every memo below on every frame of playback.
   const events = recording?.events ?? NO_EVENTS;
-  const durationMs = recording?.durationMs ?? 0;
   const failureIndex = recording?.failureIndex ?? null;
+  const live = recording?.status === "running";
+  // A running run's track ends at "now", which the server can only say as of
+  // its last answer — and a quiet run may not be refetched for minutes. Between
+  // answers the end keeps counting here, so the clock and the track move.
+  const now = useTicker(live);
+  const startedMs = recording?.startedAt ? Date.parse(recording.startedAt) : Number.NaN;
+  const durationMs =
+    live && Number.isFinite(startedMs)
+      ? Math.max(recording.durationMs, now - startedMs)
+      : (recording?.durationMs ?? 0);
+  // Where the playhead is: the live edge while following, the reader's own
+  // position otherwise.
+  const at = following ? durationMs : t;
 
   useEffect(() => {
     if (!recording || seeded.current === recording.runId) return;
     seeded.current = recording.runId;
-    const wanted = Number.isFinite(deepLinkMs)
-      ? Math.max(0, Math.min(recording.durationMs, deepLinkMs))
-      : 0;
+    const deepLinked = Number.isFinite(deepLinkMs);
+    const wanted = deepLinked ? Math.max(0, Math.min(recording.durationMs, deepLinkMs)) : 0;
     setT(wanted);
+    setFollowing(recording.status === "running" && !deepLinked);
   }, [recording, deepLinkMs]);
+
+  // A run that finishes while it is being followed hands the reader its end,
+  // not a toggle that no longer has anything to follow.
+  if (following && recording && !live) {
+    setFollowing(false);
+    setT(recording.durationMs);
+  }
 
   // Playback. A wall-clock replay of a 40-minute run is nobody's idea of a good
   // time, so the speed multiplier is part of the control set rather than a
@@ -599,26 +677,47 @@ export default function FlightRecorder() {
     return () => cancelAnimationFrame(raf);
   }, [playing, speed, durationMs]);
 
-  const index = useMemo(() => indexAtTime(events, t), [events, t]);
+  const index = useMemo(() => indexAtTime(events, at), [events, at]);
   const current = index >= 0 ? events[index] : null;
 
   // Keep the URL pointing at the moment on screen without flooding history:
   // replaceState does not fire `hashchange`, so the router above stays put.
+  // While following a live run the URL names no moment, so a link copied from
+  // the address bar opens the run live too.
   useEffect(() => {
     if (!runId || !recording) return;
     const handle = window.setTimeout(() => {
-      const hash = `#/run/${encodeURIComponent(runId)}/${Math.round(t)}`;
+      const hash = `#/run/${encodeURIComponent(runId)}${following ? "" : `/${Math.round(t)}`}`;
       if (window.location.hash !== hash) {
         window.history.replaceState(null, "", hash);
       }
     }, 250);
     return () => window.clearTimeout(handle);
-  }, [runId, recording, t]);
+  }, [runId, recording, t, following]);
 
   const seek = useCallback((ms: number) => {
     setPlaying(false);
+    setFollowing(false);
     setT(Math.max(0, ms));
   }, []);
+
+  // At the end — a replay that finished, or the live edge — Play starts over
+  // rather than stopping dead on the spot it started from.
+  const togglePlay = useCallback(() => {
+    if (playing) {
+      setPlaying(false);
+      return;
+    }
+    setFollowing(false);
+    setT(at >= durationMs ? 0 : at);
+    setPlaying(true);
+  }, [playing, at, durationMs]);
+
+  const toggleFollow = useCallback(() => {
+    setPlaying(false);
+    if (following) setT(durationMs);
+    setFollowing(!following);
+  }, [following, durationMs]);
 
   /**
    * Pointer scrubbing on the lane strips, with a momentum settle on release.
@@ -641,17 +740,18 @@ export default function FlightRecorder() {
       const track = event.currentTarget;
       const rect = track.getBoundingClientRect();
       if (rect.width <= 0) return;
-      const at = (clientX: number) =>
+      const toMs = (clientX: number) =>
         Math.max(0, Math.min(durationMs, ((clientX - rect.left) / rect.width) * durationMs));
 
       setPlaying(false);
+      setFollowing(false);
       const tracker = createVelocityTracker();
-      let last = at(event.clientX);
+      let last = toMs(event.clientX);
       tracker.sample(last, event.timeStamp);
       setT(last);
 
       const onMove = (move: PointerEvent) => {
-        last = at(move.clientX);
+        last = toMs(move.clientX);
         tracker.sample(last, move.timeStamp);
         setT(last);
       };
@@ -660,7 +760,7 @@ export default function FlightRecorder() {
         window.removeEventListener("pointerup", onUp);
         window.removeEventListener("pointercancel", onUp);
         if (prefersReducedMotion()) return;
-        tracker.sample(at(up.clientX), up.timeStamp);
+        tracker.sample(toMs(up.clientX), up.timeStamp);
         // Velocity is in ms-of-recording per ms-of-wall-clock, which is exactly
         // the unit the glide needs — the track's pixel scale is already baked in.
         const glide = settleFrom(tracker.velocity());
@@ -684,12 +784,12 @@ export default function FlightRecorder() {
 
   const step = useCallback(
     (dir: 1 | -1) => {
-      const next = stepIndex(events, t, dir);
+      const next = stepIndex(events, at, dir);
       if (next != null) seek(events[next].atMs);
       else if (dir === 1) seek(durationMs);
       else seek(0);
     },
-    [events, t, seek, durationMs],
+    [events, at, seek, durationMs],
   );
 
   const jumpToFailure = useCallback(() => {
@@ -699,7 +799,7 @@ export default function FlightRecorder() {
 
   const copyLink = useCallback(() => {
     if (!runId) return;
-    const url = `${window.location.origin}${window.location.pathname}#/run/${encodeURIComponent(runId)}/${Math.round(t)}`;
+    const url = `${window.location.origin}${window.location.pathname}#/run/${encodeURIComponent(runId)}/${Math.round(at)}`;
     void navigator.clipboard?.writeText(url).then(
       () => {
         setCopied(true);
@@ -707,7 +807,7 @@ export default function FlightRecorder() {
       },
       () => setCopied(false),
     );
-  }, [runId, t]);
+  }, [runId, at]);
 
   // Keyboard: space toggles playback, arrows step, f jumps to the failure. Only
   // when focus isn't in a field, so typing in a future filter box is unaffected.
@@ -728,7 +828,7 @@ export default function FlightRecorder() {
 
       if (e.key === " ") {
         e.preventDefault();
-        setPlaying((p) => !p);
+        togglePlay();
       } else if (e.key === "ArrowRight" && !isRange) {
         e.preventDefault();
         step(1);
@@ -741,7 +841,7 @@ export default function FlightRecorder() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [step, jumpToFailure]);
+  }, [step, jumpToFailure, togglePlay]);
 
   if (!runId) {
     return (
@@ -817,7 +917,7 @@ export default function FlightRecorder() {
     );
   }
 
-  const pct = durationMs > 0 ? Math.min(100, (t / durationMs) * 100) : 0;
+  const pct = durationMs > 0 ? Math.min(100, (at / durationMs) * 100) : 0;
   const { start, slice } = eventWindow(events, index, WINDOW_SIZE);
   const reduced = prefersReducedMotion();
   const source = sourceOf(recording.scheduleId);
@@ -831,18 +931,37 @@ export default function FlightRecorder() {
     recording.project && recording.sessionId && events.some(fromTranscript)
       ? `#/sessions/${encodeURIComponent(recording.project)}/${encodeURIComponent(recording.sessionId)}`
       : null;
-  const failed = failureIndex != null;
+  const failureEvent = failureIndex != null ? events[failureIndex] : null;
+  const failure = failureEvent ? failureSummary(failureEvent) : null;
+  // Where the autopsy goes when all it has to say is that it has nothing to say.
+  const autopsyFallback = <div ref={setAutopsySlot} className="mb-6 empty:hidden" />;
 
   return (
     <Page
       title={recording.scheduleName}
-      subtitle={<RunCaption recording={recording} />}
+      subtitle={<RunCaption recording={recording} durationMs={durationMs} />}
       crumbs={[{ label: "Chronicle", href: "#/chronicle" }]}
       actions={
-        transcriptHref && (
-          <ButtonLink href={transcriptHref} size="sm" icon="terminal">
-            Open transcript
-          </ButtonLink>
+        (transcriptHref || live) && (
+          <>
+            {/* The recorder only watches. Stopping a run is done where it was
+                fired from, so a live one links straight back there. */}
+            {live && (
+              <ButtonLink
+                href={source.href}
+                size="sm"
+                icon={source.icon}
+                title="Cancel or re-run it from where it was fired"
+              >
+                {source.list}
+              </ButtonLink>
+            )}
+            {transcriptHref && (
+              <ButtonLink href={transcriptHref} size="sm" icon="terminal">
+                Open transcript
+              </ButtonLink>
+            )}
+          </>
         )
       }
     >
@@ -856,40 +975,64 @@ export default function FlightRecorder() {
         </div>
       )}
 
+      {/* Why it failed, first. The totals below count tool errors, and a run
+          can fail with none of those — an exit code, a refused outcome — so the
+          page used to open on "0 errors" under a red pill and leave the reason
+          as the last row of the event list. */}
+      {failure && failureEvent && (
+        <div className="mb-6">
+          <AlertStrip
+            tone="failed"
+            subject={failure.subject}
+            message={failure.message}
+            when={`at ${trackTime(failureEvent.atMs)}`}
+            action={
+              <Button size="sm" onClick={jumpToFailure}>
+                Jump to failure
+              </Button>
+            }
+          />
+        </div>
+      )}
+
       <Totals recording={recording} />
 
       {/* The postmortem sits above the track on purpose: on a failed run it is
           the summary, and the span it cites is checkable against the timeline
-          immediately below it. */}
+          immediately below it. A pass that produced nothing moves below the
+          track instead (`fallbackSlot`): its own error is not the headline. */}
       <div className="mb-6 space-y-4 empty:hidden">
-        <AutopsyPanel runId={runId} onSeek={seek} />
+        <AutopsyPanel runId={runId} onSeek={seek} fallbackSlot={autopsySlot} />
         <VerdictPanel runId={runId} />
       </div>
 
       {recording.events.length === 0 ? (
-        <EmptyState
-          title="Nothing to replay"
-          icon="replay"
-          action={
-            recording.unavailable === "empty-transcript" ? (
-              <Button icon="retry" onClick={() => void refresh()}>
-                Check again
-              </Button>
-            ) : recording.unavailable === "no-transcript" ? (
-              <ButtonLink href="#/sessions" icon="terminal">
-                Browse transcripts
-              </ButtonLink>
-            ) : (
-              <ButtonLink href={source.href} icon={source.icon}>
-                {source.list}
-              </ButtonLink>
-            )
-          }
-        >
-          {recording.unavailable
-            ? UNAVAILABLE_COPY[recording.unavailable]
-            : "Nothing was recorded for this run."}
-        </EmptyState>
+        <>
+          <EmptyState
+            title="Nothing to replay"
+            icon="replay"
+            action={
+              recording.unavailable === "empty-transcript" ? (
+                <Button icon="retry" onClick={() => void refresh()}>
+                  Check again
+                </Button>
+              ) : recording.unavailable === "no-transcript" ? (
+                <ButtonLink href="#/sessions" icon="terminal">
+                  Browse transcripts
+                </ButtonLink>
+              ) : (
+                <ButtonLink href={source.href} icon={source.icon}>
+                  {source.list}
+                </ButtonLink>
+              )
+            }
+          >
+            {recording.unavailable
+              ? UNAVAILABLE_COPY[recording.unavailable]
+              : "Nothing was recorded for this run."}
+          </EmptyState>
+          <div className="mt-6">{autopsyFallback}</div>
+        </>
       ) : (
         <>
           <section
@@ -900,18 +1043,19 @@ export default function FlightRecorder() {
               <h2 className="eyebrow">Timeline</h2>
               {/* The shortcuts were real and invisible. A pointer user is the one
                   who would gain most from knowing them, and on a phone there is
-                  no keyboard to mention. */}
+                  no keyboard to mention. The keycaps are set at the type floor:
+                  the utility's own 0.78em came to 9px inside a caption. */}
               <p className="hidden flex-wrap items-center gap-x-4 gap-y-1 text-caption text-ink-faint sm:flex">
                 <span className="inline-flex items-center gap-1.5">
-                  <kbd className="kbd">Space</kbd> play or pause
+                  <kbd className="kbd text-micro!">Space</kbd> play or pause
                 </span>
                 <span className="inline-flex items-center gap-1.5">
-                  <kbd className="kbd">←</kbd>
-                  <kbd className="kbd">→</kbd> step
+                  <kbd className="kbd text-micro!">←</kbd>
+                  <kbd className="kbd text-micro!">→</kbd> step
                 </span>
                 {failureIndex != null && (
                   <span className="inline-flex items-center gap-1.5">
-                    <kbd className="kbd">F</kbd> failure
+                    <kbd className="kbd text-micro!">F</kbd> failure
                   </span>
                 )}
               </p>
@@ -954,30 +1098,21 @@ export default function FlightRecorder() {
                   min={0}
                   max={Math.max(1, Math.round(durationMs))}
                   step={1}
-                  value={Math.round(t)}
+                  value={Math.round(at)}
                   onChange={(e) => seek(Number(e.target.value))}
                   aria-label="Scrub the recording"
-                  aria-valuetext={`${trackTime(t)} of ${trackTime(durationMs)}${current ? ` — ${current.label}` : ""}`}
+                  aria-valuetext={`${trackTime(at)} of ${trackTime(durationMs)}${current ? ` — ${current.label}` : ""}`}
                   className={RANGE}
                 />
               </div>
             </div>
 
-            {/* On a failed run the failure is the destination and Play is a way
-                of getting there slowly, so the solid button moves: Jump to
-                failure leads the row, and Play steps down to secondary. One
-                primary either way. */}
+            {/* Play is the row's one solid button, except on a live run: there
+                the live edge is where the reader wants to be, so Follow live
+                leads and Play — a replay from the start — steps down. On a
+                failed run, the way to the failure is the strip at the top. */}
             <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-3">
-              {failed && (
-                <Button
-                  variant="primary"
-                  onClick={jumpToFailure}
-                  className="w-full sm:mr-3 sm:w-auto"
-                >
-                  <Icon name="alert" size={15} className="text-fail" />
-                  Jump to failure
-                </Button>
-              )}
+              {live && <FollowLive following={following} onToggle={toggleFollow} />}
               <IconButton
                 icon="skip-back"
                 label="Previous event"
@@ -985,9 +1120,9 @@ export default function FlightRecorder() {
                 onClick={() => step(-1)}
               />
               <Button
-                variant={failed ? "secondary" : "primary"}
+                variant={live ? "secondary" : "primary"}
                 icon={playing ? "pause" : "play"}
-                onClick={() => setPlaying((p) => !p)}
+                onClick={togglePlay}
                 aria-label={playing ? "Pause the replay" : "Play the replay"}
                 className="min-w-[5.5rem]"
               >
@@ -1000,7 +1135,7 @@ export default function FlightRecorder() {
                 onClick={() => step(1)}
               />
               <span className="ml-2 text-small tabular-nums text-ink">
-                {trackTime(t)} <span className="text-ink-faint">/ {trackTime(durationMs)}</span>
+                {trackTime(at)} <span className="text-ink-faint">/ {trackTime(durationMs)}</span>
               </span>
               <span className="flex flex-wrap items-center gap-2 sm:ml-auto">
                 <SegmentedControl
@@ -1042,6 +1177,8 @@ export default function FlightRecorder() {
               </div>
             )}
           </section>
+
+          {autopsyFallback}
 
           <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)]">
             <section

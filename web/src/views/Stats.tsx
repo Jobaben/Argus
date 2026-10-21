@@ -1,4 +1,4 @@
-import { Children, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Children, Fragment, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useStats, type DailyStat, type ModelStat, type PeakHour } from "../useStats";
 import {
   AlertStrip,
@@ -108,7 +108,38 @@ const TH = `${CELL} eyebrow py-2.5 font-semibold`;
 const TD = `${CELL} py-3 align-top text-small`;
 const DIM = `${TD} text-ink-dim`;
 
-/** Per-model usage as a table: the total is read first, the split after it. */
+/** A column a phone folds into the caption line under the model's name. */
+const WIDE = "hidden sm:table-cell";
+
+/**
+ * The folded columns, on a phone, as one caption line. Each figure keeps its
+ * unit and the separator after it, so the line wraps between pairs and never
+ * strands a "·" at the start of a line.
+ */
+function Folded({ parts }: { parts: string[] }) {
+  return (
+    <span className="mt-1.5 block whitespace-normal text-caption text-ink-faint sm:hidden">
+      {parts.map((p, i) =>
+        i < parts.length - 1 ? (
+          <Fragment key={i}>
+            <span className="whitespace-nowrap">{p} ·</span>{" "}
+          </Fragment>
+        ) : (
+          <span key={i} className="whitespace-nowrap">
+            {p}
+          </span>
+        ),
+      )}
+    </span>
+  );
+}
+
+/**
+ * Per-model usage as a table: the total is read first, the split after it.
+ * On a phone the table keeps the two columns people come for — the total and
+ * the cost — and folds the split into a line under the name, the way Budget's
+ * attribution does, rather than scrolling the cost off the edge.
+ */
 function ModelTable({ models }: { models: ModelStat[] }) {
   const max = Math.max(0, ...models.map((m) => m.totalTokens));
   const anyWeb = models.some((m) => m.webSearchRequests > 0);
@@ -116,35 +147,35 @@ function ModelTable({ models }: { models: ModelStat[] }) {
   return (
     <div className="overflow-hidden rounded-tile border border-line bg-surface shadow-raised">
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[40rem] border-collapse">
+        <table className="w-full border-collapse sm:min-w-[40rem]">
           <caption className="sr-only">Tokens by model, largest first</caption>
           <thead>
             <tr className="border-b border-line">
               <th scope="col" className={TH}>
                 Model
               </th>
-              <th scope="col" className={TH}>
+              <th scope="col" className={`${TH} max-sm:w-20`}>
                 Total
               </th>
-              <th scope="col" className={TH}>
+              <th scope="col" className={`${TH} ${WIDE}`}>
                 Input
               </th>
-              <th scope="col" className={TH}>
+              <th scope="col" className={`${TH} ${WIDE}`}>
                 Output
               </th>
-              <th scope="col" className={TH}>
+              <th scope="col" className={`${TH} ${WIDE}`}>
                 Cache read
               </th>
-              <th scope="col" className={TH}>
+              <th scope="col" className={`${TH} ${WIDE}`}>
                 Cache write
               </th>
               {anyWeb && (
-                <th scope="col" className={TH}>
+                <th scope="col" className={`${TH} ${WIDE}`}>
                   Web searches
                 </th>
               )}
               {anyCost && (
-                <th scope="col" className={TH}>
+                <th scope="col" className={`${TH} max-sm:w-24`}>
                   Cost
                 </th>
               )}
@@ -155,7 +186,7 @@ function ModelTable({ models }: { models: ModelStat[] }) {
               const pct = max > 0 ? Math.max(2, Math.round((m.totalTokens / max) * 100)) : 0;
               return (
                 <tr key={m.model}>
-                  <th scope="row" className={`${TD} w-[30%] font-normal`}>
+                  <th scope="row" className={`${TD} font-normal max-sm:max-w-0 sm:w-[30%]`}>
                     {/* A model id is machine text, so it keeps the mono face. */}
                     <span className="block truncate font-mono text-small text-ink" title={m.model}>
                       {shortModel(m.model)}
@@ -166,13 +197,30 @@ function ModelTable({ models }: { models: ModelStat[] }) {
                         style={{ width: `${pct}%` }}
                       />
                     </span>
+                    {/* The split, on a phone: each figure keeps its unit, and the
+                        line wraps between pairs, never inside one. */}
+                    <Folded
+                      parts={[
+                        `${compact(m.inputTokens)} in`,
+                        `${compact(m.outputTokens)} out`,
+                        `${compact(m.cacheReadTokens)} cache read`,
+                        `${compact(m.cacheCreationTokens)} cache write`,
+                        ...(anyWeb
+                          ? [
+                              `${m.webSearchRequests.toLocaleString()} search${m.webSearchRequests === 1 ? "" : "es"}`,
+                            ]
+                          : []),
+                      ]}
+                    />
                   </th>
                   <td className={`${TD} font-semibold text-ink`}>{compact(m.totalTokens)}</td>
-                  <td className={DIM}>{compact(m.inputTokens)}</td>
-                  <td className={DIM}>{compact(m.outputTokens)}</td>
-                  <td className={DIM}>{compact(m.cacheReadTokens)}</td>
-                  <td className={DIM}>{compact(m.cacheCreationTokens)}</td>
-                  {anyWeb && <td className={DIM}>{m.webSearchRequests.toLocaleString()}</td>}
+                  <td className={`${DIM} ${WIDE}`}>{compact(m.inputTokens)}</td>
+                  <td className={`${DIM} ${WIDE}`}>{compact(m.outputTokens)}</td>
+                  <td className={`${DIM} ${WIDE}`}>{compact(m.cacheReadTokens)}</td>
+                  <td className={`${DIM} ${WIDE}`}>{compact(m.cacheCreationTokens)}</td>
+                  {anyWeb && (
+                    <td className={`${DIM} ${WIDE}`}>{m.webSearchRequests.toLocaleString()}</td>
+                  )}
                   {anyCost && <td className={DIM}>{usd(m.costUSD)}</td>}
                 </tr>
               );
@@ -459,7 +507,13 @@ export default function Stats() {
         <div className="mb-6">
           <AlertStrip
             subject="Stats"
-            message={`Couldn't reach the Argus server: ${error}`}
+            message={
+              // A status code means the server answered and failed; anything
+              // else (a rejected fetch) means it was never reached.
+              /^HTTP \d{3}$/.test(error)
+                ? `Couldn't load stats: ${error}`
+                : `Couldn't reach the Argus server: ${error}`
+            }
             action={
               <Button size="sm" icon="retry" onClick={() => refresh()}>
                 Retry

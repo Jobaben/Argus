@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useLiveResource } from "../live/useLiveResource";
 import type { PaletteEntry } from "../types";
 import { buildCommands, type Command, type Destination } from "./commands";
@@ -47,20 +47,4 @@ export function usePalette(
   );
 
   return { commands, loading, error };
-}
-
-/** Open/close state for the palette, kept out of the render-heavy shell. */
-export function usePaletteState(): {
-  open: boolean;
-  toggle: () => void;
-  show: () => void;
-  hide: () => void;
-} {
-  const [open, setOpen] = useState(false);
-  return {
-    open,
-    toggle: useCallback(() => setOpen((o) => !o), []),
-    show: useCallback(() => setOpen(true), []),
-    hide: useCallback(() => setOpen(false), []),
-  };
 }

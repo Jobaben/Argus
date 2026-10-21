@@ -15,6 +15,7 @@ import {
   parseRunLog,
   runDsStatus,
   useSyncedDelay,
+  type RunLogField,
 } from "../ds";
 import { useRuntimes } from "../useRuntimes";
 import { RuntimeBadge } from "../ds/RuntimeBadge";
@@ -33,6 +34,20 @@ export function LiveDot({ className = "" }: { className?: string }) {
       className={`inline-block h-1.5 w-1.5 shrink-0 animate-[pulse_var(--duration-pulse)_ease-in-out_infinite] rounded-full bg-current ${className}`}
     />
   );
+}
+
+/**
+ * A run's summary as a person reads it: without the `ARGUS_OUTCOME: <outcome>
+ * <reason>` protocol line the agent prints for the scheduler, which repeats the
+ * line above it and whose verdict the status pill already shows.
+ */
+function runProse(text: string | null | undefined): string {
+  if (!text) return "";
+  return text
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("ARGUS_OUTCOME:"))
+    .join("\n")
+    .trim();
 }
 
 /** One fact on a metadata line. A `wide` fact is one a phone can do without;
@@ -109,6 +124,7 @@ export function RunRow({
   const [cancelling, setCancelling] = useState(false);
   const isRunning = run.status === "running";
   const succeeded = runDsStatus(run) === "done";
+  const summary = runProse(run.resultSummary);
   // Badge only the runs that didn't use this server's default agent: a mark on
   // every row when every row says the same thing is noise.
   const { default: defaultRuntime } = useRuntimes();
@@ -256,17 +272,19 @@ export function RunRow({
           {/* The recorder is the first stop for "what did it actually do?", so
               it is on the row itself rather than behind the expander; the raw
               transcript stays one click further in, in the expanded detail, for
-              anyone who wants the unabridged JSONL. */}
+              anyone who wants the unabridged JSONL. An icon, named in its
+              tooltip, at every width: the word "Replay" beside Run now read as
+              "run it again", and repeated on every row it was the loudest word
+              in the list. */}
           <a
             href={`#/run/${encodeURIComponent(run.id)}`}
-            className={buttonClass("ghost", "sm")}
-            aria-label="Replay this run"
-            title="Replay this run on the Flight Recorder"
+            className={buttonClass("ghost", "sm", "w-7 px-0")}
+            aria-label="Open the recording"
+            title="Open this run's recording on the Flight Recorder"
           >
             {/* The recorder's mark, not a play triangle: "Run now" is the
                 triangle, and this starts nothing — it opens a recording. */}
             <Icon name="history" size={14} />
-            <span className="hidden sm:inline">Replay</span>
           </a>
           {extraActions}
           {isRunning && onCancel && (
@@ -299,7 +317,7 @@ export function RunRow({
               </p>
             </div>
           )}
-          {run.resultSummary && (
+          {summary && (
             <div className="flex gap-2.5">
               {/* The tick only for a run that succeeded: a failed run's summary
                   is its last words, not good news. */}
@@ -309,11 +327,11 @@ export function RunRow({
                 className={`mt-0.5 ${succeeded ? "text-ok" : "text-ink-faint"}`}
               />
               <p className="min-w-0 max-w-prose whitespace-pre-wrap break-words text-small leading-relaxed text-ink-dim">
-                {run.resultSummary}
+                {summary}
               </p>
             </div>
           )}
-          <RunLog id={run.id} running={isRunning} />
+          <RunLog id={run.id} running={isRunning} failed={run.status === "failed"} />
           {transcript && run.sessionId && (
             <a
               href={transcript}
@@ -332,7 +350,41 @@ export function RunRow({
   );
 }
 
-function RunLog({ id, running }: { id: string; running: boolean }) {
+/**
+ * The log's fields as this row says them. The envelope's "Status" is the agent
+ * CLI's own verdict on its session, not the run's: a run the scheduler failed
+ * (a refused outcome, a non-zero exit) read "Status success" under a red pill.
+ * It is named for what it is, and explained when the two disagree. Cost uses
+ * the row's own money format — the log's four decimals sat under "$0.38".
+ */
+function logFields(fields: RunLogField[], runFailed: boolean) {
+  return fields.map((f) => {
+    if (f.label === "Status") {
+      const clean = /^(success|completed)/i.test(f.value);
+      return {
+        label: "Agent exit",
+        value: f.value,
+        note:
+          runFailed && clean ? "The agent exited cleanly; the outcome check failed." : undefined,
+      };
+    }
+    if (f.label === "Cost") {
+      const usd = Number(f.value.replace(/^\$/, ""));
+      return { ...f, value: Number.isFinite(usd) ? formatUsd(usd) : f.value };
+    }
+    return f;
+  });
+}
+
+function RunLog({
+  id,
+  running,
+  failed: runFailed,
+}: {
+  id: string;
+  running: boolean;
+  failed: boolean;
+}) {
   const [log, setLog] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   // Fetch on expand, then poll while the run is live so the log tails in real
@@ -384,10 +436,15 @@ function RunLog({ id, running }: { id: string; running: boolean }) {
       </div>
       {parsed.kind === "envelope" ? (
         <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-caption">
-          {parsed.fields.map((f) => (
+          {logFields(parsed.fields, runFailed).map((f) => (
             <Fragment key={f.label}>
               <dt className="text-ink-faint">{f.label}</dt>
-              <dd className="break-words font-mono text-ink-dim">{f.value}</dd>
+              <dd className="break-words text-ink-dim">
+                <span className="font-mono">{f.value}</span>
+                {"note" in f && f.note && (
+                  <span className="mt-0.5 block text-ink-faint">{f.note}</span>
+                )}
+              </dd>
             </Fragment>
           ))}
         </dl>

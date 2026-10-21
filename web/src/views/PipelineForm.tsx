@@ -657,7 +657,10 @@ export function PipelineForm({
   return (
     <div className="min-w-0 space-y-6 rounded-panel border border-line-strong bg-surface p-3 shadow-raised sm:p-6">
       {/* ── What is being edited, and the way out of it ─────────────────── */}
-      <div>
+      {/* Pinned under the nav while the form scrolls: the form runs to a few
+          thousand pixels, and Save used to be only at the top of it — an edit
+          to the last section meant scrolling all the way back to keep it. */}
+      <div className="sticky top-14 z-10 -mx-3 -mt-3 rounded-t-panel border-b border-line bg-surface/95 px-3 pb-3 pt-3 backdrop-blur sm:-mx-6 sm:-mt-6 sm:px-6 sm:pb-4 sm:pt-6">
         <h2 className="eyebrow mb-2">{pipelineId ? "Edit pipeline" : "New pipeline"}</h2>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <input

@@ -5,9 +5,12 @@ import { KIND_TERMS, TERMS, type TermId } from "../knowledgeGlossary";
 import type { ExceptionTone } from "../knowledgeModel";
 import { InfoTip } from "../../ds/InfoTip";
 
+// The model calls the middle tone "run"; on screen it is violet, the colour of
+// "a person should look at this". Amber means a run is working, and a stale or
+// unsupported claim is not that.
 const TONE: Record<ExceptionTone, string> = {
   fail: "border-fail/35 bg-fail/12 text-fail",
-  run: "border-run/30 bg-run/10 text-run",
+  run: "border-await/40 bg-await/10 text-await",
   idle: "border-line-strong bg-ink-faint/8 text-ink-dim",
 };
 

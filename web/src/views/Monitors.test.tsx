@@ -131,4 +131,17 @@ describe("Monitors", () => {
     render(<Monitors />);
     expect(screen.getByText(/Couldn't load monitors: boom/)).toBeInTheDocument();
   });
+
+  it("a failing card opens its failed run; a healthy one offers nothing", () => {
+    mockState.monitors = [
+      monitor({ scheduleId: "s1", name: "Backup", status: "failing" }),
+      monitor({ scheduleId: "s2", name: "Nightly triage", status: "up" }),
+    ];
+    mockState.summary = { up: 1, late: 0, down: 0, failing: 1, paused: 0, pending: 0 };
+    render(<Monitors />);
+    const links = screen.getAllByRole("link", { name: /open (failed|last) run/i });
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveTextContent("Open failed run");
+    expect(links[0]).toHaveAttribute("href", "#/run/r2");
+  });
 });

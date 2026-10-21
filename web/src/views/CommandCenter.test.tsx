@@ -557,7 +557,9 @@ describe("CommandCenter", () => {
     ];
     mockOverview.overview = [e];
     render(<CommandCenter />);
-    expect(screen.getByText(/04:12/)).toBeInTheDocument();
+    // On the step's own tile (the live rail beside the board runs the same clock).
+    const tile = screen.getByRole("button", { name: /^step-x/ }).closest("article")!;
+    expect(within(tile).getByText(/04:12/)).toBeInTheDocument();
     vi.useRealTimers();
   });
 

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { Button, Card, Icon, Skeleton, chipClass, formatMs, formatUsd } from "../ds";
 import { useAutopsy } from "../useAutopsy";
 import type { FailureClass } from "../types";
@@ -69,10 +70,18 @@ function Header({ children, cost }: { children?: React.ReactNode; cost?: React.R
 export function AutopsyPanel({
   runId,
   onSeek,
+  fallbackSlot,
 }: {
   runId: string;
   /** Move the Flight Recorder's playhead to the span the postmortem cites. */
   onSeek?: (atMs: number) => void;
+  /**
+   * Where to render when the postmortem pass produced nothing — switched off,
+   * or failed itself. That is a note about the tool, not about the run, so the
+   * recorder sends it below the track rather than letting it headline a failed
+   * run's page. Rendered in place when absent.
+   */
+  fallbackSlot?: HTMLElement | null;
 }) {
   const { autopsy, eligible, unavailable, loading, busy, actionError, analyse, relaunch } =
     useAutopsy(runId);
@@ -120,22 +129,36 @@ export function AutopsyPanel({
     );
   }
 
+  // One quiet line, not a card: the run's own failure is the page's headline,
+  // and this pass's error ("did not answer with JSON") used to sit above it in
+  // a panel of its own.
   if (autopsy.status !== "ready") {
-    return (
-      <Card>
-        <Header cost={cost} />
-        <p className="mb-4 max-w-prose text-small text-ink-dim">
-          {autopsy.status === "skipped"
-            ? "Postmortems are switched off on this server (ARGUS_ANALYSIS=off)."
-            : `The postmortem pass didn't produce an explanation: ${autopsy.error ?? "unknown reason"}`}
-        </p>
-        <ActionRow busy={busy} error={actionError}>
-          <Button icon="retry" disabled={busy} onClick={() => void analyse()}>
+    const note = (
+      <div className="rounded-tile bg-ground-2/60 px-4 py-2">
+        <div className="flex flex-wrap items-start gap-x-3 gap-y-1.5 sm:items-center">
+          <Icon name="activity" size={14} className="mt-px shrink-0 text-ink-faint sm:mt-0" />
+          <p className="min-w-0 flex-1 basis-60 text-caption text-ink-faint">
+            <span className="font-semibold text-ink-dim">Autopsy</span>{" "}
+            {autopsy.status === "skipped"
+              ? "Postmortems are switched off on this server (ARGUS_ANALYSIS=off)."
+              : `The postmortem pass didn't produce an explanation: ${autopsy.error ?? "unknown reason"}`}
+            {cost && <span className="whitespace-nowrap"> · {cost}</span>}
+          </p>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="retry"
+            disabled={busy}
+            onClick={() => void analyse()}
+            className="-my-0.5"
+          >
             {busy ? "Retrying…" : "Try again"}
           </Button>
-        </ActionRow>
-      </Card>
+        </div>
+        <ActionRow busy={busy} error={actionError} />
+      </div>
     );
+    return fallbackSlot ? createPortal(note, fallbackSlot) : note;
   }
 
   return (
@@ -243,11 +266,11 @@ function ActionRow({
 }: {
   busy: boolean;
   error: string | null;
-  children: React.ReactNode;
+  children?: React.ReactNode;
 }) {
   return (
     <>
-      <div className="flex flex-wrap items-center gap-2">{children}</div>
+      {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
       {error && (
         <p role="alert" className="mt-3 flex items-start gap-2 text-small text-fail">
           <Icon name="alert" size={15} className="mt-0.5" />

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, type ReactNode } from "react";
 import type {
   H1Agreement,
   H1BaselineRow,
@@ -334,7 +334,8 @@ export const TD_LEFT = "py-2 pr-4 text-left text-ink";
  * cut mid-word looked like a rendering bug. And the edge with more behind it
  * fades, which is what says "this scrolls". The fade is set from the scroll
  * position directly on the element: it follows the finger, and a re-render per
- * scroll event would buy nothing.
+ * scroll event would buy nothing. A line under the frame says the same in
+ * words while there is more to see.
  */
 function ScrollFrame({ children }: { children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -344,6 +345,7 @@ function ScrollFrame({ children }: { children: ReactNode }) {
     const measure = () => {
       const max = el.scrollWidth - el.clientWidth;
       el.dataset.fade = `${el.scrollLeft > 1 ? "s" : ""}${el.scrollLeft < max - 1 ? "e" : ""}`;
+      el.dataset.more = String(el.scrollLeft < max - 1);
     };
     measure();
     el.addEventListener("scroll", measure, { passive: true });
@@ -357,11 +359,22 @@ function ScrollFrame({ children }: { children: ReactNode }) {
     };
   }, []);
   return (
-    <div
-      ref={ref}
-      className="-mx-4 overflow-x-auto px-4 data-[fade=e]:[mask-image:linear-gradient(to_right,black_calc(100%_-_2.5rem),transparent)] data-[fade=s]:[mask-image:linear-gradient(to_right,transparent,black_2.5rem)] data-[fade=se]:[mask-image:linear-gradient(to_right,transparent,black_2.5rem,black_calc(100%_-_2.5rem),transparent)]"
-    >
-      {children}
+    <div>
+      <div
+        ref={ref}
+        className="peer -mx-4 overflow-x-auto px-4 data-[fade=e]:[mask-image:linear-gradient(to_right,black_calc(100%_-_2.5rem),transparent)] data-[fade=s]:[mask-image:linear-gradient(to_right,transparent,black_2.5rem)] data-[fade=se]:[mask-image:linear-gradient(to_right,transparent,black_2.5rem,black_calc(100%_-_2.5rem),transparent)]"
+      >
+        {children}
+      </div>
+      {/* The fade alone is easy to read as a rendering fault; while there is
+          more to the right, say so in words. */}
+      <p
+        aria-hidden="true"
+        className="mt-1.5 hidden items-center justify-end gap-1 text-caption text-ink-faint peer-data-[more=true]:flex"
+      >
+        Scroll sideways for more
+        <Icon name="arrow-right" size={13} />
+      </p>
     </div>
   );
 }
@@ -497,6 +510,130 @@ export function Matrix({
   );
 }
 
+/** An environment variable's name in a sentence. */
+const ENV_NAME = /\b(ARGUS_[A-Z0-9_]+)\b/g;
+
+/**
+ * A reason as the server words it, with any environment variable named in it
+ * set as the machine text it is: mono, and free to wrap only after an
+ * underscore, so a narrow column breaks it into words rather than mid-word.
+ */
+export function ReasonText({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(ENV_NAME).map((part, i) =>
+        i % 2 === 1 ? (
+          <code key={i} className="font-mono text-caption text-ink">
+            {part.split("_").map((word, j, all) => (
+              <Fragment key={j}>
+                {word}
+                {j < all.length - 1 && (
+                  <>
+                    _<wbr />
+                  </>
+                )}
+              </Fragment>
+            ))}
+          </code>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
+/**
+ * The watcher's state. When its detail only repeats the reasons collection is
+ * off — listed in full beside it — the state stands alone and points at them.
+ */
+export function WatcherValue({
+  watcher: w,
+  enabled,
+  reasons,
+}: {
+  watcher: { state: string; detail: string | null; until: string | null };
+  enabled: boolean;
+  reasons: string[];
+}) {
+  if (!enabled && w.detail != null && w.detail === reasons.join("; ")) {
+    return (
+      <>
+        {w.state} <span className="text-ink-faint">· see the reasons below</span>
+      </>
+    );
+  }
+  return (
+    <>{`${w.state}${w.detail ? ` — ${w.detail}` : ""}${w.until ? ` (until ${w.until})` : ""}`}</>
+  );
+}
+
+/**
+ * How to turn collection on, from the reasons it is off: each switch that is
+ * not on, as the line that sets it. Anything else the server reported (a bad
+ * setting) follows as it was said.
+ */
+export function TurnOnCollection({ reasons, then }: { reasons: string[]; then: ReactNode }) {
+  const switches = reasons
+    .map((r) => /^(ARGUS_[A-Z0-9_]+) is not (?:on|set)$/.exec(r)?.[1])
+    .filter((name): name is string => name != null);
+  const other = reasons.filter((r) => !/^(ARGUS_[A-Z0-9_]+) is not (?:on|set)$/.test(r));
+  return (
+    <div className="flex flex-col items-center gap-3">
+      <p>
+        Collection is off. It calls a model, so it stays off until you turn it on
+        {switches.length > 0 ? " — set these where Argus starts, then restart it:" : "."}
+      </p>
+      {switches.length > 0 && (
+        <pre className="w-full max-w-sm overflow-x-auto rounded-control border border-line bg-ground-2 px-3 py-2.5 text-left font-mono text-caption leading-relaxed text-ink">
+          <code>{switches.map((name) => `${name}=on`).join("\n")}</code>
+        </pre>
+      )}
+      {other.length > 0 && (
+        <ul className="flex flex-col gap-1 text-left">
+          {other.map((r) => (
+            <li key={r} className="flex items-start gap-2">
+              <Icon name="alert" size={14} className="mt-[3px] shrink-0 text-ink-faint" />
+              <span className="min-w-0 break-words">
+                <ReasonText text={r} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-caption text-ink-faint">{then}</p>
+    </div>
+  );
+}
+
+/**
+ * The rest of a report that has nothing in it yet: what the experiment is
+ * built from and how it measures, and the census and checks that are all zero
+ * until something is collected. Closed, so a first visit reads as "here is how
+ * to turn this on" rather than as thousands of pixels of zeros.
+ */
+export function ReportDetails({ hint, children }: { hint: string; children: ReactNode }) {
+  return (
+    <details className="group mb-10">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-tile border border-line bg-surface px-4 py-3 shadow-raised transition-colors duration-(--duration-quick) hover:border-line-strong [&::-webkit-details-marker]:hidden">
+        <span className="min-w-0">
+          <span className="flex items-center gap-2 text-small font-semibold text-ink">
+            <Icon name="layers" size={15} className="text-ink-faint" />
+            What this experiment measures
+          </span>
+          <span className="mt-0.5 block text-caption text-ink-faint">{hint}</span>
+        </span>
+        <Icon
+          name="chevron-down"
+          size={16}
+          className="shrink-0 text-ink-faint transition-transform duration-(--duration-quick) group-open:rotate-180"
+        />
+      </summary>
+      <div className="pt-8">{children}</div>
+    </details>
+  );
+}
+
 /** Settings as recorded, beside whether collection runs and why not. */
 export function CollectionCard({
   state,
@@ -530,7 +667,9 @@ export function CollectionCard({
                   {reasons.map((r) => (
                     <li key={r} className="flex items-start gap-2 text-small text-ink">
                       <Icon name="minus" size={14} className="mt-[3px] text-ink-faint" />
-                      <span className="min-w-0 break-words">{r}</span>
+                      <span className="min-w-0 break-words">
+                        <ReasonText text={r} />
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -728,7 +867,7 @@ function CollectionSection({
           ],
           [
             "Watcher",
-            `${w.state}${w.detail ? ` — ${w.detail}` : ""}${w.until ? ` (until ${w.until})` : ""}`,
+            <WatcherValue watcher={w} enabled={status.enabled} reasons={status.reasons} />,
           ],
           ["First collection", collection.start ?? "none recorded"],
         ]}
@@ -833,8 +972,10 @@ function DefinitionsSection({ definitions }: { definitions: H1Report["definition
 
 // ── Pending, gate exclusions, spend ─────────────────────────────────────────
 
-/** Gates that are counted and not shown: the ones still waiting on an operator,
- *  and the pauses that were never captured at all. */
+/** Gates that are counted and not shown: the ones H1 captured that are still
+ *  waiting on an operator, and the pauses that were never captured at all. The
+ *  ledger's count, not a live one — so the section says so, beside a Command
+ *  Center that may well have a gate waiting right now. */
 function PendingSection({
   pending,
   excluded,
@@ -844,7 +985,7 @@ function PendingSection({
 }) {
   const populations = Object.entries(pending.byPopulation) as Array<[H1Population, number]>;
   return (
-    <Section title="Pending gates" className="flex flex-col">
+    <Section title="Captured gates still pending" className="flex flex-col">
       <Card className="flex-1">
         <StatGrid
           cols={3}
@@ -857,7 +998,9 @@ function PendingSection({
           Gate pauses seen and not captured: <Counts counts={excluded} />
         </p>
         <Caption>
-          Pending gates are counted, not shown: no pending gate, prediction or label is listed here.
+          Only gates H1 captured while collection was on — not the gates waiting in Command Center
+          now. Pending gates are counted, not shown: no pending gate, prediction or label is listed
+          here.
         </Caption>
       </Card>
     </Section>
@@ -1154,6 +1297,10 @@ function ModelCard({ p }: { p: H1ModelPopulation }) {
 
 function Report({ data }: { data: NonNullable<ReturnType<typeof useDecisionH1>["data"]> }) {
   const { collection, report } = data;
+  // Nothing in the ledger yet — the first-run state, and the default one,
+  // since collection is off until someone turns it on. The report is all
+  // zeros then, so it folds away behind the one thing worth saying.
+  const empty = report.asOf.seq === 0 && report.models.length === 0;
   return (
     <>
       <Notice title={report.statement}>
@@ -1162,6 +1309,41 @@ function Report({ data }: { data: NonNullable<ReturnType<typeof useDecisionH1>["
       </Notice>
 
       <CollectionSection status={collection} collection={report.collection} />
+
+      {empty ? (
+        <>
+          <Section title="Assessments">
+            <EmptyState icon="inbox" title="Nothing collected yet">
+              {collection.enabled ? (
+                "Collection is on. A gate is captured when it pauses, and assessed once its operator settles it."
+              ) : (
+                <TurnOnCollection
+                  reasons={collection.reasons}
+                  then="Gates are then sampled as they pause, within the call and spend caps under Settings."
+                />
+              )}
+            </EmptyState>
+          </Section>
+          <ReportDetails hint="Definitions, baselines and methods, and the census, spend and integrity checks — all empty until a gate is captured.">
+            <ReportBody report={report} />
+          </ReportDetails>
+        </>
+      ) : (
+        <ReportBody report={report} />
+      )}
+
+      <AsOf>
+        H1 report as of ledger record {report.asOf.seq} ({report.asOf.at ?? "no records"}). Opening
+        this page never starts collection or calls a model.
+      </AsOf>
+    </>
+  );
+}
+
+/** Everything in the report below its collection state. */
+function ReportBody({ report }: { report: H1Report }) {
+  return (
+    <>
       <DefinitionsSection definitions={report.definitions} />
 
       <div className="grid gap-x-6 xl:grid-cols-2">
@@ -1240,11 +1422,6 @@ function Report({ data }: { data: NonNullable<ReturnType<typeof useDecisionH1>["
       <Section title="Methods">
         <MethodsPanel methods={report.methods} />
       </Section>
-
-      <AsOf>
-        H1 report as of ledger record {report.asOf.seq} ({report.asOf.at ?? "no records"}). Opening
-        this page never starts collection or calls a model.
-      </AsOf>
     </>
   );
 }

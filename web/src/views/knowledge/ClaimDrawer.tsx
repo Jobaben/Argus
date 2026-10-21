@@ -150,7 +150,7 @@ function ClaimBody({
                   <span>{j.direction}</span>
                   <span
                     className={
-                      force.inForce ? "text-ink-dim" : "inline-flex font-semibold text-run"
+                      force.inForce ? "text-ink-dim" : "inline-flex font-semibold text-await"
                     }
                   >
                     {force.inForce ? "in force" : "out of force"}

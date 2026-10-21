@@ -125,7 +125,12 @@ export function NotificationCenter() {
           aria-label="Notifications"
           inert={!open}
           aria-hidden={open ? undefined : true}
-          className="absolute right-0 top-full z-40 mt-2 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col rounded-tile bg-surface-2 shadow-overlay"
+          // On a phone the bell sits well in from the right edge, so a panel
+          // hung off it ran off the *left* of the screen. Below `sm` it spans
+          // the viewport between the bar's gutters instead (the bar's backdrop
+          // filter makes it the containing block, and it is full width), still
+          // growing from the top right where the bell is.
+          className="absolute right-0 top-full z-40 mt-2 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col rounded-tile bg-surface-2 shadow-overlay max-sm:fixed max-sm:inset-x-4 max-sm:top-[60px] max-sm:mt-0 max-sm:w-auto max-sm:max-w-none"
         >
           <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
             <h2 className="text-small font-semibold text-ink">Notifications</h2>

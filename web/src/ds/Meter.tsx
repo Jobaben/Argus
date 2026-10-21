@@ -76,7 +76,9 @@ function BoardMeter({
   const shownTokens = useCountUp(tokens);
   const shownUsd = useCountUp(usd);
   return (
-    <span className="flex flex-col items-end gap-1" title={title}>
+    // Right-aligned where it sits at the end of a header row; on a phone the
+    // header wraps it under the title, flush left, and so is its label.
+    <span className="flex flex-col items-start gap-1 sm:items-end" title={title}>
       <span className="eyebrow">{label ?? "Total spend"}</span>
       <span className="text-[22px] font-semibold leading-none tracking-tight text-ink">
         {tokens != null && (

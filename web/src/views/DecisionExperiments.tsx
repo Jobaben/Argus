@@ -26,13 +26,16 @@ import {
   MethodsPanel,
   Notice,
   ProportionValue,
+  ReportDetails,
   StatGrid,
   StatePill,
   SubHeading,
   TD,
   TD_LEFT,
   Th,
+  TurnOnCollection,
   UsageFacts,
+  WatcherValue,
   formatMeasured,
   formatNullable,
   formatProportion,
@@ -91,7 +94,7 @@ function CollectionSection({
           ],
           [
             "Watcher",
-            `${w.state}${w.detail ? ` — ${w.detail}` : ""}${w.until ? ` (until ${w.until})` : ""}`,
+            <WatcherValue watcher={w} enabled={status.enabled} reasons={status.reasons} />,
           ],
           ["First collection", collection.start ?? "none recorded"],
         ]}
@@ -604,9 +607,62 @@ function Report({
 }) {
   const { collection, report } = data;
   const noAssessments = report.probe.length === 0 && report.residual.length === 0;
+  // Nothing in the ledger yet — the first-run state, and the default one,
+  // since collection is off until someone turns it on. The rest of the report
+  // is all zeros then, so it folds away behind the one thing worth saying.
+  const empty = report.asOf.seq === 0 && report.census.length === 0 && noAssessments;
+  const assessmentsEmpty = (
+    <EmptyState compact={!empty} icon="inbox" title="No shadow assessments recorded.">
+      {collection.enabled ? (
+        "Collection is on. A sampled run is assessed once it is between 10 minutes and 24 hours old."
+      ) : (
+        <TurnOnCollection
+          reasons={collection.reasons}
+          then="A sampled run is then assessed once it is between 10 minutes and 24 hours old, within the call and spend caps under Settings."
+        />
+      )}
+    </EmptyState>
+  );
   return (
     <>
       <CollectionSection status={collection} collection={report.collection} />
+      {empty ? (
+        <>
+          <Section title="Assessments">{assessmentsEmpty}</Section>
+          <ReportDetails hint="The questions, baselines and methods, and the census and integrity checks — all empty until a run is sampled.">
+            <ReportBody report={report} noAssessments />
+          </ReportDetails>
+        </>
+      ) : (
+        <ReportBody
+          report={report}
+          noAssessments={noAssessments}
+          assessmentsEmpty={assessmentsEmpty}
+        />
+      )}
+
+      <AsOf>
+        As of ledger record {report.asOf.seq} ({report.asOf.at ?? "no records"}). Opening this page
+        never starts collection or calls a model.
+      </AsOf>
+    </>
+  );
+}
+
+/** Everything in the report below its collection state. */
+function ReportBody({
+  report,
+  noAssessments,
+  assessmentsEmpty,
+}: {
+  report: H2Report;
+  noAssessments: boolean;
+  /** Said in place of the populations when there are none; absent when it
+   *  has already been said above. */
+  assessmentsEmpty?: ReactNode;
+}) {
+  return (
+    <>
       <QuestionsSection definitions={report.definitions} />
 
       <Section title="Population">
@@ -622,18 +678,7 @@ function Report({
       </Section>
 
       {noAssessments ? (
-        <Section title="Assessments">
-          <EmptyState compact icon="inbox" title="No shadow assessments recorded.">
-            {/* Says what is missing, not only that something is: the reasons
-                are the switches that turn collection on. */}
-            {collection.enabled
-              ? "Collection is on. "
-              : `Collection is off${
-                  collection.reasons.length > 0 ? `: ${collection.reasons.join("; ")}` : ""
-                }. It calls a model, so it stays off until you turn it on. `}
-            A sampled run is assessed once it is between 10 minutes and 24 hours old.
-          </EmptyState>
-        </Section>
+        assessmentsEmpty && <Section title="Assessments">{assessmentsEmpty}</Section>
       ) : (
         <>
           {report.probe.length > 0 && (
@@ -683,11 +728,6 @@ function Report({
       <Section title="Methods">
         <MethodsPanel methods={report.methods} />
       </Section>
-
-      <AsOf>
-        As of ledger record {report.asOf.seq} ({report.asOf.at ?? "no records"}). Opening this page
-        never starts collection or calls a model.
-      </AsOf>
     </>
   );
 }

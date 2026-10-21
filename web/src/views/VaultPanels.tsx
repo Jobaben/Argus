@@ -29,6 +29,11 @@ function bytes(n: number | null): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** "1 event", "1,240 runs". */
+function count(n: number, noun: string): string {
+  return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
+}
+
 function StatusLine({ status, error }: { status: VaultStatus; error: string | null }) {
   // A status that never arrived is not a Vault that is unavailable.
   if (!status.available && error) {
@@ -54,8 +59,8 @@ function StatusLine({ status, error }: { status: VaultStatus; error: string | nu
     <p className="flex items-start gap-2 text-caption text-ink-faint">
       <Icon name="layers" size={14} className="mt-px text-ink-faint" />
       <span>
-        {status.rows.runs.toLocaleString()} runs · {status.rows.events.toLocaleString()} events ·{" "}
-        {status.rows.scores.toLocaleString()} scores · {bytes(status.sizeBytes)}
+        {count(status.rows.runs, "run")} · {count(status.rows.events, "event")} ·{" "}
+        {count(status.rows.scores, "score")} · {bytes(status.sizeBytes)}
         {status.beyondRetention > 0 && (
           <>
             {" · "}
@@ -76,27 +81,48 @@ const TH = `${CELL} eyebrow py-2.5 font-semibold`;
 const TD = `${CELL} py-3 text-small`;
 const DIM = `${TD} text-ink-dim`;
 
+/** A column a phone folds into the caption line under the quarter. */
+const WIDE = "hidden sm:table-cell";
+
 function QuarterRow({ quarter }: { quarter: VaultQuarter }) {
   const rate = quarter.runs > 0 ? quarter.succeeded / quarter.runs : null;
+  const median = quarter.medianDurationMs == null ? "—" : formatMs(quarter.medianDurationMs);
   return (
     <tr>
-      <th scope="row" className={`${TD} font-semibold text-ink`}>
+      <th scope="row" className={`${TD} align-top font-semibold text-ink`}>
         {quarter.label}
+        {/* The other columns, on a phone, as one line under the quarter: each
+            figure with its unit, wrapping between pairs. */}
+        <span className="mt-1 block whitespace-normal text-caption font-normal text-ink-faint sm:hidden">
+          <span className="whitespace-nowrap">{count(quarter.runs, "run")}</span> ·{" "}
+          <span
+            className={`whitespace-nowrap ${quarter.failed > 0 ? "font-semibold text-fail" : ""}`}
+          >
+            {`${quarter.failed.toLocaleString()} failed`}
+          </span>{" "}
+          ·{" "}
+          <span className="whitespace-nowrap">
+            {rate == null ? "no success rate" : `${Math.round(rate * 100)}% success`}
+          </span>{" "}
+          · <span className="whitespace-nowrap">{`median ${median}`}</span> ·{" "}
+          <span className="whitespace-nowrap">{`${formatTokens(quarter.tokens)} tok`}</span> ·{" "}
+          <span className="whitespace-nowrap">
+            {quarter.medianScore == null ? "unscored" : `verdict ${quarter.medianScore.toFixed(1)}`}
+          </span>
+        </span>
       </th>
-      <td className={DIM}>{quarter.runs.toLocaleString()}</td>
-      <td className={DIM}>
+      <td className={`${DIM} ${WIDE}`}>{quarter.runs.toLocaleString()}</td>
+      <td className={`${DIM} ${WIDE}`}>
         {/* A zero is neutral; only a failure count is a claim worth colouring. */}
         <span className={quarter.failed > 0 ? "font-semibold text-fail" : "text-ink-faint"}>
           {quarter.failed.toLocaleString()}
         </span>
       </td>
-      <td className={DIM}>{rate == null ? "—" : `${Math.round(rate * 100)}%`}</td>
-      <td className={DIM}>
-        {quarter.medianDurationMs == null ? "—" : formatMs(quarter.medianDurationMs)}
-      </td>
-      <td className={`${TD} font-semibold text-ink`}>{formatUsd(quarter.costUsd)}</td>
-      <td className={`${TD} text-ink-faint`}>{formatTokens(quarter.tokens)}</td>
-      <td className={DIM}>
+      <td className={`${DIM} ${WIDE}`}>{rate == null ? "—" : `${Math.round(rate * 100)}%`}</td>
+      <td className={`${DIM} ${WIDE}`}>{median}</td>
+      <td className={`${TD} align-top font-semibold text-ink`}>{formatUsd(quarter.costUsd)}</td>
+      <td className={`${TD} ${WIDE} text-ink-faint`}>{formatTokens(quarter.tokens)}</td>
+      <td className={`${DIM} ${WIDE}`}>
         {/* Absent, not zero: an unscored quarter has not been judged badly. */}
         {quarter.medianScore == null ? "—" : quarter.medianScore.toFixed(1)}
       </td>
@@ -121,7 +147,18 @@ export function VaultPanels() {
   const failed = loadError != null && report.quarters.length === 0;
 
   return (
-    <Section title="By quarter · the long view">
+    <Section title="Argus runs by quarter">
+      {/* A different ledger from everything above it on the Stats page, so the
+          switch is named: these are the runs Argus launched, not Claude Code's
+          own usage. */}
+      <p className="-mt-1 mb-3 max-w-3xl text-small text-ink-dim">
+        What Argus itself launched, from the Vault — every run it has fired, kept past the JSON
+        files&apos; retention. Spend in detail is on{" "}
+        <a href="#/budget" className="font-semibold text-ink underline underline-offset-2">
+          Budget
+        </a>
+        .
+      </p>
       {/* A store that quietly stopped ingesting is the failure this feature
           must not hide, so its state is announced and not only drawn — once it
           has actually been read. */}
@@ -179,7 +216,7 @@ export function VaultPanels() {
         <div className="overflow-hidden rounded-tile border border-line bg-surface shadow-raised">
           {/* The table may scroll sideways on a phone; the page never does. */}
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[40rem] border-collapse">
+            <table className="w-full border-collapse sm:min-w-[40rem]">
               <caption className="sr-only">
                 Runs, failures, duration, cost and quality score by calendar quarter
               </caption>
@@ -188,25 +225,25 @@ export function VaultPanels() {
                   <th scope="col" className={TH}>
                     Quarter
                   </th>
-                  <th scope="col" className={TH}>
+                  <th scope="col" className={`${TH} ${WIDE}`}>
                     Runs
                   </th>
-                  <th scope="col" className={TH}>
+                  <th scope="col" className={`${TH} ${WIDE}`}>
                     Failed
                   </th>
-                  <th scope="col" className={TH}>
+                  <th scope="col" className={`${TH} ${WIDE}`}>
                     Success
                   </th>
-                  <th scope="col" className={TH}>
+                  <th scope="col" className={`${TH} ${WIDE}`}>
                     Median
                   </th>
                   <th scope="col" className={TH}>
                     Cost
                   </th>
-                  <th scope="col" className={TH}>
+                  <th scope="col" className={`${TH} ${WIDE}`}>
                     Tokens
                   </th>
-                  <th scope="col" className={TH}>
+                  <th scope="col" className={`${TH} ${WIDE}`}>
                     Verdict
                   </th>
                 </tr>

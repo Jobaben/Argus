@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { Fragment, useEffect, useMemo, useRef } from "react";
 import { formatKeys, type Binding } from "./keys";
 import { Icon, SURFACE, usePresence, useSurfaceMotion } from "../ds";
 
@@ -98,11 +98,15 @@ export function ShortcutHelp({
                   <div key={binding.keys} className="flex items-center gap-3">
                     {/* dt before dd, as a description list requires; the keys are
                         drawn on the right by order, not by source position. */}
-                    <dt className="order-2 flex shrink-0 gap-1 text-[13px]">
+                    <dt className="order-2 flex shrink-0 items-center gap-1 text-small">
+                      {/* A chord is a sequence, not a combination: "G then C"
+                          says press one and then the other, where two caps
+                          side by side read as hold both. */}
                       {formatKeys(binding.keys, platform).map((cap, i) => (
-                        <kbd key={i} className="kbd">
-                          {cap}
-                        </kbd>
+                        <Fragment key={i}>
+                          {i > 0 && <span className="text-caption text-ink-faint">then</span>}
+                          <kbd className="kbd">{cap}</kbd>
+                        </Fragment>
                       ))}
                     </dt>
                     <dd className="order-1 min-w-0 flex-1 text-small text-ink-dim">

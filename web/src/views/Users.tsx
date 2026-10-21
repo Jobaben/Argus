@@ -40,7 +40,14 @@ function UserItem({
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="truncate text-small font-semibold text-ink">{user.username}</span>
+          {/* Wrapped, never cut: a pending name is what is being approved, so all
+              of it has to be readable next to the button that grants it. */}
+          <span
+            className={`min-w-0 text-small font-semibold text-ink ${pending ? "break-words" : "truncate"}`}
+            title={user.username}
+          >
+            {user.username}
+          </span>
           <span className={chipClass()}>{user.role}</span>
           {self && <span className={chipClass()}>you</span>}
         </div>
@@ -48,13 +55,20 @@ function UserItem({
           {pending ? "Requested" : "Joined"} <TimeAgo iso={user.createdAt} />
         </div>
       </div>
-      {/* The destructive choice on the left, the one that grants access at the
-          far end where the eye finishes — and never both the same weight. */}
-      <div className="ml-auto flex items-center gap-3">
+      {/* The destructive choice on the left, quiet and set well apart from the
+          one that grants access, which sits at the far end where the eye
+          finishes. Quiet on every row, as Fleet's Unpair is: a column of red
+          outlines reads as a column of failures. */}
+      {/* On a phone a pending row's decision takes its own line, so the name it
+          is about keeps the whole width above it. */}
+      <div
+        className={`ml-auto flex items-center gap-6 ${pending ? "w-full justify-end sm:w-auto" : ""}`}
+      >
         {!self && (
           <Button
             size="sm"
-            variant="danger"
+            variant="quiet-danger"
+            icon={pending ? "close" : "trash"}
             aria-label={`${pending ? "Reject" : "Remove"} ${user.username}`}
             onClick={() => void onReject(user.username)}
           >
@@ -110,7 +124,21 @@ export default function Users() {
       title="Users"
       subtitle="Who can sign in to this server. A new account stays locked until root approves it."
     >
-      {auth.status && !isRoot ? (
+      {auth.status && !auth.status.configured ? (
+        // A fresh install has no root to sign in as; the first account made
+        // becomes it, and the form that makes it is on the Pipelines tab.
+        <EmptyState
+          icon="shield"
+          title="No root account yet"
+          action={
+            <ButtonLink href="#/pipelines" variant="primary" iconRight="arrow-right">
+              Create the root account
+            </ButtonLink>
+          }
+        >
+          The first account created becomes root, and approves everyone who registers after it.
+        </EmptyState>
+      ) : auth.status && !isRoot ? (
         <EmptyState
           icon="shield"
           title={

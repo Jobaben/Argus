@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import { runtimeLabel } from "../useRuntimes";
 import { InstancesRunningError, usePipelines } from "../usePipelines";
 import { useOverview } from "../useOverview";
@@ -32,6 +32,7 @@ import { AdminAuthPanel } from "./AdminAuthPanel";
 import { TuningDrawer } from "./TuningDrawer";
 import { toInput } from "./tuningApply";
 import { ReliabilityCard } from "./ReliabilityCard";
+import { InfoTip } from "../ds/InfoTip";
 
 /** A decision this pipeline is waiting on: a gate to approve, or a failed
  *  phase to retry or revise. Both are answered in the Command Center's review
@@ -157,6 +158,19 @@ function MetaLine({ items }: { items: ReactNode[] }) {
   );
 }
 
+/**
+ * The card's edge carries the alarm, as a schedule card's does. Waiting on a
+ * human is the louder of the two: it is the one state on this page that cannot
+ * move until someone acts, and it used to be the quieter card beside a red one.
+ */
+function cardTone(badge: DsStatus): string {
+  if (badge === "await")
+    return "border-await/40 bg-surface bg-gradient-to-b from-await/[0.07] to-await/[0.02]";
+  if (badge === "failed")
+    return "border-fail/35 bg-surface bg-gradient-to-b from-fail/[0.07] to-fail/[0.02]";
+  return "border-line bg-surface";
+}
+
 function PipelineCard({
   def,
   live,
@@ -195,7 +209,6 @@ function PipelineCard({
   const steps = def.phases.reduce((n, p) => n + p.steps.length, 0);
   const cost = formatCost(live.latest?.cost?.tokens, live.latest?.cost?.usd);
   const failure = live.badge === "failed" ? live.latest?.failure : null;
-  const alarming = live.badge === "failed";
   const [showReliability, setShowReliability] = useState(false);
 
   const chips = [
@@ -230,9 +243,7 @@ function PipelineCard({
 
   return (
     <article
-      className={`flex min-w-0 flex-col rounded-tile border bg-surface shadow-raised ${
-        alarming ? "border-fail/35" : "border-line"
-      }`}
+      className={`flex min-w-0 flex-col rounded-tile border shadow-raised ${cardTone(live.badge)}`}
     >
       <div className="min-w-0 px-4 pb-3 pt-4 sm:px-5">
         <header className="flex items-start justify-between gap-3">
@@ -349,7 +360,7 @@ function PipelineCard({
           type="button"
           onClick={() => setShowReliability((v) => !v)}
           aria-expanded={showReliability}
-          className={buttonClass("ghost", "sm", "-ml-2.5 mt-2.5")}
+          className={buttonClass("ghost", "sm", "mt-2.5")}
         >
           <Icon name="activity" size={14} />
           Reliability
@@ -441,38 +452,172 @@ function PipelineCard({
   );
 }
 
-/** Counts worth a glance before the list, said only when non-zero. */
+/**
+ * The signed-in admin, and Sign out, behind one control. This page is where an
+ * admin signs in, so it is where they can see who they are — but a
+ * session-ending action does not belong beside the page's primary button.
+ */
+function AccountMenu({
+  username,
+  onSignOut,
+}: {
+  username: string | null | undefined;
+  onSignOut: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelId = useId();
+  // Closes like any popover: a press outside it, or Escape (which hands focus
+  // back to the control that opened it).
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: PointerEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointer);
+    return () => document.removeEventListener("pointerdown", onPointer);
+  }, [open]);
+  return (
+    <div
+      ref={rootRef}
+      className="relative"
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && open) {
+          setOpen(false);
+          triggerRef.current?.focus();
+        }
+      }}
+    >
+      <Button
+        ref={triggerRef}
+        variant="ghost"
+        size="sm"
+        icon="user"
+        iconRight="chevron-down"
+        aria-expanded={open}
+        aria-controls={panelId}
+        title="Your account"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="max-w-[10rem] truncate">{username}</span>
+      </Button>
+      {open && (
+        <div
+          id={panelId}
+          className="absolute left-0 top-full z-20 mt-1.5 w-56 rounded-control border border-line bg-surface-2 p-1.5 shadow-overlay sm:left-auto sm:right-0"
+        >
+          <p className="truncate px-2 pb-1.5 pt-1 text-caption text-ink-faint">
+            Signed in as <span className="font-semibold text-ink-dim">{username}</span>
+          </p>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="logout"
+            className="w-full justify-start"
+            onClick={() => {
+              setOpen(false);
+              onSignOut();
+            }}
+          >
+            Sign out
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type Filter = "all" | "await" | "failed" | "paused";
+
+/** Which pipelines a filter keeps. */
+function matches(filter: Filter, def: PipelineDefinition, live: PipelineLive): boolean {
+  if (filter === "all") return true;
+  if (filter === "paused") return !def.enabled;
+  return live.badge === filter;
+}
+
+/**
+ * A count that filters the list — the Scheduler's chip, so the two peer pages
+ * summarise themselves in one idiom: a quiet outlined ghost at rest, a lit
+ * secondary while its filter is on.
+ */
+function FilterChip({
+  selected,
+  onClick,
+  children,
+}: {
+  selected: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Button
+      variant={selected ? "secondary" : "ghost"}
+      size="sm"
+      aria-pressed={selected}
+      onClick={onClick}
+      className={selected ? "" : "border border-line"}
+    >
+      {children}
+    </Button>
+  );
+}
+
+/**
+ * Counts worth a glance before the list, said only when non-zero, each one a
+ * filter — waiting on you first, because that is what this page is for. What
+ * is working is said but not offered as a filter: its pill already breathes.
+ */
 function ListSummary({
   pipelines,
   live,
+  filter,
+  onFilter,
 }: {
   pipelines: PipelineDefinition[];
   live: Map<string, PipelineLive>;
+  filter: Filter;
+  onFilter: (f: Filter) => void;
 }) {
   const count = (status: DsStatus) =>
     pipelines.filter((p) => (live.get(p.id) ?? NEVER_RUN).badge === status).length;
   const waiting = count("await");
   const failed = count("failed");
-  const running = count("working");
+  const working = count("working");
   const paused = pipelines.filter((p) => !p.enabled).length;
-  const parts = [
-    waiting > 0 && { key: "await", dot: "bg-await", text: `${waiting} awaiting you` },
-    failed > 0 && { key: "failed", dot: "bg-fail", text: `${failed} failed` },
-    running > 0 && { key: "running", dot: "bg-run", text: `${running} running` },
-    paused > 0 && { key: "paused", dot: "bg-idle", text: `${paused} paused` },
-  ].filter((p): p is { key: string; dot: string; text: string } => Boolean(p));
+  const toggle = (f: Filter) => () => onFilter(filter === f ? "all" : f);
   return (
-    <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-      <h2 className="eyebrow">{`${pipelines.length} pipeline${pipelines.length === 1 ? "" : "s"}`}</h2>
-      {parts.length > 0 && (
-        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-ink-dim">
-          {parts.map((p) => (
-            <span key={p.key} className="inline-flex items-center gap-1.5">
-              <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${p.dot}`} />
-              {p.text}
-            </span>
-          ))}
-        </p>
+    <div
+      role="group"
+      aria-label="Filter pipelines"
+      className="mb-4 flex flex-wrap items-center gap-2"
+    >
+      <FilterChip selected={filter === "all"} onClick={() => onFilter("all")}>
+        All <span className="font-semibold text-ink-faint">{pipelines.length}</span>
+      </FilterChip>
+      {waiting > 0 && (
+        <FilterChip selected={filter === "await"} onClick={toggle("await")}>
+          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-await" />
+          <span className="text-await">{waiting} awaiting you</span>
+        </FilterChip>
+      )}
+      {failed > 0 && (
+        <FilterChip selected={filter === "failed"} onClick={toggle("failed")}>
+          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-fail" />
+          <span className="text-fail">{failed} failed</span>
+        </FilterChip>
+      )}
+      {paused > 0 && (
+        <FilterChip selected={filter === "paused"} onClick={toggle("paused")}>
+          {paused} paused
+        </FilterChip>
+      )}
+      {working > 0 && (
+        <span className="inline-flex items-center gap-1.5 pl-1 text-caption font-semibold text-run">
+          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
+          {working} working
+        </span>
       )}
     </div>
   );
@@ -522,6 +667,14 @@ export default function Pipelines() {
   const [mode, setMode] = useState<
     { kind: "none" } | { kind: "new" } | { kind: "edit"; id: string } | { kind: "tune"; id: string }
   >({ kind: "none" });
+  const [filter, setFilter] = useState<Filter>("all");
+  // The card being edited stays on screen whatever the filter says: a filter
+  // must never take an open editor, and what was typed in it, away.
+  const shown = pipelines.filter(
+    (p) =>
+      (mode.kind === "edit" && mode.id === p.id) ||
+      matches(filter, p, liveByPipeline.get(p.id) ?? NEVER_RUN),
+  );
   const [actionError, setActionError] = useState<{ pipelineId: string; message: string } | null>(
     null,
   );
@@ -579,19 +732,16 @@ export default function Pipelines() {
       actions={
         isAdmin ? (
           <>
-            <span className="inline-flex items-center gap-1.5 text-caption text-ink-faint">
-              <Icon name="user" size={14} />
-              <span>{auth.status?.username}</span>
-            </span>
-            <Button variant="ghost" size="sm" icon="logout" onClick={() => void auth.logout()}>
-              Sign out
-            </Button>
-            <span aria-hidden="true" className="mx-1 h-5 w-px bg-line-strong" />
+            {/* Who you are, and the way out, folded behind one quiet control:
+                Sign out used to sit one button from New pipeline. */}
+            <AccountMenu username={auth.status?.username} onSignOut={() => void auth.logout()} />
             {/* Disabled while a form is open rather than removed: removing it
-                slid Sign out under the pointer that had just clicked here. */}
+                slid the account control under the pointer that had just
+                clicked here. Secondary on an empty page, whose own call to
+                action is the one to look at. */}
             <Button
               ref={newButton}
-              variant="primary"
+              variant={pipelines.length === 0 && !loading ? "secondary" : "primary"}
               icon="plus"
               disabled={formOpen}
               onClick={() => setMode({ kind: "new" })}
@@ -672,33 +822,68 @@ export default function Pipelines() {
               title="No pipelines yet"
               action={
                 isAdmin ? (
-                  <Button icon="plus" onClick={() => setMode({ kind: "new" })}>
+                  <Button variant="primary" icon="plus" onClick={() => setMode({ kind: "new" })}>
                     Create your first pipeline
                   </Button>
                 ) : undefined
               }
             >
-              <p>
-                A pipeline is ordered <strong className="text-ink">phases</strong>, each with a
-                working directory and one or more steps — a step being one headless agent run, on
-                whichever runtime that step, phase or pipeline names. Any phase can be{" "}
-                <strong className="text-ink">gated</strong>, which pauses the pipeline there until a
-                human approves or sends it back with a note. Once created it appears on the Command
-                Center wall, where you approve gates and watch steps as they work.
+              {/* Two sentences and the next step; the anatomy is on demand. */}
+              <p className="max-w-xl">
+                Ordered <strong className="text-ink">phases</strong> of headless agent runs. Any
+                phase can be <strong className="text-ink">gated</strong>, which pauses the pipeline
+                there until a human approves or sends it back with a note.{" "}
+                <InfoTip title="What's a pipeline?">
+                  Each phase has a working directory and one or more steps — a step being one
+                  headless agent run, on whichever runtime that step, phase or pipeline names. Once
+                  created, a pipeline appears on the Command Center wall, where you approve gates
+                  and watch steps as they work.
+                </InfoTip>
               </p>
+              {!isAdmin && auth.status && (
+                <p className="mt-2 text-ink-dim">
+                  {auth.status.configured
+                    ? "Sign in above to add your first pipeline."
+                    : "Create the root account above to add your first pipeline."}
+                </p>
+              )}
             </EmptyState>
           )
         ) : (
           pipelines.length > 0 && (
             <>
-              <ListSummary pipelines={pipelines} live={liveByPipeline} />
+              <ListSummary
+                pipelines={pipelines}
+                live={liveByPipeline}
+                filter={filter}
+                onFilter={setFilter}
+              />
+              {shown.length === 0 && (
+                <EmptyState
+                  compact
+                  tone={filter === "paused" ? "neutral" : "calm"}
+                  icon={filter === "paused" ? "pause" : "check-circle"}
+                  title={
+                    filter === "await"
+                      ? "Nothing is waiting for you."
+                      : filter === "failed"
+                        ? "Nothing has failed."
+                        : "Nothing is paused."
+                  }
+                  action={
+                    <Button variant="ghost" size="sm" onClick={() => setFilter("all")}>
+                      Show all {pipelines.length}
+                    </Button>
+                  }
+                />
+              )}
               {/* One column while editing: the editor is full width, and in two
                   columns a card from the right-hand column left an empty cell
                   beside its neighbour when the form took its place. */}
               <div
                 className={`grid items-start gap-4 ${mode.kind === "edit" ? "" : "xl:grid-cols-2"}`}
               >
-                {pipelines.map((p) =>
+                {shown.map((p) =>
                   // The editor opens where the card was, not at the top of the
                   // page: the reader clicked Edit *here*, and on a long list the
                   // top of the page is somewhere else entirely.

@@ -6,10 +6,12 @@ import {
   STATUS,
   SkeletonRows,
   TimeAgo,
+  formatElapsed,
   formatMs,
   formatUsd,
   runDsStatus,
   staggerDelay,
+  useTicker,
 } from "../ds";
 import type { ColorToken, OverviewRow } from "../ds";
 
@@ -27,6 +29,10 @@ import type { ColorToken, OverviewRow } from "../ds";
  */
 
 const RECENT_LIMIT = 8;
+
+/** How long a run may go without a tool call before "starting…" stops being
+ *  the honest word for it. */
+const STARTING_MS = 10_000;
 
 /** Static per-token classes: Tailwind scans source text, so an interpolated
  *  `text-${token}` would never be generated. */
@@ -69,11 +75,23 @@ function StepLine({
   label,
   activity,
   runId,
+  startedAt,
+  twin,
 }: {
   label: string;
   activity: LiveActivity | null;
   runId: string | null;
+  startedAt: string | null;
+  /** Another live row carries the same label, so this one names its run. */
+  twin: boolean;
 }) {
+  // Every live row says how long it has been going. "starting…" on all of
+  // them, whatever their age, made a two-minute step look exactly like one
+  // that had just been spawned — and stuck look exactly like fine.
+  const now = useTicker(startedAt !== null);
+  const ms = startedAt ? now - new Date(startedAt).getTime() : null;
+  const elapsed = ms !== null && ms >= 0 ? formatElapsed(ms) : null;
+  const starting = ms === null || ms < STARTING_MS;
   return (
     <li className="relative pl-3">
       <span
@@ -81,14 +99,30 @@ function StepLine({
         className="absolute bottom-1.5 left-0 top-1.5 w-[2px] rounded-full bg-run/60"
       />
       <RowLink runId={runId}>
-        <span className="truncate text-small font-semibold leading-tight text-ink">{label}</span>
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="min-w-0 flex-1 truncate text-small font-semibold leading-tight text-ink">
+            {label}
+          </span>
+          {elapsed && (
+            <span title="Running for" className="shrink-0 text-caption font-semibold text-run">
+              {elapsed}
+            </span>
+          )}
+        </span>
         {activity ? (
           <span className="flex min-w-0 items-start gap-1.5 text-caption leading-snug text-ink-dim">
             <Icon name="activity" size={13} className="mt-px text-run" />
             <span className="min-w-0 break-words font-mono">{activity.label}</span>
           </span>
         ) : (
-          <span className="text-caption text-ink-faint">starting…</span>
+          <span className="text-caption text-ink-faint">
+            {starting ? "starting…" : "working"}
+            {twin && runId && (
+              // Two runs of one schedule read as one row drawn twice; the id
+              // is what tells them apart.
+              <span className="font-mono"> · run {runId.slice(0, 8)}</span>
+            )}
+          </span>
         )}
       </RowLink>
     </li>
@@ -142,12 +176,19 @@ export function ActivityRail({
   liveActivity,
   runs,
   loading,
+  error = false,
 }: {
   /** The board's rows, for the steps currently running. */
   rows: OverviewRow[];
   liveActivity: Map<string, LiveActivity>;
   runs: Run[];
   loading: boolean;
+  /**
+   * The server could not be reached. An empty rail then means "unknown", not
+   * "nothing": it must not tell an operator that nothing is running or that
+   * nothing ever ran because a request failed.
+   */
+  error?: boolean;
 }) {
   // Every step the board reports as working, flattened with its pipeline name.
   const working = useMemo(
@@ -159,6 +200,7 @@ export function ActivityRail({
             .map((step) => ({
               key: `${row.instanceId ?? row.pipelineId}:${phase.id}:${step.name}`,
               runId: step.runId ?? null,
+              startedAt: step.startedAt ?? null,
               label: `${row.name} · ${step.name}`,
               activity: step.runId ? (liveActivity.get(step.runId) ?? null) : null,
             })),
@@ -181,6 +223,12 @@ export function ActivityRail({
     return runs.filter((run) => run.status === "running" && !shown.has(run.id));
   }, [runs, working]);
 
+  // Labels that appear more than once among the live rows.
+  const twins = useMemo(() => {
+    const labels = [...working.map((w) => w.label), ...inFlightRuns.map((r) => r.scheduleName)];
+    return new Set(labels.filter((label, i) => labels.indexOf(label) !== i));
+  }, [working, inFlightRuns]);
+
   return (
     <aside
       aria-label="Live activity"
@@ -190,7 +238,9 @@ export function ActivityRail({
         <Heading count={working.length + inFlightRuns.length}>Live</Heading>
         {working.length === 0 && inFlightRuns.length === 0 ? (
           <p className="text-small leading-snug text-ink-faint">
-            Nothing is running. Steps report their tool calls here as they work.
+            {error
+              ? "Unknown until Argus is reachable again."
+              : "Nothing is running. Steps report their tool calls here as they work."}
           </p>
         ) : (
           <ul className="flex flex-col gap-1">
@@ -200,6 +250,8 @@ export function ActivityRail({
                 label={step.label}
                 activity={step.activity}
                 runId={step.runId}
+                startedAt={step.startedAt}
+                twin={twins.has(step.label)}
               />
             ))}
             {/* Runs the engine owns but the board does not: scheduled firings and
@@ -211,6 +263,8 @@ export function ActivityRail({
                 label={run.scheduleName}
                 activity={liveActivity.get(run.id) ?? null}
                 runId={run.id}
+                startedAt={run.startedAt ?? null}
+                twin={twins.has(run.scheduleName)}
               />
             ))}
           </ul>
@@ -223,8 +277,9 @@ export function ActivityRail({
           <SkeletonRows count={3} />
         ) : recent.length === 0 ? (
           <p className="text-small leading-snug text-ink-faint">
-            No completed runs yet. Scheduled firings, pipeline steps and one-off launches all land
-            here.
+            {error
+              ? "Recent runs will show once Argus is reachable again."
+              : "No completed runs yet. Scheduled firings, pipeline steps and one-off launches all land here."}
           </p>
         ) : (
           <ul className="flex flex-col">

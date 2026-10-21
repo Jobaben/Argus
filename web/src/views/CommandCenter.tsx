@@ -49,8 +49,8 @@ import {
   DURATION,
   useTicker,
 } from "../ds";
-import type { OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from "../ds";
-import type { RouteDecision } from "../types";
+import type { IconName, OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from "../ds";
+import type { AttentionItem as BriefingItem, AttentionKind, RouteDecision } from "../types";
 
 const StepDrawer = lazy(() => import("./StepDrawer").then((m) => ({ default: m.StepDrawer })));
 
@@ -589,12 +589,20 @@ function InstanceBoard({
             }
       }
     >
-      <PhaseGraph
-        phases={row.phases}
-        layout={layout}
-        selectedId={selectedId}
-        onSelect={(id) => setPinned((prev) => (prev === id ? null : id))}
-      />
+      {/* Stacked, the graph's well is as wide as the graph and sits at the
+          start of the card, where the panel below starts — a 190px chain
+          centred in a full-width well read as a loading placeholder. */}
+      <div
+        className="min-w-0 max-w-full"
+        style={stacked && width > 0 ? { width: Math.min(layout.width + 2, width) } : undefined}
+      >
+        <PhaseGraph
+          phases={row.phases}
+          layout={layout}
+          selectedId={selectedId}
+          onSelect={(id) => setPinned((prev) => (prev === id ? null : id))}
+        />
+      </div>
       {selected && (
         <PhaseFocus
           // Keyed per phase so moving the focus is visible as a change — the
@@ -647,6 +655,11 @@ function cardTone(rows: OverviewRow[]): keyof typeof CARD_SKIN {
   if (rows.some((r) => r.badge === "failed")) return "failed";
   return "plain";
 }
+
+/** One of a card's header facts: its separator rides in the gap before it,
+ *  where the row's negative margin clips it at the start of a line. */
+const FACT =
+  "relative ml-4 before:pointer-events-none before:absolute before:-left-2.5 before:text-ink-faint before:content-['·']";
 
 /**
  * One card per pipeline. Every instance gets a responsive phase grid that
@@ -722,31 +735,37 @@ function Row({
           <StatusPill status={first.badge} />
         )}
         {/* The card's facts, quietest last: they answer "which one is this?",
-            not "what is it doing?", which the pill and the graph already did. */}
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 text-caption text-ink-faint sm:ml-auto">
-          <span>{first.phases.length} phases</span>
-          {first.model && (
-            <span
-              title="Model running this pipeline (steps that differ say so on their tile)"
-              className="max-w-[16rem] truncate text-ink-dim"
-            >
-              {first.model}
-            </span>
-          )}
-          {!multi && first.cost && (
-            <Meter
-              level="row"
-              divider
-              tokens={first.cost.tokens}
-              usd={first.cost.usd}
-              title="Total tokens and dollar cost of the latest run, including revised attempts"
-            />
-          )}
-          {!multi && (
-            <span className="border-l border-line pl-2.5">
-              <TimeAgo iso={first.updatedAt} />
-            </span>
-          )}
+            not "what is it doing?", which the pill and the graph already did.
+            Separated by a dot that belongs to the fact after it and is clipped
+            when that fact starts a line — a divider used to lead the wrapped
+            line on a phone, pointing at nothing. */}
+        <div className="min-w-0 overflow-hidden sm:ml-auto">
+          <div className="-ml-4 flex min-w-0 flex-wrap items-center gap-y-1 text-caption text-ink-faint">
+            <span className={FACT}>{first.phases.length} phases</span>
+            {first.model && (
+              <span
+                title="Model running this pipeline (steps that differ say so on their tile)"
+                className={`${FACT} max-w-[16rem] truncate text-ink-dim`}
+              >
+                {first.model}
+              </span>
+            )}
+            {!multi && first.cost && (
+              <span className={FACT}>
+                <Meter
+                  level="row"
+                  tokens={first.cost.tokens}
+                  usd={first.cost.usd}
+                  title="Total tokens and dollar cost of the latest run, including revised attempts"
+                />
+              </span>
+            )}
+            {!multi && (
+              <span className={FACT}>
+                <TimeAgo iso={first.updatedAt} />
+              </span>
+            )}
+          </div>
         </div>
       </div>
       <div className="mt-4 flex min-w-0 flex-col gap-4">
@@ -826,7 +845,10 @@ function BoardTotal({
     return loading ? (
       // As wide as the real figure and its reset button, so a header that
       // wraps on a phone wraps the same way before and after it arrives.
-      <span aria-hidden="true" className="flex h-[42px] w-[228px] items-center justify-end gap-2">
+      <span
+        aria-hidden="true"
+        className="mr-2 flex h-[42px] w-[228px] items-center justify-end gap-2"
+      >
         <span className="flex flex-col items-end gap-1.5">
           <Skeleton className="h-2.5 w-16" />
           <Skeleton className="h-5 w-48" />
@@ -836,8 +858,10 @@ function BoardTotal({
     ) : null;
   }
   const sinceLabel = new Date(totals.since).toLocaleString();
+  // The gap to the Launch button beside it is the total's own margin, so the
+  // button does not sit indented when the total is absent.
   return (
-    <div className="flex items-center gap-2">
+    <div className="mr-2 flex items-center gap-2">
       <Meter
         level="board"
         tokens={totals.tokens}
@@ -913,6 +937,118 @@ function gateHref(item: AttentionItem | undefined): string {
 }
 
 /**
+ * What the Briefing says needs a person and the board has no card for — a
+ * monitor down or failing, a critical anomaly, an open issue — with the same
+ * verbs, icons and destinations the Briefing gives them.
+ */
+const ELSEWHERE: Record<
+  Exclude<AttentionKind, "gate-waiting">,
+  {
+    label: string;
+    verb: string;
+    icon: IconName;
+    tone: "fail" | "await";
+    href: string;
+    rank: number;
+  }
+> = {
+  "monitor-down": {
+    label: "Monitor down",
+    verb: "Open monitor",
+    icon: "activity",
+    tone: "fail",
+    href: "#/health",
+    rank: 0,
+  },
+  "monitor-failing": {
+    label: "Schedule failing",
+    verb: "Open monitor",
+    icon: "x-circle",
+    tone: "fail",
+    href: "#/health",
+    rank: 1,
+  },
+  anomaly: {
+    label: "Anomaly",
+    verb: "Inspect run",
+    icon: "bolt",
+    tone: "await",
+    href: "#/health/watchtower",
+    rank: 2,
+  },
+  "issue-open": {
+    label: "Open issue",
+    verb: "Triage issue",
+    icon: "layers",
+    tone: "fail",
+    href: "#/issues",
+    rank: 3,
+  },
+};
+
+interface ElsewhereItem {
+  key: string;
+  item: BriefingItem & { kind: Exclude<AttentionKind, "gate-waiting"> };
+  /** Which thing: the schedule (or pipeline phase) it is about. */
+  title: string;
+  /** What is wrong with it, after the kind's label. */
+  detail: string;
+  href: string;
+}
+
+/** An issue's detail is `<count>× across <schedules>` by contract. */
+const ACROSS = /^(\d+)× across (.+)$/;
+
+/** Above this many, the rest of the Briefing's list is a link, not more rows. */
+const ELSEWHERE_SHOWN = 4;
+
+/**
+ * The Briefing's attention list minus what the board already says.
+ *
+ * Gates are the board's own rows. So is a failed pipeline, and its failure is
+ * usually also an open issue "across <pipeline> · <phase>" — the same problem
+ * counted twice made the inbox, the nav badge and the strip give three
+ * different answers to one question. With that one issue folded into the
+ * pipeline's row, the inbox counts what the Briefing counts.
+ */
+function elsewhereItems(
+  briefing: BriefingItem[] | null | undefined,
+  board: AttentionItem[],
+): ElsewhereItem[] {
+  if (!briefing) return [];
+  const failed = new Set(
+    board.filter((i) => !i.gate.canApprove).map((i) => `${i.row.name} · ${i.phaseName}`),
+  );
+  return (
+    briefing
+      // By the table rather than by "not a gate": a kind this build does not
+      // know (a newer server) is left to the Briefing instead of drawn blank.
+      .filter((i): i is ElsewhereItem["item"] => i.kind !== "gate-waiting" && i.kind in ELSEWHERE)
+      .filter((i) => {
+        if (i.kind !== "issue-open") return true;
+        const across = ACROSS.exec(i.detail)?.[2];
+        return !(across && failed.has(across));
+      })
+      .sort((a, b) => ELSEWHERE[a.kind].rank - ELSEWHERE[b.kind].rank)
+      .map((item) => {
+        // An anomaly's id is `<key>|<metric>|<runId>` by contract: open its run.
+        const parts = item.kind === "anomaly" ? item.id.split("|") : [];
+        const runId = parts.length >= 3 ? parts[parts.length - 1] : "";
+        // An issue is titled by where it happens, like every other row here, so
+        // a failing schedule and the issue it raised read as the same thing.
+        const across = item.kind === "issue-open" ? ACROSS.exec(item.detail) : null;
+        return {
+          key: `${item.kind}:${item.id}`,
+          item,
+          title: across ? across[2] : item.title,
+          detail: across ? `${item.title} · ${across[1]}×` : item.detail,
+          href: runId ? `#/run/${encodeURIComponent(runId)}` : ELSEWHERE[item.kind].href,
+        };
+      })
+  );
+}
+
+/**
  * "Needs you": every decision the board is waiting on, as one list above it.
  *
  * The board is sorted attention-first, but a card holds a whole pipeline and
@@ -920,17 +1056,26 @@ function gateHref(item: AttentionItem | undefined): string {
  * and a waiting gate on the fourth card was below the fold. This is the inbox:
  * one row per gate or failure, the reason in a line, and the Review that opens
  * it — the same drawer, the same deep link, nothing decided here.
+ *
+ * Below the board's own rows come the Briefing's (see {@link elsewhereItems}),
+ * so "what needs me" has one answer on this page and on the nav's badge.
  */
 function AttentionQueue({
   items,
+  elsewhere,
   onOpen,
 }: {
   items: AttentionItem[];
+  elsewhere: ElsewhereItem[];
   onOpen: (item: AttentionItem, originY: number) => void;
 }) {
   const shown = useListPresence(items, (i) => i.key);
-  if (shown.length === 0) return null;
+  const listed = elsewhere.slice(0, ELSEWHERE_SHOWN);
+  const more = elsewhere.length - listed.length;
+  const shownElsewhere = useListPresence(listed, (i) => i.key);
+  if (shown.length === 0 && shownElsewhere.length === 0) return null;
   const waiting = items.filter((i) => i.gate.canApprove).length;
+  const total = items.length + elsewhere.length;
   return (
     <section
       aria-labelledby="needs-you-heading"
@@ -941,12 +1086,16 @@ function AttentionQueue({
           Needs you
         </h2>
         <span className="rounded-full bg-await/15 px-1.5 py-px text-micro font-semibold text-await">
-          {items.length}
+          {total}
         </span>
         <span className="ml-auto hidden text-caption text-ink-faint sm:inline">
-          {waiting > 0 && `${waiting} waiting for approval`}
-          {waiting > 0 && items.length > waiting && " · "}
-          {items.length > waiting && `${items.length - waiting} stopped short`}
+          {[
+            waiting > 0 && `${waiting} waiting for approval`,
+            items.length > waiting && `${items.length - waiting} stopped short`,
+            elsewhere.length > 0 && `${elsewhere.length} outside pipelines`,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
         </span>
       </div>
       <ul className="divide-y divide-line">
@@ -977,7 +1126,10 @@ function AttentionQueue({
                 <p id={titleId} className="truncate text-sm font-semibold text-ink">
                   {`${item.row.name} · ${item.phaseName}`}
                 </p>
-                <p className="truncate text-caption text-ink-dim">
+                {/* Two lines on a phone rather than one cut short: the end of a
+                    failure reason is usually the error code, the part worth
+                    reading. */}
+                <p className="text-caption text-ink-dim max-sm:line-clamp-2 sm:truncate">
                   {approve ? (
                     "Waiting for your approval"
                   ) : (
@@ -998,6 +1150,8 @@ function AttentionQueue({
                 size="sm"
                 iconRight="arrow-right"
                 aria-describedby={titleId}
+                // Wrapped under the text on a phone, it lines up with the text.
+                className="max-sm:ml-11"
                 onClick={(e) => onOpen(item, e.currentTarget.getBoundingClientRect().top)}
               >
                 {approve ? "Review" : item.row.failure?.kind === "restarted" ? "Retry" : "Review"}
@@ -1006,6 +1160,73 @@ function AttentionQueue({
           );
         })}
       </ul>
+      {shownElsewhere.length > 0 && (
+        <>
+          <h3 className="eyebrow border-y border-line bg-ground-2/40 px-4 py-1.5">
+            Outside pipelines
+          </h3>
+          <ul className="divide-y divide-line">
+            {shownElsewhere.map(({ key, item: entry, leaving }) => {
+              const meta = ELSEWHERE[entry.item.kind];
+              // An id is one token: a schedule name in an anomaly key has spaces.
+              const titleId = `needs-you-${key.replace(/[^\w:-]/g, "_")}`;
+              return (
+                <li
+                  key={key}
+                  inert={leaving}
+                  aria-hidden={leaving ? true : undefined}
+                  className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 ${
+                    leaving
+                      ? "motion-safe:animate-[fade-out_var(--duration-exit)_var(--ease-in-expo)_forwards]"
+                      : "motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]"
+                  }`}
+                >
+                  <span
+                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+                      meta.tone === "await" ? "bg-await/12 text-await" : "bg-fail/12 text-fail"
+                    }`}
+                  >
+                    <Icon name={meta.icon} size={16} />
+                  </span>
+                  <div className="min-w-0 flex-1 basis-56">
+                    <p id={titleId} className="truncate text-sm font-semibold text-ink">
+                      {entry.title}
+                    </p>
+                    <p className="text-caption text-ink-faint max-sm:line-clamp-2 sm:truncate">
+                      <span className="text-ink-dim">{meta.label}</span>
+                      {entry.detail && ` · ${entry.detail}`}
+                      {entry.item.at && (
+                        <>
+                          {" · "}
+                          <TimeAgo iso={entry.item.at} />
+                        </>
+                      )}
+                    </p>
+                  </div>
+                  <ButtonLink
+                    href={entry.href}
+                    size="sm"
+                    iconRight="arrow-right"
+                    aria-describedby={titleId}
+                    className="max-sm:ml-11"
+                  >
+                    {meta.verb}
+                  </ButtonLink>
+                </li>
+              );
+            })}
+          </ul>
+          {more > 0 && (
+            <a
+              href="#/briefing"
+              className="flex items-center justify-between border-t border-line px-4 py-2.5 text-small font-semibold text-ink-dim transition-colors duration-(--duration-quick) hover:bg-surface-2/60 hover:text-ink"
+            >
+              {`+${more} more in the Briefing`}
+              <Icon name="arrow-right" size={15} />
+            </a>
+          )}
+        </>
+      )}
     </section>
   );
 }
@@ -1018,7 +1239,7 @@ function AttentionQueue({
  * empty field — and the three ways to give it something to watch, ranked: a
  * one-off task is the fastest way to see Argus work, so it is the primary.
  */
-function EmptyBoard() {
+function EmptyBoard({ canBuild }: { canBuild: boolean }) {
   return (
     <div className="flex flex-col items-center rounded-panel border border-line bg-surface px-6 py-14 text-center shadow-raised sm:py-20">
       <IrisMark size={72} />
@@ -1039,6 +1260,29 @@ function EmptyBoard() {
           Build a pipeline
         </ButtonLink>
       </div>
+      {!canBuild && (
+        // Said before the click, not after it: the Pipelines page opens on an
+        // account form, which is a surprise to someone who came to build.
+        <p className="mt-4 text-caption text-ink-faint">
+          Building a pipeline starts with an admin account — the Pipelines page sets it up.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The board while the server cannot be reached and nothing was loaded before.
+ *
+ * Not the first-run board: "no pipelines defined yet" under a connection error
+ * told a returning operator their pipelines were gone. The strip above says
+ * what happened and offers the retry; this only holds the board's place.
+ */
+function BoardUnavailable() {
+  return (
+    <div className="flex items-center gap-3 rounded-panel border border-line bg-surface/50 px-5 py-6 text-small text-ink-dim">
+      <Icon name="pipeline" size={18} className="shrink-0 text-ink-faint" />
+      <p>The board shows here again once Argus is reachable.</p>
     </div>
   );
 }
@@ -1077,13 +1321,22 @@ function PeerBoard({ facet }: { facet: ReturnType<typeof useMachineFacet> }) {
   );
 }
 
-export default function CommandCenter() {
+export default function CommandCenter({
+  attention: briefingAttention = null,
+}: {
+  /**
+   * The Briefing's attention list, which the shell already holds for the nav
+   * badge. Optional: without it "Needs you" lists the board's own gates and
+   * failures only.
+   */
+  attention?: BriefingItem[] | null;
+} = {}) {
   const facet = useMachineFacet();
   const { overview, loading, error, approve, revise, abort, refresh } = useOverview();
   const { isAdmin } = useAuth();
   const { totals, loading: totalsLoading, reset } = useTotals();
   const { situation, loading: situationLoading } = useInsight();
-  const { runs, loading: runsLoading, cancelRun } = useRuns();
+  const { runs, loading: runsLoading, error: runsError, cancelRun } = useRuns();
   const [selected, setSelected] = useState<StepSelection | null>(null);
   const [stepEverOpened, setStepEverOpened] = useState(false);
   if (selected && !stepEverOpened) setStepEverOpened(true);
@@ -1128,6 +1381,10 @@ export default function CommandCenter() {
   }, [rows]);
   const announcement = useBoardAnnouncer(rows);
   const attention = useMemo(() => attentionItems(rows), [rows]);
+  const elsewhere = useMemo(
+    () => elsewhereItems(briefingAttention, attention),
+    [briefingAttention, attention],
+  );
   // The board's order comes from the server and changes as pipelines start,
   // finish and gate. A card that teleports to its new row shows nothing; one that
   // glides there shows exactly what moved.
@@ -1141,7 +1398,7 @@ export default function CommandCenter() {
       actions={
         <>
           <BoardTotal totals={totals} loading={totalsLoading} reset={reset} />
-          <ButtonLink href="#/schedules/oneoff" variant="primary" icon="bolt" className="ml-2">
+          <ButtonLink href="#/schedules/oneoff" variant="primary" icon="bolt">
             Launch a task
           </ButtonLink>
         </>
@@ -1193,34 +1450,39 @@ export default function CommandCenter() {
               and an empty board used to hide the only place that said so. */}
           <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px] 2xl:grid-cols-[minmax(0,1fr)_340px]">
             <div className="flex min-w-0 flex-col gap-4">
+              {/* Above the empty board too: a failing schedule needs a person
+                  whether or not any pipeline exists. */}
+              <AttentionQueue
+                items={attention}
+                elsewhere={elsewhere}
+                onOpen={(item, originY) =>
+                  setPickedGate({
+                    instanceId: item.row.instanceId!,
+                    phaseId: item.gate.phaseId,
+                    pipelineName: item.row.name,
+                    originY,
+                  })
+                }
+              />
               {rows.length === 0 ? (
-                <EmptyBoard />
+                error ? (
+                  <BoardUnavailable />
+                ) : (
+                  <EmptyBoard canBuild={isAdmin} />
+                )
               ) : (
-                <>
-                  <AttentionQueue
-                    items={attention}
-                    onOpen={(item, originY) =>
-                      setPickedGate({
-                        instanceId: item.row.instanceId!,
-                        phaseId: item.gate.phaseId,
-                        pipelineName: item.row.name,
-                        originY,
-                      })
-                    }
+                groups.map((group, i) => (
+                  <Row
+                    key={group[0].pipelineId}
+                    ref={flip(group[0].pipelineId)}
+                    index={i}
+                    rows={group}
+                    liveActivity={liveActivity}
+                    onOpenStep={setSelected}
+                    onOpenGate={setPickedGate}
+                    onAbort={isAdmin ? abort : undefined}
                   />
-                  {groups.map((group, i) => (
-                    <Row
-                      key={group[0].pipelineId}
-                      ref={flip(group[0].pipelineId)}
-                      index={i}
-                      rows={group}
-                      liveActivity={liveActivity}
-                      onOpenStep={setSelected}
-                      onOpenGate={setPickedGate}
-                      onAbort={isAdmin ? abort : undefined}
-                    />
-                  ))}
-                </>
+                ))
               )}
             </div>
             <ActivityRail
@@ -1228,6 +1490,7 @@ export default function CommandCenter() {
               liveActivity={liveActivity}
               runs={runs}
               loading={runsLoading}
+              error={!!error || !!runsError}
             />
           </div>
         </Handoff>

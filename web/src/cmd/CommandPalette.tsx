@@ -22,6 +22,19 @@ import {
 } from "../ds";
 import type { PaletteSeverity } from "../types";
 
+/** Whether a row's subtitle or keywords hold the query as written. Three
+ *  characters at least: shorter, a substring is as accidental as a scatter. */
+function contains(command: Command, q: string): boolean {
+  if (q.length < 3) return false;
+  const needle = q.toLowerCase();
+  return [command.subtitle, ...(command.keywords ?? [])].some((t) =>
+    t?.toLowerCase().includes(needle),
+  );
+}
+
+/** A two-key chord badge ("g c"), drawn as the shortcut sheet draws it. */
+const CHORD = /^(\S) (\S)$/;
+
 /** ⌘↵ on Apple, Ctrl↵ elsewhere — the hint is the only place the chord is taught. */
 const MOD_ENTER =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘↵" : "Ctrl ↵";
@@ -124,8 +137,14 @@ function Palette({
   }, [visible, handBackFocus]);
 
   const ranked = useMemo(() => {
+    const q = query.trim();
     const matches = rank(query, commands);
-    if (query.trim().length > 0) return matches;
+    // A subtitle or keyword finds a row only by containing what was typed.
+    // Matched as a scattered subsequence, they let "rel" pull in every
+    // "Run now" (via "fire this schedule immediately") with nothing
+    // highlighted to say why — noise, and mutating actions put forward for no
+    // reason. Titles keep the full fuzzy match.
+    if (q.length > 0) return matches.filter((m) => m.positions.length > 0 || contains(m.item, q));
     // Empty query: float recents to the top. `sort` is stable, so everything
     // else keeps the curated order from buildCommands.
     return [...matches].sort(
@@ -342,6 +361,16 @@ function Palette({
                     will show you exactly what it would change before changing anything.
                   </p>
                 )}
+                {/* Not a dead end: the palette searches names, and what was
+                    typed may be in a transcript instead. */}
+                <a
+                  href="#/search"
+                  onClick={onClose}
+                  className="mt-4 inline-flex items-center gap-1.5 rounded-control px-2 py-1 text-small font-semibold text-ink-dim transition-colors duration-(--duration-quick) hover:bg-surface-3 hover:text-ink"
+                >
+                  Search transcripts instead
+                  <Icon name="arrow-right" size={15} />
+                </a>
               </div>
             ) : (
               groups.map((group) => (
@@ -408,6 +437,19 @@ function Palette({
                             className="shrink-0 text-caption font-semibold text-run"
                           >
                             working…
+                          </span>
+                        ) : command.badge && CHORD.test(command.badge) ? (
+                          // Keycaps, uppercase, as in the shortcut sheet: one
+                          // shortcut should not be "g c" here and "G C" there.
+                          <span
+                            className="flex shrink-0 items-center gap-1 text-caption"
+                            title={`Shortcut: ${command.badge.replace(" ", " then ")}`}
+                          >
+                            {command.badge.split(" ").map((key, i) => (
+                              <kbd key={i} className="kbd">
+                                {key.toUpperCase()}
+                              </kbd>
+                            ))}
                           </span>
                         ) : (
                           command.badge && (
