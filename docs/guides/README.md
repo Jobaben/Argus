@@ -69,8 +69,9 @@ Some features are panels within a page rather than separate destinations.
 
 Some options are API-authored and preserved by the form. The [advanced pipeline
 recipes](pipelines.md#advanced-feature-recipes) map capability profiles, a
-pipeline's own Claude setup folder, verification, worktrees, candidates,
-memory, recovery and trajectory checks to worked examples. The
+pipeline's own Claude setup folder, verification (and what a command check is
+told about its instance and the task it was started for), worktrees,
+candidates, memory, recovery and trajectory checks to worked examples. The
 [knowledge authoring map](knowledge.md#authoring-knowledge-workflows) covers
 discovery, verification, change intent and targeted realization.
 

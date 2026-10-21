@@ -2,8 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildChildEnv,
+  commandInputLayer,
   matchesEnvPattern,
   MINIMAL_BASELINE,
+  ARGUS_PER_INVOCATION_IDENTIFIERS,
   ARGUS_SERVER_SECRETS,
 } from "./childEnv.js";
 
@@ -165,6 +167,8 @@ test("parent per-invocation identifiers are dropped when no layer supplies them"
     ARGUS_ARTIFACT_DIR: "/old/artifacts",
     ARGUS_INSTANCE_ID: "old-instance",
     ARGUS_PHASE_ID: "old-phase",
+    ARGUS_PHASE_ATTEMPT: "7",
+    ARGUS_TRIGGER_PAYLOAD_FILE: "/old/trigger-payload.json",
   };
   const { env, stripped } = buildChildEnv(parent, undefined);
   for (const name of [
@@ -174,10 +178,106 @@ test("parent per-invocation identifiers are dropped when no layer supplies them"
     "ARGUS_ARTIFACT_DIR",
     "ARGUS_INSTANCE_ID",
     "ARGUS_PHASE_ID",
+    "ARGUS_PHASE_ATTEMPT",
+    "ARGUS_TRIGGER_PAYLOAD_FILE",
   ]) {
     assert.equal(env[name], undefined, `${name} should be stripped`);
     assert.ok(stripped.includes(name), `${name} should be reported as stripped`);
   }
+});
+
+test("the attempt and the trigger payload file are per-invocation identifiers", () => {
+  for (const name of ["ARGUS_PHASE_ATTEMPT", "ARGUS_TRIGGER_PAYLOAD_FILE"]) {
+    assert.ok(ARGUS_PER_INVOCATION_IDENTIFIERS.includes(name), `${name} is reserved`);
+  }
+});
+
+test("commandInputLayer names the instance, phase, attempt, folder, tree and payload file", () => {
+  assert.deepEqual(
+    commandInputLayer({
+      instanceId: "inst-1",
+      phaseId: "impl",
+      attempt: 2,
+      artifactDir: "/work/artifacts/inst-1/impl",
+      workspace: "/work/worktrees/inst-1/impl",
+      triggerPayloadFile: "/home/argus/invocations/inst-1/trigger-payload.json",
+    }),
+    {
+      ARGUS_INSTANCE_ID: "inst-1",
+      ARGUS_PHASE_ID: "impl",
+      ARGUS_PHASE_ATTEMPT: "2",
+      ARGUS_ARTIFACT_DIR: "/work/artifacts/inst-1/impl",
+      ARGUS_WORKSPACE: "/work/worktrees/inst-1/impl",
+      ARGUS_TRIGGER_PAYLOAD_FILE: "/home/argus/invocations/inst-1/trigger-payload.json",
+    },
+    "every input becomes its variable, the attempt as a decimal string",
+  );
+});
+
+test("commandInputLayer leaves out a value it does not have, never sets it empty", () => {
+  assert.deepEqual(
+    commandInputLayer({
+      instanceId: "inst-1",
+      phaseId: "impl",
+      attempt: 0,
+      artifactDir: null,
+      workspace: null,
+      triggerPayloadFile: null,
+    }),
+    { ARGUS_INSTANCE_ID: "inst-1", ARGUS_PHASE_ID: "impl", ARGUS_PHASE_ATTEMPT: "0" },
+    "only the identity is set: no folder, no tree, no payload file",
+  );
+});
+
+test("a command check's layer survives a minimal, ARGUS_*-denying policy; stale parent values do not", () => {
+  const parent = {
+    PATH: "/bin",
+    ARGUS_PHASE_ATTEMPT: "7",
+    ARGUS_TRIGGER_PAYLOAD_FILE: "/old/trigger-payload.json",
+    ARGUS_WORKSPACE: "/old-tree",
+  };
+  const { env, stripped } = buildChildEnv(
+    parent,
+    { inherit: "minimal", deny: ["ARGUS_*"] },
+    commandInputLayer({
+      instanceId: "inst-1",
+      phaseId: "impl",
+      attempt: 0,
+      artifactDir: "/work/artifacts/inst-1/impl",
+      workspace: null,
+      triggerPayloadFile: null,
+    }),
+  );
+  assert.equal(env.ARGUS_PHASE_ATTEMPT, "0", "the layer's attempt, not the parent's");
+  assert.equal(env.ARGUS_INSTANCE_ID, "inst-1", "the layer's identity is kept");
+  assert.equal(env.ARGUS_ARTIFACT_DIR, "/work/artifacts/inst-1/impl", "the folder is kept");
+  for (const name of ["ARGUS_TRIGGER_PAYLOAD_FILE", "ARGUS_WORKSPACE"]) {
+    assert.equal(env[name], undefined, `the parent's ${name} is not inherited`);
+    assert.ok(stripped.includes(name), `${name} is reported as stripped`);
+  }
+});
+
+test("a set saved before the attempt was reserved still wins over the check's layer", () => {
+  // Saving refuses a reserved name in `set`, but a stored definition is not
+  // validated again, and `set` is applied after the layers (HARNESS.md §6).
+  const { env } = buildChildEnv(
+    { PATH: "/bin" },
+    { inherit: "minimal", deny: ["ARGUS_*"], set: { ARGUS_PHASE_ATTEMPT: "x" } },
+    commandInputLayer({
+      instanceId: "inst-1",
+      phaseId: "impl",
+      attempt: 2,
+      artifactDir: null,
+      workspace: null,
+      triggerPayloadFile: null,
+    }),
+  );
+  assert.equal(
+    env.ARGUS_PHASE_ATTEMPT,
+    "x",
+    "the saved set value, until the pipeline is saved again",
+  );
+  assert.equal(env.ARGUS_INSTANCE_ID, "inst-1", "the layer's other names are untouched");
 });
 
 test("passed and stripped are sorted", () => {

@@ -593,6 +593,37 @@ test("env.set rejects ARGUS_RUNTIME and ARGUS_STEP_NAME as reserved per-invocati
   );
 });
 
+test("env.set rejects ARGUS_PHASE_ATTEMPT and ARGUS_TRIGGER_PAYLOAD_FILE as reserved per-invocation identifiers", async () => {
+  const m = await fresh();
+  for (const name of ["ARGUS_PHASE_ATTEMPT", "ARGUS_TRIGGER_PAYLOAD_FILE"]) {
+    assert.throws(
+      () => m.validateCapabilities({ env: { set: { [name]: "x" } } }, "ctx"),
+      new RegExp(`reserved variable "${name}"`),
+      `${name} is refused in env.set`,
+    );
+    // The same refusal on save, from a phase's own capabilities.
+    assert.throws(
+      () =>
+        m.validatePipelineInput(
+          goodInput({
+            phases: [
+              {
+                id: "impl",
+                name: "Impl",
+                cwd: home,
+                gated: false,
+                capabilities: { env: { set: { [name]: "x" } } },
+                steps: [{ name: "s", prompt: "p" }],
+              },
+            ],
+          }),
+        ),
+      new RegExp(`reserved variable "${name}"`),
+      `${name} is refused in a phase's env.set when the pipeline is saved`,
+    );
+  }
+});
+
 test("mcpServers env/headers reject a key with = or a space, and accept a hyphenated header name", async () => {
   const m = await fresh();
   assert.throws(

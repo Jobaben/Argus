@@ -58,6 +58,20 @@ All notable changes to Argus are documented here. The format follows
   transcript in `<folder>/projects/` after the pipeline is edited or deleted.
   Validated at save time; other runtimes record that it does not apply.
   Changing it while an instance runs is an execution edit (`409`).
+- **Command checks know the work they judge.** A `command` check used to run
+  with no `ARGUS_*` identity, so a script had to derive its instance from the
+  worktree path. It now runs with `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`,
+  `ARGUS_PHASE_ATTEMPT` (from 0), `ARGUS_ARTIFACT_DIR` and, when the work had
+  a worktree, `ARGUS_WORKSPACE`; a candidate's checks get its own folder and
+  tree. When the instance was started with a payload (a webhook body, a
+  chain's source), `ARGUS_TRIGGER_PAYLOAD_FILE` names a JSON copy of it at
+  `~/.claude/argus/invocations/<instanceId>/trigger-payload.json`, rewritten
+  before each verification run whenever its bytes differ and pruned with the
+  instance.
+  Agent steps now get `ARGUS_PHASE_ATTEMPT` too. Check fields are still never
+  interpolated. Both new names are reserved: a saved `env.set` that names
+  `ARGUS_PHASE_ATTEMPT` or `ARGUS_TRIGGER_PAYLOAD_FILE` is refused on its next
+  save; until then, its saved value still wins.
 
 ### Changed
 

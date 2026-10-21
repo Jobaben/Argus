@@ -6,11 +6,11 @@ import {
   phaseBaselinePath,
   resolveCapabilities,
 } from "../harness/invocation.js";
-import { buildChildEnv } from "../harness/childEnv.js";
+import { buildChildEnv, commandInputLayer } from "../harness/childEnv.js";
 import { runChecks } from "../harness/verification.js";
 import type { WorkingTreeSnapshot } from "../harness/verification.js";
 import { workspacePolicyFor, workspaceTarget } from "../harness/workspace.js";
-import { readInstance } from "../sources/instances.js";
+import { ensureTriggerPayloadFile, readInstance } from "../sources/instances.js";
 import { applyCandidateVerification, applyVerification } from "../pipelineTransitions.js";
 import { journal } from "../sources/journal.js";
 import type {
@@ -77,6 +77,36 @@ async function readPhaseBaseline(
     }
   }
   return null;
+}
+
+/**
+ * The environment a phase's command checks run under: the phase's own
+ * environment policy (pipeline → phase capabilities, the merge its steps ran
+ * under), then the identity of the work they judge (`commandInputLayer`). The
+ * trigger payload file is ensured first, and only when some check is a
+ * command: nothing else reads it.
+ */
+async function checkEnv(
+  parent: NodeJS.ProcessEnv,
+  def: PipelineDefinition,
+  phaseDef: PhaseDef,
+  inst: PipelineInstance,
+  work: { attempt: number; artifactDir: string | null; workspace: string | null },
+): Promise<Record<string, string>> {
+  const runsCommands = (phaseDef.checks ?? []).some((c) => c.kind === "command");
+  const triggerPayloadFile = runsCommands ? await ensureTriggerPayloadFile(inst) : null;
+  return buildChildEnv(
+    parent,
+    resolveCapabilities(def, phaseDef, {})?.env,
+    commandInputLayer({
+      instanceId: inst.id,
+      phaseId: phaseDef.id,
+      attempt: work.attempt,
+      artifactDir: work.artifactDir,
+      workspace: work.workspace,
+      triggerPayloadFile,
+    }),
+  ).env;
 }
 
 export function createVerification(core: EngineCore) {
@@ -167,17 +197,24 @@ export function createVerification(core: EngineCore) {
           detail: `${phaseDef.checks?.length ?? 0} check${phaseDef.checks?.length === 1 ? "" : "s"}`,
         });
         const baseline = await readPhaseBaseline(instanceId, def, phaseDef, phase, attempt);
+        const artifactDir = phase.artifactDir ?? null;
+        // The checks run under the phase's own environment policy: a command
+        // check is a script in the repository the agent just edited, and must
+        // not see what the agent was not allowed to see. They are told which
+        // instance, phase, attempt, folder, tree and trigger payload they judge.
+        const env = await checkEnv(parentEnv(), def, phaseDef, inst, {
+          attempt,
+          artifactDir,
+          workspace: phase.workspace?.path ?? null,
+        });
         const report = await runChecks(phaseDef.checks ?? [], {
           // The checks look at the work, so they look where the work happened:
           // the phase's worktree when it had one, its own cwd otherwise.
           cwd: phase.workspace?.path ?? phaseDef.cwd,
-          artifactDir: phase.artifactDir ?? null,
+          artifactDir,
           baseline,
           now: deps.now,
-          // The checks run under the phase's own environment policy: a command
-          // check is a script in the repository the agent just edited, and must
-          // not see what the agent was not allowed to see.
-          env: buildChildEnv(parentEnv(), resolveCapabilities(def, phaseDef, {})?.env).env,
+          env,
           // The runs whose work passes this gate: the selected candidate's
           // when one is selected, otherwise every step of the attempt.
           trajectoryRuns: () =>
@@ -289,14 +326,20 @@ export function createVerification(core: EngineCore) {
           phase.artifactDir ?? phaseArtifactDir(paths.artifactsDir(), instanceId, phaseId),
           candidate,
         );
+        // This candidate's tree, not the phase's: the whole point is that each
+        // draft is judged on what it alone did.
+        const tree = step.workspace?.path ?? phase.workspace?.path ?? null;
+        const env = await checkEnv(parentEnv(), def, phaseDef, inst, {
+          attempt,
+          artifactDir: own,
+          workspace: tree,
+        });
         const report = await runChecks(phaseDef.checks ?? [], {
-          // This candidate's tree, not the phase's: the whole point is that each
-          // draft is judged on what it alone did.
-          cwd: step.workspace?.path ?? phase.workspace?.path ?? phaseDef.cwd,
+          cwd: tree ?? phaseDef.cwd,
           artifactDir: own,
           baseline,
           now: deps.now,
-          env: buildChildEnv(parentEnv(), resolveCapabilities(def, phaseDef, {})?.env).env,
+          env,
           // This candidate's own run, judged on what it alone did.
           trajectoryRuns: () => trajectoryInputs(step.runId ? [step.runId] : []),
         });

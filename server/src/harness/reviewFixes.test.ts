@@ -15,7 +15,13 @@ import { mkdtemp, writeFile, rm, symlink, truncate } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { redactProfile, safeSegment, phaseArtifactDir, phaseBaselinePath } from "./invocation.js";
+import {
+  redactProfile,
+  safeSegment,
+  phaseArtifactDir,
+  phaseBaselinePath,
+  instanceTriggerPayloadPath,
+} from "./invocation.js";
 import {
   runCheck,
   snapshotWorkingTree,
@@ -979,4 +985,16 @@ test("phaseBaselinePath stays under its root for a path-hostile instance id", ()
   const root = "/argus/invocations";
   const file = phaseBaselinePath(root, "../evil", "only", 0);
   assert.ok(!escapesRoot(root, file), `escaped root: ${file}`);
+});
+
+test("instanceTriggerPayloadPath stays under its root for a path-hostile instance id", () => {
+  const root = "/argus/invocations";
+  const file = instanceTriggerPayloadPath(root, "../evil");
+  assert.ok(!escapesRoot(root, file), `escaped root: ${file}`);
+  assert.equal(path.basename(file), "trigger-payload.json", "the file keeps its own name");
+  assert.equal(
+    instanceTriggerPayloadPath(root, "inst-1"),
+    path.join(root, "inst-1", "trigger-payload.json"),
+    "an ordinary id is the instance's own folder, where pruning removes it",
+  );
 });

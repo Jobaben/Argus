@@ -130,6 +130,7 @@ test("start spawns phase 0's step with signal env injected", async () => {
   assert.equal(rec.calls.length, 1);
   assert.equal(rec.calls[0].env.ARGUS_INSTANCE_ID, inst!.id);
   assert.equal(rec.calls[0].env.ARGUS_PHASE_ID, "brainstorm");
+  assert.equal(rec.calls[0].env.ARGUS_PHASE_ATTEMPT, "0", "the phase's first attempt");
   // The run's own token, never the instance's shared one.
   assert.equal(rec.calls[0].env.ARGUS_SIGNAL_TOKEN, testRunToken(rec.calls[0].runId));
   assert.notEqual(rec.calls[0].env.ARGUS_SIGNAL_TOKEN, inst!.signalToken);

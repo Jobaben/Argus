@@ -473,10 +473,11 @@ instance already in flight; a schedule hook returns `409 { runId }`.
 
 The request body, if any, must be JSON and no larger than 64 KiB (`413`
 otherwise, before it is parsed). For a pipeline, it becomes the new instance's
-`triggerPayload` and the instance's `trigger` reads `"webhook"`. A schedule has
-nowhere to carry a payload — its hook just fires the schedule's own prompt,
-exactly like `POST /api/schedules/:id/run`, with `trigger: "webhook"` on the
-resulting run.
+`triggerPayload` (which the instance's `command` checks read as a file at
+`ARGUS_TRIGGER_PAYLOAD_FILE`) and the instance's `trigger` reads `"webhook"`. A
+schedule has nowhere to carry a payload — its hook just fires the schedule's
+own prompt, exactly like `POST /api/schedules/:id/run`, with
+`trigger: "webhook"` on the resulting run.
 
 Unlike every other mutating route, the two hook routes are **exempt from the
 Origin/CSRF check** (a webhook sender is a server, not a browser a CSRF page
@@ -510,8 +511,10 @@ fires off something that finished before the trigger existed.
 
 A chained pipeline instance carries `trigger: "chained"`, `chainedFrom:
 "<source instance id>"`, and `triggerPayload: { sourceInstanceId,
-sourcePipelineId, status }`. A chained schedule run carries `trigger:
-"chained"` and fires its ordinary prompt, exactly like a normal scheduled run.
+sourcePipelineId, status }`, which its `command` checks read at
+`ARGUS_TRIGGER_PAYLOAD_FILE` like a webhook body. A chained schedule run
+carries `trigger: "chained"` and fires its ordinary prompt, exactly like a
+normal scheduled run.
 
 ### `POST /api/launch`
 
@@ -1866,22 +1869,22 @@ flags, and a complete worked pipeline: [docs/HARNESS.md](HARNESS.md).
 
 `EnvPolicy`:
 
-| Key              | Type                     | Validation                                                                                                                                                                                                                                                                                                     |
-| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inherit`        | `"all"\|"minimal"`       | default `"all"`                                                                                                                                                                                                                                                                                                |
-| `allow` / `deny` | `string[]`               | each an env-var name, optionally with one trailing `*`                                                                                                                                                                                                                                                         |
-| `set`            | `Record<string, string>` | keys must be valid env-var names and may not name a reserved Argus control variable (`ARGUS_TOKEN`, `ARGUS_WEBHOOK_URL`, `ARGUS_SIGNAL_*`, `ARGUS_RUN_ID`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RESULT_FILE`, `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_STEP_NAME`, `ARGUS_RUNTIME`) |
+| Key              | Type                     | Validation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inherit`        | `"all"\|"minimal"`       | default `"all"`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `allow` / `deny` | `string[]`               | each an env-var name, optionally with one trailing `*`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `set`            | `Record<string, string>` | keys must be valid env-var names and may not name a reserved Argus control variable: Argus's secrets (`ARGUS_TOKEN`, `ARGUS_WEBHOOK_URL`) or a per-invocation identifier (`ARGUS_SIGNAL_TOKEN`, `ARGUS_SIGNAL_URL`, `ARGUS_RESULT_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_PHASE_ATTEMPT`, `ARGUS_RUN_ID`, `ARGUS_STEP_NAME`, `ARGUS_WORKSPACE`, `ARGUS_RUNTIME`, `ARGUS_MEMORY_DIR`, `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_KNOWLEDGE_CONTEXT_FILE`, `ARGUS_RULE_VERIFICATION_FILE`, `ARGUS_CHANGE_REQUEST_FILE`, `ARGUS_CHANGE_PROPOSAL_FILE`, `ARGUS_CHANGE_CONTEXT_FILE`, `ARGUS_REVISION_NOTES_FILE`, `ARGUS_TRIGGER_PAYLOAD_FILE`; HARNESS.md §4) |
 
 `PhaseCheck` (discriminated on `kind`; each kind accepts only its own fields
 plus the common `label`, ≤120 chars):
 
-| Kind            | Fields                               | Validation                                                                               |
-| --------------- | ------------------------------------ | ---------------------------------------------------------------------------------------- |
-| `command`       | `run`, `cwd?`, `timeoutSeconds?`     | `run` ≤4000 chars; `timeoutSeconds` 1–86400                                              |
-| `artifact`      | `path`, `minBytes?`                  | `path` relative, no `..` segment, no absolute path; `minBytes` a non-negative integer    |
-| `file`          | `path`, `minBytes?`                  | same as `artifact`, resolved against the phase's `cwd` instead of its artifact directory |
-| `changed-files` | `allow?`, `deny?`, `requireChanges?` | `allow`/`deny` lists of non-empty globs; `requireChanges` a boolean                      |
-| `trajectory`    | `thresholds`, `requireTranscript?`   | see below                                                                                |
+| Kind            | Fields                               | Validation                                                                                                                                                                                                                                                        |
+| --------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`       | `run`, `cwd?`, `timeoutSeconds?`     | `run` ≤4000 chars; `timeoutSeconds` 1–86400. Runs with the work's identity and, when the instance has a payload, `ARGUS_TRIGGER_PAYLOAD_FILE` ([HARNESS.md § What a command check is told](HARNESS.md#what-a-command-check-is-told)); `run` is never interpolated |
+| `artifact`      | `path`, `minBytes?`                  | `path` relative, no `..` segment, no absolute path; `minBytes` a non-negative integer                                                                                                                                                                             |
+| `file`          | `path`, `minBytes?`                  | same as `artifact`, resolved against the phase's `cwd` instead of its artifact directory                                                                                                                                                                          |
+| `changed-files` | `allow?`, `deny?`, `requireChanges?` | `allow`/`deny` lists of non-empty globs; `requireChanges` a boolean                                                                                                                                                                                               |
+| `trajectory`    | `thresholds`, `requireTranscript?`   | see below                                                                                                                                                                                                                                                         |
 
 A `trajectory` check is deterministic (no model) and compares the signal counts
 of the attempt's relevant runs (HARNESS §19) to `thresholds`:
@@ -3155,6 +3158,8 @@ the web UI's setup banner installs the fixable ones with `POST /api/setup/apply`
 | `ARGUS_CHANGE_PROPOSAL_FILE`   | where a `changeIntent` phase's step writes its ChangeProposal (KNOWLEDGE-LEDGER.md §16.5)                                                        |
 | `ARGUS_CHANGE_CONTEXT_FILE`    | the accepted ChangeProposal a `changeContext` phase's step implements, as exact canonical refs; read-only (KNOWLEDGE-LEDGER.md §16.11)           |
 | `ARGUS_REVISION_NOTES_FILE`    | every revise note of the step's phase in full, oldest first; set only when they did not all fit the prompt; read-only (HARNESS.md §13)           |
+| `ARGUS_PHASE_ATTEMPT`          | the 0-based attempt of the phase, on every step and every `command` check (HARNESS.md §6)                                                        |
+| `ARGUS_TRIGGER_PAYLOAD_FILE`   | a JSON copy of the instance's `triggerPayload`, for `command` checks only; unset when it has none; restored per verification run (HARNESS.md §6) |
 | `ARGUS_MAX_CONCURRENT_RUNS`    | cap on concurrent `claude -p` processes (default 4)                                                                                              |
 
 ## Knowledge Ledger

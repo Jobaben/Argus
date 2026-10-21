@@ -1334,7 +1334,8 @@ export interface PipelineInstance {
    * (capped at 64 KiB; a larger body is rejected with 413 before an instance
    * is created) for `trigger: "webhook"`, or
    * `{ sourceInstanceId, sourcePipelineId, status }` for `trigger: "chained"`.
-   * Absent for `"manual"`/`"scheduled"`.
+   * Absent for `"manual"`/`"scheduled"`. The instance's command checks read a
+   * JSON copy through `ARGUS_TRIGGER_PAYLOAD_FILE` (HARNESS.md §6).
    */
   triggerPayload?: unknown;
   /** `trigger: "chained"` only: the source instance this one was fired from. */

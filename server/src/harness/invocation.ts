@@ -465,3 +465,11 @@ export function phaseBaselinePath(
     `${safeSegment(phaseId)}.${Math.max(0, Math.trunc(attempt))}${suffix}.baseline.json`,
   );
 }
+
+/** Where an instance's trigger payload is copied for its command checks: in
+ *  the instance's own folder beside the run invocation records, next to its
+ *  working-tree baselines — outside the worktree and the artifact folder, and
+ *  removed with the rest of that folder when the instance is pruned. */
+export function instanceTriggerPayloadPath(root: string, instanceId: string): string {
+  return path.join(root, safeSegment(instanceId), "trigger-payload.json");
+}

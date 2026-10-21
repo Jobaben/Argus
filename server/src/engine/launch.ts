@@ -1088,10 +1088,14 @@ export function createLaunch(core: EngineCore) {
    * its author declared.
    */
   async function launchStep(run: Run, ctx: LaunchContext): Promise<Launched> {
+    const attempt = ctx.inst.phases.find((p) => p.id === ctx.phaseDef.id)?.attempt ?? 0;
     const env: Record<string, string> = {
       ARGUS_SIGNAL_URL: `${deps.signalUrlBase}/api/instances/${ctx.inst.id}/signal`,
       ARGUS_INSTANCE_ID: ctx.inst.id,
       ARGUS_PHASE_ID: ctx.phaseDef.id,
+      // Which attempt of the phase this run belongs to (0-based): the same name
+      // a command check gets, so one script reads it in both places.
+      ARGUS_PHASE_ATTEMPT: String(attempt),
       ARGUS_RUN_ID: run.id,
       ARGUS_STEP_NAME: run.scheduleName,
       // Which CLI the hook is running under. One hook file serves both, and the
@@ -1238,7 +1242,7 @@ export function createLaunch(core: EngineCore) {
         phaseDef: ctx.phaseDef,
         stepDef: ctx.stepDef,
         instanceId: ctx.inst.id,
-        attempt: ctx.inst.phases.find((p) => p.id === ctx.phaseDef.id)?.attempt ?? 0,
+        attempt,
         systemPrompt: STEP_CONTRACT,
         argusEnv: env,
         invocationDir,

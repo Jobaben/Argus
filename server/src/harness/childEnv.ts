@@ -17,12 +17,14 @@
  * `ARGUS_ARTIFACT_DIR`, `ARGUS_WORKSPACE`, `ARGUS_MEMORY_DIR`,
  * `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_KNOWLEDGE_CONTEXT_FILE`,
  * `ARGUS_RULE_VERIFICATION_FILE`, the `ARGUS_CHANGE_*` files,
- * `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`).
+ * `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_PHASE_ATTEMPT`, `ARGUS_RUN_ID`,
+ * `ARGUS_TRIGGER_PAYLOAD_FILE`).
  *
  * The rule this module enforces: an agent must never be able to administer
  * the harness that runs it. `buildChildEnv` is the one place that assembles
  * a child process's environment, so every runtime should route through it
- * rather than spreading `process.env` by hand.
+ * rather than spreading `process.env` by hand. That covers every child Argus
+ * starts for a phase: the agent processes, and the phase's command checks.
  *
  * Values are secrets — this module (and its callers) must never log an
  * environment value, only variable *names* (as `passed` / `stripped` do).
@@ -51,6 +53,9 @@ export const ARGUS_PER_INVOCATION_IDENTIFIERS: readonly string[] = [
   "ARGUS_ARTIFACT_DIR",
   "ARGUS_INSTANCE_ID",
   "ARGUS_PHASE_ID",
+  // Which attempt of its phase this invocation, or this check, belongs to
+  // (0-based). Inherited, a nested child would report its parent's attempt.
+  "ARGUS_PHASE_ATTEMPT",
   "ARGUS_RUN_ID",
   "ARGUS_STEP_NAME",
   // The isolated worktree this one invocation runs in.
@@ -79,6 +84,9 @@ export const ARGUS_PER_INVOCATION_IDENTIFIERS: readonly string[] = [
   // Every revise note of this one run's phase, in full. Inherited, a nested
   // child would read another run's notes as its own.
   "ARGUS_REVISION_NOTES_FILE",
+  // The instance's trigger payload, copied for its command checks. Inherited,
+  // a nested child's checks would read another instance's task as their own.
+  "ARGUS_TRIGGER_PAYLOAD_FILE",
 ];
 
 /** The baseline that `inherit: "minimal"` passes through even without `allow`. */
@@ -231,4 +239,40 @@ export function buildChildEnv(
   const stripped = parentNames.filter((name) => !finalNames.has(name)).sort();
 
   return { env: result, passed, stripped };
+}
+
+/** What a command check is told about the work it judges (`commandInputLayer`). */
+export interface CommandInputs {
+  instanceId: string;
+  phaseId: string;
+  /** The phase attempt the work belongs to, 0-based. */
+  attempt: number;
+  /** The artifact directory the checks read (a candidate's own `c<i>`), or null. */
+  artifactDir: string | null;
+  /** The worktree the work happened in (a candidate's own), or null for none. */
+  workspace: string | null;
+  /** The instance's trigger payload file, or null when it has no payload. */
+  triggerPayloadFile: string | null;
+}
+
+/**
+ * What a command check is told about the work it judges, as a `buildChildEnv`
+ * layer. The names are the ones an agent step gets, so one script can run in
+ * both places; a value Argus does not have is left out, never set empty. Pure:
+ * the caller resolves the paths, and writes the trigger payload file first
+ * (`ensureTriggerPayloadFile` in `sources/instances.ts`).
+ *
+ * Every name here is a per-invocation identifier, so a value inherited from
+ * Argus's own environment never reaches the check: only this layer sets them.
+ */
+export function commandInputLayer(inputs: CommandInputs): Record<string, string> {
+  const layer: Record<string, string> = {
+    ARGUS_INSTANCE_ID: inputs.instanceId,
+    ARGUS_PHASE_ID: inputs.phaseId,
+    ARGUS_PHASE_ATTEMPT: String(inputs.attempt),
+  };
+  if (inputs.artifactDir) layer.ARGUS_ARTIFACT_DIR = inputs.artifactDir;
+  if (inputs.workspace) layer.ARGUS_WORKSPACE = inputs.workspace;
+  if (inputs.triggerPayloadFile) layer.ARGUS_TRIGGER_PAYLOAD_FILE = inputs.triggerPayloadFile;
+  return layer;
 }

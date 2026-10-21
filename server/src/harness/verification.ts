@@ -273,7 +273,11 @@ export interface CheckContext {
   killGraceMs?: number;
   /** Default per-command timeout; default 600_000 ms. */
   defaultCommandTimeoutMs?: number;
-  /** Environment for command checks. Default: process.env with ARGUS_TOKEN and ARGUS_WEBHOOK_URL removed. */
+  /**
+   * Environment for command checks. The engine passes the phase's policy plus
+   * the work's identity (`commandInputLayer`). Default: process.env with
+   * Argus's secrets and per-invocation identifiers removed.
+   */
   env?: Record<string, string>;
   /**
    * The relevant runs' trajectory signals, for `trajectory` checks: read by

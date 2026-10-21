@@ -420,6 +420,9 @@ test("the prompt names the channel paths and ends with the revision note, on a q
     );
     // What the agent is handed, not only what the record says.
     assert.equal(call.prepared.plan.stdin, prompt);
+    // The revised attempt, in the Argus layer and in the child's environment.
+    assert.equal(call.env.ARGUS_PHASE_ATTEMPT, "1", "a revise starts attempt 1");
+    assert.equal(call.prepared.env.ARGUS_PHASE_ATTEMPT, "1", "and the agent sees it");
   }
   await e.abort(inst!.id);
   await e.drain();

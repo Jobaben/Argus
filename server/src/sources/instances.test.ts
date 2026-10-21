@@ -1,8 +1,18 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { paths } from "../claudeHome.js";
+import { instanceTriggerPayloadPath } from "../harness/invocation.js";
 
 let home: string;
 beforeEach(() => {
@@ -69,6 +79,79 @@ test("pruneInstances keeps only newest N of a pipeline", async () => {
     left.map((i: { id: string }) => i.id),
     ["r4", "r3"],
   );
+});
+
+test("ensureTriggerPayloadFile writes the payload once, puts an edited or deleted copy back, and writes nothing without one", async () => {
+  const m = await fresh();
+  const payload = { task: { id: "T1", files: ["src/a.ts"] }, base: "main" };
+  const file = await m.ensureTriggerPayloadFile({ id: "i1", triggerPayload: payload });
+  assert.equal(
+    file,
+    instanceTriggerPayloadPath(paths.invocationsDir(), "i1"),
+    "the copy sits in the instance's own invocations folder",
+  );
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), payload, "the copy is the payload");
+
+  // Same bytes: nothing is rewritten.
+  const past = new Date(2020, 0, 1);
+  utimesSync(file, past, past);
+  assert.equal(
+    await m.ensureTriggerPayloadFile({ id: "i1", triggerPayload: payload }),
+    file,
+    "the same file is named again",
+  );
+  assert.ok(
+    Math.abs(statSync(file).mtimeMs - past.getTime()) < 1000,
+    "an unchanged copy is not rewritten",
+  );
+
+  // Edited: put back.
+  writeFileSync(file, '{"task":{"id":"T9"}}');
+  await m.ensureTriggerPayloadFile({ id: "i1", triggerPayload: payload });
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), payload, "an edited copy is restored");
+
+  // Deleted: written again.
+  rmSync(file);
+  await m.ensureTriggerPayloadFile({ id: "i1", triggerPayload: payload });
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), payload, "a deleted copy is restored");
+
+  // No payload (absent, or null as `{{trigger.payload}}` reads it): no file.
+  assert.equal(await m.ensureTriggerPayloadFile({ id: "i2" }), null, "no payload, no file");
+  assert.equal(
+    await m.ensureTriggerPayloadFile({ id: "i3", triggerPayload: null }),
+    null,
+    "a null payload counts as none",
+  );
+  for (const id of ["i2", "i3"]) {
+    assert.ok(
+      !existsSync(instanceTriggerPayloadPath(paths.invocationsDir(), id)),
+      `nothing written for ${id}`,
+    );
+  }
+
+  // A string payload is still JSON, so a script can always parse the file.
+  const quoted = await m.ensureTriggerPayloadFile({ id: "i4", triggerPayload: "hello" });
+  assert.equal(readFileSync(quoted, "utf8"), '"hello"', "a string payload is written as JSON");
+});
+
+test("pruneInstances removes a pruned instance's trigger-payload copy and keeps the others'", async () => {
+  const m = await fresh();
+  for (let i = 0; i < 3; i++) {
+    await m.writeInstance({
+      ...makeInstance(`r${i}`, "p1", new Date(2026, 5, 30, 9, i).toISOString()),
+      triggerPayload: { task: { id: `T${i}` } },
+    });
+  }
+  const dropped = await m.ensureTriggerPayloadFile(await m.readInstance("r0"));
+  const kept = await m.ensureTriggerPayloadFile(await m.readInstance("r2"));
+  assert.ok(existsSync(dropped) && existsSync(kept), "both copies were written");
+  await m.pruneInstances("p1", 2);
+  assert.ok(!existsSync(dropped), "the pruned instance's copy is gone");
+  assert.ok(
+    !existsSync(path.join(paths.invocationsDir(), "r0")),
+    "with the rest of its invocations folder",
+  );
+  assert.ok(existsSync(kept), "a kept instance's copy stays");
 });
 
 test("memo: repeat reads are stable and direct file edits are picked up", async () => {

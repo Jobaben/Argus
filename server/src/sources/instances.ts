@@ -1,11 +1,12 @@
 import { readFile, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
-import { atomicWriteJsonDurable } from "./atomicWrite.js";
+import { atomicWriteFile, atomicWriteJsonDurable } from "./atomicWrite.js";
 import { cached, invalidate, patchCached } from "./cache.js";
 import { createFileMemo } from "./fileMemo.js";
 import { log } from "../log.js";
 import { instanceWorktreesDir, plannedRemovals, removeWorktree } from "../harness/workspace.js";
+import { instanceTriggerPayloadPath } from "../harness/invocation.js";
 import type { PipelineInstance } from "./pipelineTypes.js";
 
 export const INSTANCE_KEEP = 50;
@@ -165,6 +166,40 @@ async function pruneWorktrees(inst: PipelineInstance): Promise<void> {
   }
 }
 
+/**
+ * The instance's trigger payload as a file its command checks can read
+ * (`ARGUS_TRIGGER_PAYLOAD_FILE`): a JSON copy at
+ * `<invocationsDir>/<instanceId>/trigger-payload.json`. A file rather than a
+ * variable, because a payload can be 64 KiB and a Windows environment value is
+ * capped at 32,767 characters; a copy rather than the instance record, because
+ * the record also holds the definition snapshot and its `hookToken`.
+ *
+ * Called once per verification run, before its first check, and written only
+ * when the bytes on disk differ from the payload's, so a run of unchanged
+ * checks rewrites nothing, and a copy that was edited or deleted is put back
+ * before the next run. Nothing puts it back between one run's checks: a check
+ * that runs repository code can change it for the checks after it (HARNESS.md
+ * §6, "What a command check is told"). Null, and nothing written, when the
+ * instance has no payload (`undefined` or `null`, as `{{trigger.payload}}`
+ * reads it). Removed with the instance's folder by {@link pruneInstances}.
+ * Throws on an I/O error: the caller's checks must not run on a missing input.
+ */
+export async function ensureTriggerPayloadFile(
+  inst: Pick<PipelineInstance, "id" | "triggerPayload">,
+): Promise<string | null> {
+  if (inst.triggerPayload === undefined || inst.triggerPayload === null) return null;
+  const text = JSON.stringify(inst.triggerPayload, null, 2);
+  const file = instanceTriggerPayloadPath(paths.invocationsDir(), inst.id);
+  let current: Buffer | null = null;
+  try {
+    current = await readFile(file);
+  } catch {
+    /* absent (or unreadable): written below */
+  }
+  if (!current || !current.equals(Buffer.from(text, "utf8"))) await atomicWriteFile(file, text);
+  return file;
+}
+
 export async function pruneInstances(pipelineId: string, keep: number): Promise<void> {
   const mine = await readInstances({ pipelineId });
   const drop = mine.slice(keep);
@@ -178,7 +213,8 @@ export async function pruneInstances(pipelineId: string, keep: number): Promise<
       // Its transition log is part of the instance: it explains a record that
       // no longer exists, and nothing else ever deletes it.
       await rm(path.join(paths.transitionsDir(), `${i.id}.jsonl`), { force: true });
-      // The instance's file artifacts and working-tree baselines go with it.
+      // The instance's file artifacts, working-tree baselines and
+      // trigger-payload copy go with it.
       await rm(path.join(paths.artifactsDir(), i.id), { recursive: true, force: true });
       await rm(path.join(paths.invocationsDir(), i.id), { recursive: true, force: true });
       parseMemo.forget(i.id);

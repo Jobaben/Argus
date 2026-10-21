@@ -317,6 +317,21 @@ declares a trajectory: one entry per relevant run with `runId`, `stepName`,
 trajectory `rubricDigest`. Entries are built from the stored judgments, not
 from the request.
 
+## `argus/invocations/<instanceId>/trigger-payload.json` — trigger payload copy
+
+A JSON copy of the instance's `triggerPayload` (a webhook body, or a chained
+start's `{ sourceInstanceId, sourcePipelineId, status }`), pretty-printed with
+two-space indentation, for the instance's `command` checks to read through
+`ARGUS_TRIGGER_PAYLOAD_FILE`. Argus writes it before each verification run of a
+phase that declares a `command` check, and only when the bytes on disk differ,
+so an edited or deleted copy is put back before the next run, never between
+one run's checks; an instance with no payload (absent or `null`) has no file. It sits beside the instance's working-tree baselines
+(`<phaseId>.<attempt>[.c<i>].baseline.json`) and is removed with that folder
+when the instance is pruned. The instance record (`argus/instances/<id>.json`)
+stays the authority: the copy exists so a check never reads the record, which
+also holds the definition snapshot and its `hookToken`. See HARNESS §6, "What a
+command check is told".
+
 ## Phase verification checks — `CheckResult`
 
 A phase's `checks` (`PhaseCheck`) run once its steps have reported, and the

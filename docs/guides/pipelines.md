@@ -24,6 +24,7 @@ A signed-in root or approved member, a working runtime, and a working directory 
 
 - [Pipelines](#pipelines)
 - [Weave](#weave)
+- [Child instances and command-opened gates](#child-instances-and-command-opened-gates)
 
 ## Pipelines
 
@@ -408,20 +409,104 @@ never that it failed, retried, failed again and was revised. Read it at
 `GET /api/instances/:id/journal`. It is evidence, never the source of truth: a
 missing or corrupt journal costs you the history, never the pipeline.
 
+## Child instances and command-opened gates
+
+Recipes for pipelines that work through a list of tasks, one instance per task.
+
+### Check work against the task it was started for
+
+A pipeline started through its webhook carries the request body as its trigger
+payload. A `command` check can read that payload and judge the work against it,
+for example to fail a branch that changed files outside its task. The form does
+not show checks; author the check through the API, and the form keeps it on
+later saves.
+
+**Before you start:** a pipeline you start through its webhook
+(`POST /api/hooks/pipelines/:id`), a phase whose agent commits its work on a
+worktree branch (`workspace: { "scope": "instance" }` or `"attempt"`), and
+Node.js on the server's `PATH`. Keep the script outside the repository the agent
+edits, so the agent's commits cannot change its judge. That does not stop an
+agent that can write outside its worktree from editing the file itself: a
+worktree is not a jail, and only Codex's sandbox limits writes at the OS level
+([workspace isolation](../HARNESS.md#11-workspace-isolation)).
+
+1. Save this script, for example as `~/argus-checks/scope.mjs`. It reads the
+   payload file Argus names in `ARGUS_TRIGGER_PAYLOAD_FILE` and fails when the
+   branch changed a file the task does not list:
+
+   ```js
+   // scope.mjs: fail when the branch changes a file outside its task.
+   import { readFileSync } from "node:fs";
+   import { execFileSync } from "node:child_process";
+
+   const file = process.env.ARGUS_TRIGGER_PAYLOAD_FILE;
+   if (!file) {
+     console.error("no trigger payload: start this pipeline through its webhook");
+     process.exit(1);
+   }
+   const { task, base } = JSON.parse(readFileSync(file, "utf8"));
+   // --end-of-options: git never reads the payload's base as an option.
+   const range = `${base}...HEAD`;
+   const changed = execFileSync("git", ["diff", "--name-only", "--end-of-options", range], {
+     encoding: "utf8",
+   })
+     .split("\n")
+     .filter(Boolean);
+   const outside = changed.filter((f) => !task.files.includes(f));
+   if (outside.length > 0) {
+     console.error(`outside task ${task.id}: ${outside.join(", ")}`);
+     process.exit(1);
+   }
+   console.log(`${changed.length} changed file(s), all in task ${task.id}`);
+   ```
+
+2. Add the check to the phase, with the script's absolute path:
+   `{ "kind": "command", "run": "node /home/you/argus-checks/scope.mjs", "label": "task scope" }`.
+   The check runs in the phase's worktree, so `git` sees the agent's branch.
+   List it before any check that runs the repository's code, such as
+   `npm test`: checks run in the order listed, and Argus puts an edited payload
+   file back before each verification run, not between one run's checks.
+3. Start an instance through the webhook with the task as the body, for example
+   `{ "task": { "id": "T1", "files": ["src/a.ts", "src/a.test.ts"] }, "base": "origin/main" }`.
+   Starting the instance runs the phase's agent step, which invokes its
+   provider; the check itself only reads git and the payload file.
+
+**Expected result:** when the agent's step completes, the phase's verification
+shows `task scope` passed, with the count of changed files in its output. A
+branch that changed another file fails the phase under `verification`, and the
+check's output lists the files; the phase's `retry` policy applies as for any
+failed check.
+
+**If it fails:** an output of `no trigger payload` means the instance was not
+started with a body; a manual start has none, so start it through the webhook.
+A git error about the base means the worktree does not have that ref, or the
+payload's `base` is not a ref name; fetch it before the run, or name a ref the
+repository has.
+
+Never paste payload values into `run`: a check's fields are never interpolated,
+and a webhook body in a shell command line would be an injection. Passing a
+value to a program as an argument, as the script does, is safe from the shell
+but not from the program's own options: put it after `--end-of-options`, or
+refuse a value that starts with `-`. The check also gets `ARGUS_INSTANCE_ID`,
+`ARGUS_PHASE_ID`, `ARGUS_PHASE_ATTEMPT`, `ARGUS_ARTIFACT_DIR` and
+`ARGUS_WORKSPACE`; a candidate's checks get its own folder and tree. The details are in
+[the harness reference](../HARNESS.md#what-a-command-check-is-told).
+
 ## Advanced feature recipes
 
 The form preserves API-authored settings that it does not expose as editable controls. Use the protocol examples in the harness reference for these options:
 
-| Goal                                                      | Recipe                                                                                                                    |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Limit CLI capabilities and execution environment          | [Capabilities](../HARNESS.md#3-capability-profiles), [environment policy](../HARNESS.md#4-environment-policy)             |
-| Give a pipeline its own Claude instructions and settings  | [Claude setup folder](../HARNESS.md#3b-a-claude-setup-folder-per-pipeline-claudeconfigdir)                                |
-| Require independently checked results                     | [Completion](../HARNESS.md#2-agent-completion--phase-success), [verification checks](../HARNESS.md#6-verification-checks) |
-| Run in a separate git working tree                        | [Workspace isolation](../HARNESS.md#11-workspace-isolation)                                                               |
-| Compare multiple attempts and select a verified candidate | [Candidates](../HARNESS.md#12-candidates)                                                                                 |
-| Carry bounded outputs and notes between phases            | [Context and memory](../HARNESS.md#13-context-and-memory), [artifacts](../HARNESS.md#5-artifacts)                         |
-| Detect a stalled process                                  | [Timeouts](../HARNESS.md#7-timeouts)                                                                                      |
-| Inspect recovery and transition integrity                 | [Transitions and recovery](../HARNESS.md#18-transitions-and-recovery)                                                     |
-| Assess the execution trajectory                           | [Trajectory signals and judging](../HARNESS.md#19-trajectory-signals-and-judging)                                         |
+| Goal                                                         | Recipe                                                                                                                        |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| Limit CLI capabilities and execution environment             | [Capabilities](../HARNESS.md#3-capability-profiles), [environment policy](../HARNESS.md#4-environment-policy)                 |
+| Give a pipeline its own Claude instructions and settings     | [Claude setup folder](../HARNESS.md#3b-a-claude-setup-folder-per-pipeline-claudeconfigdir)                                    |
+| Require independently checked results                        | [Completion](../HARNESS.md#2-agent-completion--phase-success), [verification checks](../HARNESS.md#6-verification-checks)     |
+| Run in a separate git working tree                           | [Workspace isolation](../HARNESS.md#11-workspace-isolation)                                                                   |
+| Compare multiple attempts and select a verified candidate    | [Candidates](../HARNESS.md#12-candidates)                                                                                     |
+| Carry bounded outputs and notes between phases               | [Context and memory](../HARNESS.md#13-context-and-memory), [artifacts](../HARNESS.md#5-artifacts)                             |
+| Detect a stalled process                                     | [Timeouts](../HARNESS.md#7-timeouts)                                                                                          |
+| Inspect recovery and transition integrity                    | [Transitions and recovery](../HARNESS.md#18-transitions-and-recovery)                                                         |
+| Assess the execution trajectory                              | [Trajectory signals and judging](../HARNESS.md#19-trajectory-signals-and-judging)                                             |
+| Check the work against the task the instance was started for | [Command check inputs](../HARNESS.md#what-a-command-check-is-told), [recipe](#check-work-against-the-task-it-was-started-for) |
 
 Start with the [reference pipeline](../HARNESS.md#9-reference-pipeline), then add only the options your task needs. An unenforceable capability, unavailable transcript or incomplete check is not proof of compliance.

@@ -991,7 +991,7 @@ always applied; there is nothing to "fail to enforce" here).
   `deny` when both match the same name.
 - `set` — values fixed for this invocation only, applied last (after `allow`/
   `deny`, after the runtime's own `plan.env`, after Argus's per-invocation
-  identifiers) — except it can never overwrite a reserved name (below).
+  identifiers) — except that it may not name a reserved name (below).
 
 **Always stripped, under every policy, non-overridable even by an explicit
 `allow` or `set`:**
@@ -1002,10 +1002,21 @@ always applied; there is nothing to "fail to enforce" here).
   freshly-computed values, never be inherited from Argus's own process (which
   would let a nested Argus child impersonate or interfere with the run that
   spawned it): `ARGUS_SIGNAL_TOKEN`, `ARGUS_SIGNAL_URL`, `ARGUS_RESULT_FILE`,
-  `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_INSTANCE_ID`,
-  `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`, `ARGUS_STEP_NAME`, and `ARGUS_RUNTIME` (the
-  hook keys its Stop-payload handling off this one, so a value inherited from a
-  different invocation would misparse the signal).
+  `ARGUS_ARTIFACT_DIR`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`,
+  `ARGUS_PHASE_ATTEMPT`, `ARGUS_RUN_ID`, `ARGUS_STEP_NAME`, `ARGUS_WORKSPACE`,
+  `ARGUS_RUNTIME` (the hook keys its Stop-payload handling off this one, so a
+  value inherited from a different invocation would misparse the signal),
+  `ARGUS_MEMORY_DIR`, `ARGUS_KNOWLEDGE_DELTA_FILE`,
+  `ARGUS_KNOWLEDGE_CONTEXT_FILE`, `ARGUS_RULE_VERIFICATION_FILE`,
+  `ARGUS_CHANGE_REQUEST_FILE`, `ARGUS_CHANGE_PROPOSAL_FILE`,
+  `ARGUS_CHANGE_CONTEXT_FILE`, `ARGUS_REVISION_NOTES_FILE` and
+  `ARGUS_TRIGGER_PAYLOAD_FILE` (`ARGUS_PER_INVOCATION_IDENTIFIERS` in
+  `harness/childEnv.ts`). A pipeline that names one in `env.set` is refused when
+  it is saved.
+
+The engine builds a `command` check's environment the same way: the phase's
+`inherit`, `allow` and `deny`, then the check's own identity as a layer, then
+the phase's `set` (§6, "What a command check is told").
 
 The invocation record never stores a variable's _value_ — only names
 (`envNames`, sorted; `envStripped`, sorted). Reconstructing what Argus ran
@@ -1028,7 +1039,8 @@ validation ever be bypassed, not a substitute for it.
 
 The directory itself:
 
-- `ARGUS_ARTIFACT_DIR` — set on every step's environment, pointing at
+- `ARGUS_ARTIFACT_DIR` — set on every step's environment, and on the phase's
+  `command` checks (§6), pointing at
   `~/.claude-argus/artifacts/<instanceId>/<phaseId>/`. Argus creates the
   directory, hands it to the runtime as an invocation channel (§3a — admitted
   to the sandbox no matter what `filesystem` says elsewhere, or reported
@@ -1046,11 +1058,12 @@ The directory itself:
   attempt's `checks` or mislead the agent about what it has already done.
 - **Pruned with the instance.** `pruneInstances` removes
   `~/.claude-argus/artifacts/<instanceId>/` (and the instance's working-tree
-  baselines) together with the instance record once it falls outside the
-  per-pipeline retention window (`INSTANCE_KEEP`). Invocation records, by
-  contrast, are pruned per _run_ — with `pruneRuns`'s retention window,
-  because they are keyed by `runId` — so the two can fall out of retention on
-  different schedules.
+  baselines and trigger-payload copy, in
+  `~/.claude/argus/invocations/<instanceId>/`) together with the instance
+  record once it falls outside the per-pipeline retention window
+  (`INSTANCE_KEEP`). Invocation records, by contrast, are pruned per _run_ —
+  with `pruneRuns`'s retention window, because they are keyed by `runId` — so
+  the two can fall out of retention on different schedules.
 
 File artifacts are the counterpart of `produces`/`PhaseResult` payload
 artifacts: a payload is a small validated JSON value pasted into a later
@@ -1064,17 +1077,17 @@ declared work actually happened — run once every step of the phase has
 reported success (or been recovered as successful — §2), never before, and
 never derived from the agent's own words.
 
-| Kind            | Fields                                                                                                                        | Limit / semantics                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `command`       | `run` (string, ≤4000 chars), `label?`, `cwd?` (resolved against the phase's `cwd`), `timeoutSeconds?` (1–86400; default 600s) | Runs through the shell in `cwd`; exit `0` passes. Combined stdout+stderr is capped at 16 KiB in memory, and only the last 4000 chars survive into the `CheckResult.output`. Runs under the phase's own resolved `EnvPolicy` (pipeline → phase capabilities — the same merge the phase's steps ran under), not Argus's full environment. At the deadline, POSIX: SIGTERM to the process group, then SIGKILL to the group after a grace period (`killGraceMs`, default 5s), sent even if the leader has already exited; Windows: `taskkill /T /F` on the command's tree (forceful — there is no graceful step), repeated after the grace only while the root shell is still alive. After a further grace, if a descendant still holds the output pipes, Argus releases its end of them and fails the check ("process did not exit") — a command that traps signals or leaves a grandchild behind can never hang verification. See §17. |
-| `artifact`      | `path` (relative, no `..`, no absolute), `label?`, `minBytes?` (≥0, default 1)                                                | Resolved against the phase's `ARGUS_ARTIFACT_DIR`. Uses `lstat`, so it does not follow a symlink: fails if the phase has no artifact directory, the path escapes it, the file is missing, **is a symbolic link**, or it's smaller than `minBytes` — a symlink to some large file elsewhere is never mistaken for the artifact the phase was asked to produce.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `file`          | same fields as `artifact`                                                                                                     | Resolved against the phase's own `cwd` instead of the artifact directory — for a file the agent was supposed to leave in the working tree itself.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `changed-files` | `label?`, `allow?` (globs), `deny?` (globs), `requireChanges?` (boolean)                                                      | See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `trajectory`    | `label?`, `thresholds` (signal → maximum count, 0 to 10,000), `requireTranscript?` (boolean)                                  | Deterministic signals over the relevant runs' transcripts; may report `not-evaluated`. See §19.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Kind            | Fields                                                                                                                        | Limit / semantics                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`       | `run` (string, ≤4000 chars), `label?`, `cwd?` (resolved against the phase's `cwd`), `timeoutSeconds?` (1–86400; default 600s) | Runs through the shell in `cwd`; exit `0` passes. Combined stdout+stderr is capped at 16 KiB in memory, and only the last 4000 chars survive into the `CheckResult.output`. Runs under the phase's own resolved `EnvPolicy` (pipeline → phase capabilities — the same merge the phase's steps ran under), not Argus's full environment, with the work's identity (see "What a command check is told" below). `run` is never interpolated. At the deadline, POSIX: SIGTERM to the process group, then SIGKILL to the group after a grace period (`killGraceMs`, default 5s), sent even if the leader has already exited; Windows: `taskkill /T /F` on the command's tree (forceful — there is no graceful step), repeated after the grace only while the root shell is still alive. After a further grace, if a descendant still holds the output pipes, Argus releases its end of them and fails the check ("process did not exit") — a command that traps signals or leaves a grandchild behind can never hang verification. See §17. |
+| `artifact`      | `path` (relative, no `..`, no absolute), `label?`, `minBytes?` (≥0, default 1)                                                | Resolved against the phase's `ARGUS_ARTIFACT_DIR`. Uses `lstat`, so it does not follow a symlink: fails if the phase has no artifact directory, the path escapes it, the file is missing, **is a symbolic link**, or it's smaller than `minBytes` — a symlink to some large file elsewhere is never mistaken for the artifact the phase was asked to produce.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `file`          | same fields as `artifact`                                                                                                     | Resolved against the phase's own `cwd` instead of the artifact directory — for a file the agent was supposed to leave in the working tree itself.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `changed-files` | `label?`, `allow?` (globs), `deny?` (globs), `requireChanges?` (boolean)                                                      | See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `trajectory`    | `label?`, `thresholds` (signal → maximum count, 0 to 10,000), `requireTranscript?` (boolean)                                  | Deterministic signals over the relevant runs' transcripts; may report `not-evaluated`. See §19.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
-A phase may declare up to 50 checks (`MAX_CHECKS`); they all run, always —
-verification never stops at the first failure, because the full report is the
-evidence a failed phase leaves behind.
+A phase may declare up to 50 checks (`MAX_CHECKS`); they all run, one at a
+time in the order listed, always — verification never stops at the first
+failure, because the full report is the evidence a failed phase leaves behind.
 
 A check's `status` is `passed` or `failed`; only a `trajectory` check can also
 report `not-evaluated` (§19). The report's status is `failed` if and only if some
@@ -1184,6 +1197,72 @@ path with Node's own `path.matchesGlob`, after normalizing to forward slashes
 (so the check behaves the same on Windows and POSIX). A changed path failing
 every `allow` glob (when any are set), or matching any `deny` glob, is
 "offending"; any offending path fails the check.
+
+### What a command check is told
+
+A `command` check runs with the identity of the work it judges, so a script
+can find the instance, its folder, its tree and the task it was started for
+without deriving them from a path (`commandInputLayer` in
+`harness/childEnv.ts`, applied in `engine/verification.ts`):
+
+| Variable                     | Value                                                                                                               |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `ARGUS_INSTANCE_ID`          | The instance.                                                                                                       |
+| `ARGUS_PHASE_ID`             | The phase.                                                                                                          |
+| `ARGUS_PHASE_ATTEMPT`        | The phase attempt the checks judge, counted from 0. Every candidate of an attempt sees the same attempt.            |
+| `ARGUS_ARTIFACT_DIR`         | The artifact directory the checks read (§5); a candidate's own `c<i>` folder for a candidate's checks (§12).        |
+| `ARGUS_WORKSPACE`            | The worktree the work happened in (§11); a candidate's own tree for a candidate's checks. Unset when there is none. |
+| `ARGUS_TRIGGER_PAYLOAD_FILE` | A JSON copy of the instance's `triggerPayload`. Unset when the instance has none (absent or `null`).                |
+
+`ARGUS_WORKSPACE` names the worktree, not the check's `cwd`: a phase without a
+worktree runs its checks in its own `cwd`, and they get no `ARGUS_WORKSPACE`,
+exactly like its steps.
+
+- **The payload file.** The copy is
+  `~/.claude/argus/invocations/<instanceId>/trigger-payload.json`, beside the
+  instance's working-tree baselines and outside the worktree and the artifact
+  folder (`ensureTriggerPayloadFile` in `sources/instances.ts`). It is written
+  before each verification run (a candidate's checks are a run of their own),
+  and only when its bytes differ from the payload's, so a copy that was edited
+  or deleted is put back before the next run — after a restart too, because
+  the checks of an interrupted verification run again. Nothing puts it back
+  during a run: a check that runs repository code, such as `npm test`, gets the
+  variable and can change the copy for the checks listed after it, and for any
+  other phase or candidate of the instance verifying at the same time, since
+  they share the one copy. List a check that judges the work against the
+  payload before any check that runs repository code. The copy is pruned with
+  the instance (§5). It is written only for a phase that declares a `command`
+  check. A payload is set by a webhook start (the request body) and by a
+  chained start (`{ sourceInstanceId, sourcePipelineId, status }`); a manual or
+  scheduled start has none.
+- **A file, not a variable.** A webhook body can be 64 KiB, and a Windows
+  environment value is capped at 32,767 characters. A copy, never the instance
+  record: the record also holds the definition snapshot and its `hookToken`.
+- **Reserved names.** All six are per-invocation identifiers (§4): never
+  inherited from Argus's own environment, and kept under `inherit: "minimal"`
+  and any `deny`, because Argus adds them after the policy's `inherit`, `allow`
+  and `deny` filters. `env.set` is applied after them, so a pipeline that names
+  one there is refused when it is saved. A pipeline that named
+  `ARGUS_PHASE_ATTEMPT` or `ARGUS_TRIGGER_PAYLOAD_FILE` in `env.set` before
+  they were reserved keeps its own value until it is next saved, and an
+  instance started before then keeps it for its whole run.
+- **Agent steps.** A step gets the same identity variables,
+  `ARGUS_PHASE_ATTEMPT` included, but not `ARGUS_TRIGGER_PAYLOAD_FILE`: a
+  prompt reads the payload through `{{trigger.payload}}` (§13).
+- **`run` is never interpolated.** A webhook body pasted into a shell command
+  line is an injection; read the file instead. A payload value a script passes
+  to a program as an argument needs the same care without a shell: one that
+  starts with `-` is read as an option (`git diff "--output=<path>...HEAD"`
+  writes a file), so put it after `--end-of-options` or refuse it.
+- **No base ref on `changed-files`.** It compares against the attempt's
+  baseline (above). To compare a branch with the commit its task started from,
+  use a `command` check, such as
+  `git rev-list --count --end-of-options <base>..HEAD` or
+  `git diff --name-only --end-of-options <base>...HEAD` with the base read from
+  the payload file.
+
+The [pipelines guide](guides/pipelines.md#check-work-against-the-task-it-was-started-for)
+has a worked task-scope check.
 
 ## 7. Timeouts
 
@@ -1678,12 +1757,12 @@ directory outside the worktrees root or a branch git refuses.
 
 **What runs there.** Everything about the attempt: each step's `cwd` and the
 `project` its transcript is filed under, `ARGUS_WORKSPACE` in the child
-environment (a per-invocation identifier, so it is never inherited from the
-parent — §4), the `changed-files` baseline snapshot, and the phase's `checks`
-— a `command` check is the repository's own script and must see what the agent
-saw. The invocation record and `PhaseProgress.workspace` both carry the
-`WorkspaceRecord` (`path`, `branch`, `base`, resolved `baseHead`), and the
-step drawer shows the branch.
+environment and in the phase's `command` checks (a per-invocation identifier,
+so it is never inherited from the parent — §4, §6), the `changed-files`
+baseline snapshot, and the phase's `checks` — a `command` check is the
+repository's own script and must see what the agent saw. The invocation record
+and `PhaseProgress.workspace` both carry the `WorkspaceRecord` (`path`,
+`branch`, `base`, resolved `baseHead`), and the step drawer shows the branch.
 
 **The deliverable is the branch; uncommitted changes are discarded.** When the
 instance settles — succeeded, failed or aborted — Argus runs
@@ -1791,14 +1870,14 @@ pipeline-wide workspace under a phase that relies on it is refused too:
 
 Everything that could otherwise be shared, isn't:
 
-| Per candidate `i`        | Value                                                                                                    |
-| ------------------------ | -------------------------------------------------------------------------------------------------------- |
-| worktree                 | `.../worktrees/<instanceId>/<phaseId>-attempt<N>-c<i>`, branch `argus/<instanceId>/<phaseId>/<N>-c<i>`   |
-| artifact directory       | `<phaseArtifactDir>/c<i>` — also what `ARGUS_ARTIFACT_DIR` and `{{artifactDir}}` point at                |
-| `changed-files` baseline | `<phaseId>.<attempt>.c<i>.baseline.json`                                                                 |
-| verification report      | `StepProgress.verification` — the phase's `checks`, run in **that** worktree                             |
-| result file              | the run's own `ARGUS_RESULT_FILE`; nothing is shared, so nothing races                                   |
-| knowledge delta file     | the run's own `ARGUS_KNOWLEDGE_DELTA_FILE`; a losing candidate's staged delta is superseded at selection |
+| Per candidate `i`        | Value                                                                                                                                                                  |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| worktree                 | `.../worktrees/<instanceId>/<phaseId>-attempt<N>-c<i>`, branch `argus/<instanceId>/<phaseId>/<N>-c<i>`                                                                 |
+| artifact directory       | `<phaseArtifactDir>/c<i>` — also what `ARGUS_ARTIFACT_DIR` and `{{artifactDir}}` point at, for the run and for its checks                                              |
+| `changed-files` baseline | `<phaseId>.<attempt>.c<i>.baseline.json`                                                                                                                               |
+| verification report      | `StepProgress.verification` — the phase's `checks`, run in **that** worktree; a `command` check's `ARGUS_WORKSPACE` and `ARGUS_ARTIFACT_DIR` name that tree and folder |
+| result file              | the run's own `ARGUS_RESULT_FILE`; nothing is shared, so nothing races                                                                                                 |
+| knowledge delta file     | the run's own `ARGUS_KNOWLEDGE_DELTA_FILE`; a losing candidate's staged delta is superseded at selection                                                               |
 
 The candidate index rides on the _attempt_ component of the branch
 (`…/impl/0-c1`, not `…/impl/0/c1`) because git's ref namespace is a
