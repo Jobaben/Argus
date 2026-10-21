@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import type {
   AttentionItem,
   OverviewEntry,
@@ -516,7 +516,7 @@ describe("CommandCenter", () => {
       expect(issues).toHaveLength(1);
       expect(issues[0]).toHaveAttribute("href", "#/issues");
       expect(issues[0].closest("li")).toHaveTextContent("Nightly triage");
-      expect(issues[0].closest("li")).toHaveTextContent("Open issue · disk full · 3×");
+      expect(issues[0].closest("li")).toHaveTextContent("Open issue · Disk full · 3×");
       expect(within(inbox).queryByText(/exit code 1/)).toBeNull();
     });
 
@@ -542,7 +542,7 @@ describe("CommandCenter", () => {
       // One broken thing, one row: the issue adds what failed and how often.
       expect(within(inbox).getAllByRole("listitem")).toHaveLength(1);
       expect(within(inbox).getByRole("listitem")).toHaveTextContent(
-        "Monitor failing · last completed run failed · exit code 1 · 3×",
+        "Monitor failing · last completed run failed · Exit code 1 · 3×",
       );
       expect(within(inbox).queryByRole("link", { name: "Triage issue" })).toBeNull();
     });
@@ -950,6 +950,45 @@ it("loads step details on selection and can close and reopen the drawer", async 
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   fireEvent.click(opener);
   expect(await screen.findByRole("dialog")).toHaveTextContent("step-x");
+});
+
+describe("opening a drawer", () => {
+  afterEach(() => {
+    // Unmounted first: the board cancels its idle callback on the way out.
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("fetches both drawers while the browser is idle once there is a board to open them from", async () => {
+    const idle = vi.fn<(cb: IdleRequestCallback) => number>(() => 1);
+    vi.stubGlobal("requestIdleCallback", idle);
+    vi.stubGlobal("cancelIdleCallback", vi.fn());
+    const { rerender } = render(<CommandCenter />);
+    // An empty board has nothing to open a drawer from.
+    expect(idle).not.toHaveBeenCalled();
+    mockOverview.overview = [entry("step-inspection", "running", ["running"])];
+    rerender(<CommandCenter />);
+    expect(idle).toHaveBeenCalledTimes(1);
+    idle.mock.calls[0][0]({ didTimeout: false, timeRemaining: () => 50 });
+    // The open is a transition: the board stays put until the drawer is in.
+    fireEvent.click(screen.getByText("step-x").closest("button")!);
+    expect(await screen.findByRole("dialog")).toHaveTextContent("step-x");
+    fireEvent.click(screen.getByRole("button", { name: /^close$/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("opens the review drawer from the board after a click, and gives focus back on close", async () => {
+    mockOverview.overview = [awaiting()];
+    render(<CommandCenter />);
+    const opener = screen.getByTestId("gate-opener");
+    opener.focus();
+    fireEvent.click(opener);
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("ready for eyes")).toBeInTheDocument();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
 });
 
 describe("an instance whose pipeline was deleted", () => {

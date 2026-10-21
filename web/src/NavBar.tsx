@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ConnectionPill,
   Icon,
@@ -56,6 +57,7 @@ function MobileNav({
 }) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const sheetId = useId();
   const { present, exited } = usePresence(open);
   const scrimRef = useSurfaceMotion<HTMLDivElement>(open, SURFACE.scrim);
   // `top` — the sheet belongs to the bar it drops out of, so that is the edge it
@@ -86,10 +88,19 @@ function MobileNav({
         sheetEl.current?.querySelector<HTMLElement>("a")
       )?.focus(),
     );
+    // The page holds still while the sheet is open: the scrim takes no pan,
+    // but a drag on the sheet, which has nothing of its own to scroll, chained
+    // to the page behind it. A class at the sheet's own breakpoint, not an
+    // inline style: past `md` the sheet and scrim hide while still open (a
+    // tablet turned to landscape), and the lock must not outlive them there.
+    const root = document.documentElement;
+    const lock = "max-md:overflow-hidden";
+    root.classList.add(lock);
     return () => {
       window.removeEventListener("hashchange", close);
       document.removeEventListener("keydown", onKey);
       cancelAnimationFrame(raf);
+      root.classList.remove(lock);
     };
   }, [open, close]);
 
@@ -108,54 +119,64 @@ function MobileNav({
       {/* The one control in the bar that gives way: the page name truncates so
           the search, bell and connection pill always fit, offline Retry
           included, at every phone width. The hit area reaches 44px tall on
-          a phone without making the bar any taller. */}
+          a phone without making the bar any taller. Its name is its text, so
+          it starts with the page name a voice user reads off it (WCAG 2.5.3);
+          what the button is, and the count, follow out of sight. The open
+          state is aria-expanded's to say, so the name does not change. */}
       <button
         ref={buttonRef}
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        aria-label={
-          open
-            ? "Close the menu"
-            : attention > 0
-              ? `Open the menu (${attention} waiting on you)`
-              : "Open the menu"
-        }
+        aria-controls={present ? sheetId : undefined}
         className="relative flex h-9 min-w-0 max-w-full items-center gap-2.5 rounded-control border border-line-strong bg-surface/60 pl-2.5 pr-3 text-sm text-ink transition duration-(--duration-quick) before:absolute before:-inset-y-1 before:inset-x-0 hover:bg-surface-2 motion-safe:active:scale-[0.97]"
       >
-        {/* The attention count sits on the icon, not after the page name: as a
-            suffix, "Health 5" read as five things wrong with Health when it is
-            everything, anywhere, that is waiting on a person. */}
+        {/* The attention count is a dot at the icon's corner, not a number
+            after the page name: as a suffix, "Health 5" read as five things
+            wrong with Health when it is everything, anywhere, that is waiting
+            on a person. Clear of the bars, so the icon still reads as a menu;
+            the number is in the name, and on Briefing in the sheet. */}
         <span className="relative flex shrink-0">
           <Icon name={open ? "close" : "menu"} size={17} className="text-ink-dim" />
           {!open && attention > 0 && (
             <span
               aria-hidden="true"
-              className="absolute -right-1.5 -top-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-await px-1 text-micro font-semibold leading-none text-ground ring-2 ring-ground"
-            >
-              {attention > 9 ? "9+" : attention}
-            </span>
+              className="absolute -right-1.5 -top-1 size-2 rounded-full bg-await"
+            />
           )}
         </span>
         <span className="min-w-0 truncate font-semibold">{activeLabel}</span>
+        <span className="sr-only">
+          {attention > 0 ? `, menu, ${attention} waiting on you` : ", menu"}
+        </span>
       </button>
 
       {present && (
         <>
-          {/* A full-screen scrim so a tap anywhere outside dismisses, and the
-              page behind cannot be scrolled by accident. */}
-          <div
-            ref={scrimRef}
-            className="fixed inset-0 top-14 z-20 bg-ground/70 backdrop-blur-[2px]"
-            inert={!open}
-            aria-hidden={open ? undefined : true}
-            onClick={close}
-          />
+          {/* A scrim over the page below the bar, so a tap anywhere outside
+              dismisses rather than landing on what is behind. In <body>, not
+              here: the bar's backdrop filter makes it the containing block of
+              anything fixed inside it, and the scrim was a 0px strip at its
+              foot — the page undimmed, scrolling, and taking the taps. Out of
+              the md:hidden wrapper, so it hides past `md` itself, with the
+              sheet. The sheet stays in the bar, after the toggle in the tab
+              order. */}
+          {createPortal(
+            <div
+              ref={scrimRef}
+              className="fixed inset-x-0 bottom-0 top-14 z-20 touch-none bg-ground/70 backdrop-blur-[2px] md:hidden"
+              inert={!open}
+              aria-hidden={open ? undefined : true}
+              onClick={close}
+            />,
+            document.body,
+          )}
           <div
             ref={(node) => {
               sheetEl.current = node;
               sheetRef(node);
             }}
+            id={sheetId}
             inert={!open}
             aria-hidden={open ? undefined : true}
             className="absolute inset-x-0 top-full z-30 border-b border-line-strong bg-surface px-3 pb-4 pt-3 shadow-[0_24px_60px_-24px_rgb(0_0_0/0.9)]"

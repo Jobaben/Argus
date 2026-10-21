@@ -158,8 +158,7 @@ test("a cost spike past warm-up is reported as the multiple, not a z-score", () 
   const cost = report.anomalies.find((a) => a.metric === "cost");
   assert.ok(cost, "a cost anomaly was raised");
   assert.equal(cost.direction, "high");
-  assert.match(cost.detail, /× median cost/);
-  assert.match(cost.detail, /\$0\.42 vs \$0\.10/);
+  assert.match(cost.detail, /^\d+\.\d× median cost \(\$0\.42 vs \$0\.10 /);
   assert.equal(cost.severity, "critical"); // >3× the median
   assert.equal(cost.id, `schedule:s1|cost|${cost.runId}`);
 });
@@ -170,7 +169,29 @@ test("a run that finished suspiciously fast is a low anomaly", () => {
   const dur = report.anomalies.find((a) => a.metric === "duration");
   assert.ok(dur);
   assert.equal(dur.direction, "low");
-  assert.match(dur.detail, /× of the median duration/);
+  assert.match(dur.detail, /^\d+\.\d× shorter than the median duration \(2\.0s vs /);
+});
+
+test("regression: a low anomaly says which way it went, not just the multiple", () => {
+  // 3.2m against a 15.0m median read "4.7× of the median duration", which
+  // says 4.7 times longer about a run that took a fifth of the time.
+  const runs = [...healthy(12, { durationMs: 900_000 }), run({ durationMs: 192_000 })];
+  const dur = buildWatchtower(runs, [], NOW).anomalies.find((a) => a.metric === "duration");
+  assert.ok(dur);
+  assert.equal(dur.direction, "low");
+  assert.equal(dur.detail, "4.7× shorter than the median duration (3.2m vs 15.0m over 13 runs)");
+});
+
+test("low cost and token anomalies are worded as cheaper and fewer", () => {
+  const runs = [...healthy(), run({ costUsd: 0.02, tokens: 200 })];
+  const { anomalies } = buildWatchtower(runs, [], NOW);
+  const cost = anomalies.find((a) => a.metric === "cost");
+  const tokens = anomalies.find((a) => a.metric === "tokens");
+  assert.ok(cost && tokens);
+  assert.equal(cost.direction, "low");
+  assert.match(cost.detail, /^\d+\.\d× cheaper than the median cost \(\$0\.02 vs \$0\.10 /);
+  assert.equal(tokens.direction, "low");
+  assert.match(tokens.detail, /^\d+\.\d× fewer tokens than the median \(200 vs 1\.0k /);
 });
 
 test("regression: baselines learn from successes only, so a crash cannot drag the envelope down", () => {

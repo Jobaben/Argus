@@ -125,6 +125,20 @@ describe("Chronicle", () => {
     );
   });
 
+  it("calls a run that was cut short Stopped, in the key, its name and its tooltip", () => {
+    // An interrupted run's tooltip said "Idle" over "interrupted: Argus restarted…".
+    withData();
+    mockState.chronicle.groups[0].rows[0][0] = span("a", {
+      status: "stopped",
+      detail: "interrupted: Argus restarted while this run was in progress",
+    });
+    render(<Chronicle />);
+    const bar = screen.getByRole("link", { name: "Span a, Stopped" });
+    expect(bar.getAttribute("title")).toContain("\nStopped\ninterrupted: Argus restarted");
+    expect(bar.getAttribute("title")).not.toContain("Idle");
+    expect(within(screen.getByLabelText("Run status")).getByText("Stopped")).toBeInTheDocument();
+  });
+
   it("drops the time window in peer mode, where it would change nothing", () => {
     facet.peer = {
       isSelf: false,

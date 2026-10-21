@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 import { SURFACE, usePresence, useSurfaceMotion } from "./presence";
 
@@ -89,6 +90,21 @@ export function MoreMenu({
     first?.focus();
   }, [open]);
 
+  // The dismiss shield must stop taking clicks the moment the menu is
+  // closing, or a click aimed at what is behind it lands on a shield for a
+  // surface that is already leaving.
+  const shield = (where: "bar" | "page") => (
+    <button
+      key={where}
+      type="button"
+      tabIndex={-1}
+      onClick={() => close(false)}
+      className={`fixed inset-0 cursor-default ${where === "bar" ? "z-10" : "z-20"}`}
+      inert={!open}
+      aria-hidden
+    />
+  );
+
   const close = (returnFocus = true) => {
     setOpen(false);
     if (returnFocus) buttonRef.current?.focus();
@@ -158,17 +174,11 @@ export function MoreMenu({
       </button>
       {present && (
         <>
-          <button
-            type="button"
-            tabIndex={-1}
-            onClick={() => close(false)}
-            className="fixed inset-0 z-10 cursor-default"
-            // The dismiss shield must stop taking clicks the moment the menu is
-            // closing, or a click aimed at what is behind it lands on a shield
-            // for a surface that is already leaving.
-            inert={!open}
-            aria-hidden
-          />
+          {shield("bar")}
+          {/* The nav bar's backdrop blur makes it the containing block for
+              anything fixed inside it, so the shield above covers only the
+              bar. This one, from <body> and under the bar, covers the page. */}
+          {createPortal(shield("page"), document.body)}
           <div
             ref={setMenu}
             role="menu"

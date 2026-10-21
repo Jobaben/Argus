@@ -127,6 +127,119 @@ describe("FlightRecorder", () => {
     expect(strip).not.toHaveTextContent(/exit code 1.*exit code 1/i);
   });
 
+  it("tells an interrupted run as stopped, not failed: no red strip, no Error chip", async () => {
+    state.recording = recording({
+      status: "interrupted",
+      events: [
+        ev(0, { kind: "start", label: "Run started — Nightly triage" }),
+        ev(60_000, {
+          lane: "tool",
+          kind: "tool",
+          label: "Bash: npm run build",
+          tool: "Bash",
+          errored: true,
+          detail: "build failed",
+        }),
+        ev(90_000, {
+          kind: "error",
+          label: "Failed — interrupted: Argus restarted while this run was in flight",
+          detail: "interrupted: Argus restarted while this run was in flight",
+        }),
+      ],
+      // The server's pick: the last tool error, which is not why it stopped.
+      failureIndex: 1,
+    });
+    const user = userEvent.setup();
+    render(<FlightRecorder />);
+    // The header said Stopped over a pulsing red "Failed" strip.
+    expect(screen.queryByText("Failed")).toBeNull();
+    expect(screen.queryByRole("button", { name: /jump to failure/i })).toBeNull();
+    const reason = "Interrupted: Argus restarted while this run was in flight";
+    const strip = screen.getByText(reason, { selector: "b" }).closest("[role=status]");
+    expect(strip).toHaveTextContent("Stopped");
+    expect(strip?.querySelector("[class*=fail]")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Jump to the end" }));
+    expect(screen.getByRole("slider", { name: /scrub the recording/i })).toHaveValue("90000");
+    const now = screen.getByRole("complementary", { name: /current event/i });
+    // Its end, in the reading colours, said once.
+    expect(within(now).getByText(reason)).not.toHaveClass("text-fail-ink");
+    expect(within(now).getByText("Run end")).toBeInTheDocument();
+    expect(within(now).queryByText("Error")).toBeNull();
+    expect(within(now).getAllByText(/Argus restarted/)).toHaveLength(1);
+    expect(screen.queryByText(/Failed —/)).toBeNull();
+  });
+
+  it("tells a stopped run's reason from the server's own stop marker", async () => {
+    // The server closes a stopped run on an end event labelled "Stopped —
+    // <why>" and points failureIndex at it. Read only as a failure's error
+    // event, it left the run with no strip at all.
+    state.recording = recording({
+      status: "cancelled",
+      events: [
+        ev(0, { kind: "start", label: "Run started — Nightly triage" }),
+        ev(30_000, { lane: "tool", kind: "tool", label: "Bash: npm test", tool: "Bash" }),
+        ev(45_000, {
+          kind: "end",
+          label: "Stopped — cancelled by user",
+          detail: "cancelled by user",
+        }),
+      ],
+      failureIndex: 2,
+    });
+    const user = userEvent.setup();
+    render(<FlightRecorder />);
+    const strip = screen.getByText("Cancelled by user", { selector: "b" }).closest("[role=status]");
+    expect(strip).toHaveTextContent("Stopped");
+    expect(strip?.querySelector("[class*=fail]")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Jump to the end" }));
+    expect(screen.getByRole("slider", { name: /scrub the recording/i })).toHaveValue("45000");
+    const now = screen.getByRole("complementary", { name: /current event/i });
+    expect(within(now).getByText("Cancelled by user")).toBeInTheDocument();
+    expect(within(now).queryByText(/cancelled by user/)).toBeNull();
+    expect(screen.queryByText(/Stopped —/)).toBeNull();
+  });
+
+  it("never headlines a failed outcome as exit code 0", () => {
+    // Exited 0, refused by its outcome: the strip read "Exit code 0", the one
+    // thing that went right, before the reason.
+    state.recording = recording({
+      status: "succeeded",
+      outcome: "failed",
+      events: [
+        ev(0, { kind: "start", label: "Run started — Nightly triage" }),
+        ev(90_000, {
+          kind: "error",
+          label: "Failed — exit code 0",
+          detail: "Drafted the notes, but the tests are red.\nARGUS_OUTCOME: failed tests are red",
+        }),
+      ],
+      failureIndex: 1,
+    });
+    render(<FlightRecorder />);
+    const strip = screen
+      .getByText("Failed its outcome check", { selector: "b" })
+      .closest("[role=status]");
+    expect(strip).toHaveTextContent("Drafted the notes, but the tests are red.");
+    expect(screen.queryByText(/exit code 0/i)).toBeNull();
+  });
+
+  it("doesn't print an event's detail when it only repeats the heading", () => {
+    state.recording = recording({
+      events: [
+        ev(0, { kind: "start", label: "Run started — Nightly triage" }),
+        ev(90_000, { kind: "error", label: "Failed — exit code 1", detail: "exit code 1" }),
+      ],
+      failureIndex: 1,
+    });
+    window.location.hash = "#/run/run-1/90000";
+    render(<FlightRecorder />);
+    const now = screen.getByRole("complementary", { name: /current event/i });
+    expect(within(now).getByText("Failed — exit code 1")).toBeInTheDocument();
+    // It sat over a code box reading "exit code 1".
+    expect(now.querySelector("pre")).toBeNull();
+  });
+
   it("shows the run's closing summary without the agent's protocol line", () => {
     state.recording = recording({
       status: "succeeded",

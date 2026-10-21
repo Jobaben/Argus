@@ -22,6 +22,22 @@ describe("MoreMenu", () => {
     expect(screen.queryByRole("menuitem", { name: "Stats" })).toBeNull();
   });
 
+  it("closes on a click anywhere on the page, not only on the bar", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <MoreMenu active={false} items={[{ id: "stats", label: "Stats", href: "#/stats" }]} />,
+    );
+    await user.click(screen.getByRole("button", { name: /more/i }));
+    // The nav bar's blur makes it the containing block for its fixed children,
+    // so the shield that covers the page has to live outside it.
+    const pageShield = [...document.body.children].find(
+      (el) => el !== container && el.tagName === "BUTTON",
+    );
+    expect(pageShield).toBeDefined();
+    await user.click(pageShield as HTMLElement);
+    expect(screen.queryByRole("menuitem", { name: "Stats" })).toBeNull();
+  });
+
   it("moves focus into the menu on open and closes on Escape", async () => {
     const user = userEvent.setup();
     render(

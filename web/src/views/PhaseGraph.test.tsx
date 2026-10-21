@@ -312,7 +312,11 @@ describe("boardArrangement", () => {
 });
 
 describe("PhaseGraph: following the run", () => {
-  it("centres the running phase by scrolling its own tile, never the page", () => {
+  /** A chain long enough to scroll its tile, running phase `at`. */
+  const runAt = (at: number) =>
+    chain(Array.from({ length: 30 }, (_, i) => (i < at ? "done" : i === at ? "working" : "idle")));
+
+  it("brings the running phase into view by scrolling its own tile, never the page", () => {
     const scrollTo = mockScrollTo();
     const intoView = vi.spyOn(Element.prototype, "scrollIntoView");
     render(<Graph phases={chain(["done", "working", "idle"])} />);
@@ -324,9 +328,10 @@ describe("PhaseGraph: following the run", () => {
 
   it("moves on to the next phase as the run does", () => {
     const scrollTo = mockScrollTo();
-    const { rerender } = render(<Graph phases={chain(["done", "working", "idle"])} />);
+    const { rerender } = render(<Graph phases={runAt(1)} />);
     const first = scrollTo.mock.calls[0][0];
-    rerender(<Graph phases={chain(["done", "done", "working"])} />);
+    // Far enough down the chain to be out of view where it started.
+    rerender(<Graph phases={runAt(20)} />);
     expect(scrollTo).toHaveBeenCalledTimes(2);
     const next = scrollTo.mock.calls[1][0];
     expect(next.top).toBeGreaterThan(first.top);
@@ -340,8 +345,8 @@ describe("PhaseGraph: following the run", () => {
       writable: true,
       value: (query: string) => ({ matches: query.includes("reduce") }) as MediaQueryList,
     });
-    const { rerender } = render(<Graph phases={chain(["done", "working", "idle"])} />);
-    rerender(<Graph phases={chain(["done", "done", "working"])} />);
+    const { rerender } = render(<Graph phases={runAt(1)} />);
+    rerender(<Graph phases={runAt(20)} />);
     expect(scrollTo.mock.calls[1][0]).toMatchObject({ behavior: "auto" });
     delete (window as { matchMedia?: unknown }).matchMedia;
   });
@@ -349,10 +354,6 @@ describe("PhaseGraph: following the run", () => {
   it("stops following once the user scrolls, until asked to follow again", () => {
     const scrollTo = mockScrollTo();
     // Long enough to scroll its tile, so there is a view to take over.
-    const runAt = (at: number) =>
-      chain(
-        Array.from({ length: 30 }, (_, i) => (i < at ? "done" : i === at ? "working" : "idle")),
-      );
     const { rerender } = render(<Graph phases={runAt(1)} />);
     const tile = screen.getByTestId("phase-graph");
     const follow = screen.getByRole("button", { name: "Follow" });
@@ -369,6 +370,29 @@ describe("PhaseGraph: following the run", () => {
     // Still there, pressed, under the focus that pressed it.
     expect(follow).toBeInTheDocument();
     expect(follow).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("leaves the view to following when the board's pick moves on with the run", () => {
+    const scrollTo = mockScrollTo();
+    const { rerender } = render(<Graph phases={runAt(1)} selectedId="p1" />);
+    rerender(<Graph phases={runAt(20)} selectedId="p20" />);
+    // Following's move alone: centring the pick on top of it undid the follow.
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+    expect(scrollTo.mock.calls[1][0]).toMatchObject({ behavior: "smooth" });
+    // Not following, the board's pick is still brought to the middle.
+    fireEvent.wheel(screen.getByTestId("phase-graph"));
+    rerender(<Graph phases={runAt(25)} selectedId="p25" />);
+    expect(scrollTo).toHaveBeenCalledTimes(3);
+    expect(scrollTo.mock.calls[2][0].top).toBeGreaterThan(scrollTo.mock.calls[1][0].top);
+  });
+
+  it("opens a run with nothing to follow at the graph's start, not on the runway before it", () => {
+    const scrollTo = mockScrollTo();
+    render(<Graph phases={chain(Array.from({ length: 30 }, () => "done" as const))} />);
+    const start = parseFloat(screen.getByTestId("graph-canvas").style.top);
+    expect(start).toBeGreaterThan(0);
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(scrollTo.mock.calls[0][0]).toMatchObject({ top: Math.round(start), behavior: "auto" });
   });
 
   it("leaves following on when the graph fits and there is nothing to scroll", () => {

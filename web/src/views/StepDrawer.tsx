@@ -146,12 +146,15 @@ function RunLog({
   log,
   shown,
   failed,
+  exitCode,
 }: {
   log: string;
   /** Which figures the drawer's readout already shows. */
   shown: { cost: boolean; tokens: boolean; duration: boolean };
   /** The step failed, whatever its process said. */
   failed: boolean;
+  /** What the process did, which the log's envelope does not say. */
+  exitCode: number | null | undefined;
 }) {
   const parsed = parseRunLog(log);
   if (parsed.kind === "empty") {
@@ -167,7 +170,7 @@ function RunLog({
       )}
       {parsed.kind === "envelope" ? (
         <dl className="grid grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-6 gap-y-2 px-4 py-3.5">
-          {envelopeFields(parsed.fields, shown, failed).map((f) => (
+          {envelopeFields(parsed.fields, shown, { failed, exitCode }).map((f) => (
             <Fragment key={f.label}>
               <dt className="text-caption text-ink-faint">{f.label}</dt>
               {/* Mono for the ids only: durations, counts and the process's
@@ -428,6 +431,7 @@ export function StepDrawer({
             <RunLog
               log={detail.log}
               failed={step.status === "failed"}
+              exitCode={run?.exitCode}
               shown={{
                 cost: step.costUsd != null,
                 tokens: step.tokens != null,

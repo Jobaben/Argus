@@ -1,7 +1,7 @@
 import { useLayoutEffect, useState, type HTMLAttributes } from "react";
 import type { DsStatus, PhasePill } from "../ds";
 import { Button, DURATION, STATUS, useSyncedDelay } from "../ds";
-import { fadeEdges, runwayFor } from "./graphFocus";
+import { fadeEdges, overflows, runwayFor } from "./graphFocus";
 import {
   LANE_GEOMETRY,
   MAX_TILE_HEIGHT_PX,
@@ -25,7 +25,7 @@ import { useElementWidth } from "./useLaneLayout";
  * Geometry comes from the pure layout; this component paints it inside a
  * bounded viewport. Whatever the shape, the graph never sizes its container:
  * it is scaled to fit down to {@link MIN_SCALE}, scrolls beyond that, keeps the
- * phase the run is on centred, and fades the edges that have more beyond them.
+ * phase the run is on in view, and fades the edges that have more beyond them.
  */
 
 const PHASE_DOT: Record<DsStatus, string> = {
@@ -231,8 +231,8 @@ function PhaseNode({
 }
 
 /** Edge fade written straight to the element, so scrolling never re-renders. */
-function applyFade(el: HTMLElement) {
-  const f = fadeEdges(el);
+function applyFade(el: HTMLElement, runway: { x: number; y: number }) {
+  const f = fadeEdges(el, runway);
   el.style.setProperty("--fade-t", `${f.top}px`);
   el.style.setProperty("--fade-r", `${f.right}px`);
   el.style.setProperty("--fade-b", `${f.bottom}px`);
@@ -303,9 +303,10 @@ export function PhaseGraph({
     x: runwayFor(scaledW, viewportW, pad),
     y: runwayFor(scaledH, MAX_TILE_HEIGHT_PX, pad),
   };
-  // The runway is there exactly when an axis overflows: whether the graph
-  // scrolls, from geometry alone, so the toolbar is settled before any input.
-  const scrolls = viewportW > 0 && (runway.x > 0 || runway.y > 0);
+  // Whether the graph scrolls, from geometry alone, so the toolbar is settled
+  // before any input.
+  const scrolls =
+    viewportW > 0 && (overflows(scaledW, viewportW) || overflows(scaledH, MAX_TILE_HEIGHT_PX));
   const { following, pause, resume, centreOn } = useGraphFocus(
     scrollerRef,
     phases,
@@ -317,12 +318,13 @@ export function PhaseGraph({
   useLayoutEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
-    applyFade(el);
+    const empty = { x: runway.x, y: runway.y };
+    applyFade(el, empty);
     if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => applyFade(el));
+    const ro = new ResizeObserver(() => applyFade(el, empty));
     ro.observe(el);
     return () => ro.disconnect();
-  }, [scrollerRef, scaledW, scaledH]);
+  }, [scrollerRef, scaledW, scaledH, runway.x, runway.y]);
 
   const hot = (e: { from: string; to: string }) =>
     selectedId !== null && (e.from === selectedId || e.to === selectedId);
@@ -359,7 +361,7 @@ export function PhaseGraph({
               title={
                 following
                   ? "Keeping the phase the run is on in view. Press to stop following"
-                  : "Centre the phase the run is on, and keep following it"
+                  : "Bring the phase the run is on into view, and keep following it"
               }
               onClick={following ? pause : resume}
               className="aria-pressed:bg-eye/10 aria-pressed:text-eye"
@@ -386,7 +388,7 @@ export function PhaseGraph({
         aria-label="Phases"
         data-testid="phase-graph"
         data-following={following ? "true" : "false"}
-        onScroll={(e) => applyFade(e.currentTarget)}
+        onScroll={(e) => applyFade(e.currentTarget, runway)}
         onWheel={pause}
         onTouchStart={pause}
         onPointerDown={(e) => {

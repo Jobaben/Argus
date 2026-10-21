@@ -1,4 +1,4 @@
-import { Suspense, lazy, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { runtimeLabel } from "../useRuntimes";
 import { useMachineFacet } from "../fleet/useMachineFacet";
 import { useOverview } from "../useOverview";
@@ -14,7 +14,7 @@ import { decisionFields, isLongValue } from "./decisionValue";
 import { attentionPhase } from "./phaseAttention";
 import { ATTENTION_KINDS, attentionHref } from "./attentionKinds";
 import { firstProseLine, withoutOutcome } from "./outcome";
-import { reasonText } from "./text";
+import { reasonText, sentenceStart } from "./text";
 import type { StepSelection } from "./StepDrawer";
 import type { GateSelection } from "./GateDrawer";
 import { hashSegments, useHashRoute } from "../useHashRoute";
@@ -56,17 +56,34 @@ import type { OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from ".
 import type { AttentionItem as BriefingItem, AttentionKind, RouteDecision } from "../types";
 import { UNREACHABLE, loadError } from "../live/loadError";
 
-const StepDrawer = lazy(() => import("./StepDrawer").then((m) => ({ default: m.StepDrawer })));
+// The drawers are chunks of their own — the review drawer carries the markdown
+// lexer — so the Command Center (an eager route) stays inside the size budget.
+// One loader each, shared by lazy() and the prefetch once the board is up, so
+// each chunk is fetched once and is usually in before the first open.
+const loadStepDrawer = () => import("./StepDrawer");
+const loadGateDrawer = () => import("./GateDrawer");
+const StepDrawer = lazy(() => loadStepDrawer().then((m) => ({ default: m.StepDrawer })));
+const GateDrawer = lazy(() => loadGateDrawer().then((m) => ({ default: m.GateDrawer })));
 
-// The review drawer carries the markdown lexer, which the board does not need
-// until a gate is actually opened — so it is its own chunk, fetched on first
-// open, and the Command Center (an eager route) stays inside the size budget.
-const GateDrawer = lazy(() => import("./GateDrawer").then((m) => ({ default: m.GateDrawer })));
 // A deleted pipeline's live instance is rare, and its Stop is the one place
 // the board asks a question first, so the confirm is fetched with it.
 const OrphanStop = lazy(() => import("./OrphanStop").then((m) => ({ default: m.OrphanStop })));
 const PeerControls = lazy(() => import("./PeerBoard").then((m) => ({ default: m.PeerControls })));
 const PeerBoard = lazy(() => import("./PeerBoard").then((m) => ({ default: m.PeerBoard })));
+
+/**
+ * A drawer opener's click, as a transition. Opened urgently, a first open with
+ * its chunk still loading committed the Suspense fallback, and React holds back
+ * revealing a boundary that has shown its fallback (~300ms): the first drawer
+ * of a page load took ~450ms to appear, later ones ~70ms. As a transition the
+ * board stays as it is until the drawer is ready, and `opening` lets the opener
+ * show any wait that is left. Here, not on the board, so marking one opener
+ * busy re-renders that opener rather than every card.
+ */
+function useOpener<A extends unknown[]>(open: (...args: A) => void) {
+  const [opening, start] = useTransition();
+  return [opening, (...args: A) => start(() => open(...args))] as const;
+}
 
 /**
  * The board re-renders in place as pipelines change state, which is invisible
@@ -127,6 +144,7 @@ function StepTile({
   /** Opens this step's drawer, told where on screen the tile was. */
   onOpen: (originY: number) => void;
 }) {
+  const [opening, open] = useOpener(onOpen);
   const token = STATUS[step.status].token;
   const working = step.status === "working";
   // The elapsed clock lives in the tile that shows it. One clock at the board
@@ -172,8 +190,9 @@ function StepTile({
           // The tile's own position, so the drawer grows out of the row you
           // pressed instead of out of the screen edge. Read from the event
           // rather than measured later: by then the board may have re-sorted.
-          onClick={(e) => onOpen(e.currentTarget.getBoundingClientRect().top)}
-          className="min-w-0 flex-1 text-left after:absolute after:inset-0 after:rounded-tile after:content-[''] focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-eye"
+          onClick={(e) => open(e.currentTarget.getBoundingClientRect().top)}
+          aria-busy={opening || undefined}
+          className="min-w-0 flex-1 text-left aria-busy:cursor-progress after:absolute after:inset-0 after:rounded-tile after:content-[''] focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-eye"
           title="Open this step's run, log and cost"
         >
           <div className="flex min-w-0 items-baseline gap-1.5">
@@ -355,6 +374,19 @@ function DecisionNote({
 }
 
 /**
+ * The focus panel's "from" and "to" lines. A separator belongs to the item
+ * after it and sits in the gap before it, which the line clips at its start:
+ * where the line wraps, the dot goes with the wrap instead of leading the new
+ * line and pointing at nothing — as the card header's facts do. The gap goes
+ * only between items on a line, so a wrapped item still starts flush; the
+ * arrow pulls its own gap back in to stay close to the first one.
+ */
+const ROUTE_LINE =
+  "flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 overflow-hidden px-0.5 text-caption text-ink-faint";
+const ROUTE_ITEM = "relative inline-flex min-w-0 items-center gap-1.5";
+const ROUTE_SEP = "pointer-events-none absolute -left-2.5 opacity-60";
+
+/**
  * One phase's step tiles — the focus panel beside the graph.
  *
  * The board used to render every step of every phase at all times, which put a
@@ -394,6 +426,7 @@ function PhaseFocus({
   /** Open the review drawer — the only place Approve and Revise live. */
   onOpenGate: (originY: number) => void;
 }) {
+  const [opening, openGate] = useOpener(onOpenGate);
   const name = (id: string) => phaseNames.get(id) ?? id;
   const number = (id: string) => String(phases.findIndex((q) => q.id === id) + 1).padStart(2, "0");
   const edges =
@@ -447,15 +480,12 @@ function PhaseFocus({
           parentheses, so the last dependency was reachable only by tooltip.
           The set has no left arrow, so "from" is the right one turned round. */}
       {edges.length > 0 && (
-        <p
-          data-testid="phase-needs"
-          className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-0.5 text-caption text-ink-faint"
-        >
-          <Icon name="arrow-right" size={13} className="rotate-180" />
+        <p data-testid="phase-needs" className={ROUTE_LINE}>
+          <Icon name="arrow-right" size={13} className="-mr-2.5 rotate-180" />
           <span className="sr-only">Waits for</span>
           {edges.map((e, i) => (
-            <span key={e.phase} className="inline-flex min-w-0 items-center gap-1.5">
-              {i > 0 && <span className="opacity-60">·</span>}
+            <span key={e.phase} className={ROUTE_ITEM}>
+              {i > 0 && <span className={ROUTE_SEP}>·</span>}
               {e.conditional && (
                 <RouteCondition
                   state={edgeState(phases.find((q) => q.id === e.phase) ?? pill, pill)}
@@ -473,15 +503,12 @@ function PhaseFocus({
         </p>
       )}
       {routes.length > 0 && (
-        <p
-          data-testid="phase-routes"
-          className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-0.5 text-caption text-ink-faint"
-        >
-          <Icon name="arrow-right" size={13} />
+        <p data-testid="phase-routes" className={ROUTE_LINE}>
+          <Icon name="arrow-right" size={13} className="-mr-2.5" />
           <span className="sr-only">Leads to</span>
           {routes.map((r, i) => (
-            <span key={r.to.id} className="inline-flex min-w-0 items-center gap-1.5">
-              {i > 0 && <span className="opacity-60">·</span>}
+            <span key={r.to.id} className={ROUTE_ITEM}>
+              {i > 0 && <span className={ROUTE_SEP}>·</span>}
               {r.condition && (
                 <RouteCondition state={r.state} className="leading-[18px]">
                   {r.condition}
@@ -537,8 +564,9 @@ function PhaseFocus({
               data-testid="gate-opener"
               variant={gate.canApprove ? "attention" : "danger"}
               iconRight="arrow-right"
-              className="ml-[30px] @lg:ml-0"
-              onClick={(e) => onOpenGate(e.currentTarget.getBoundingClientRect().top)}
+              className="ml-[30px] aria-busy:cursor-progress @lg:ml-0"
+              aria-busy={opening || undefined}
+              onClick={(e) => openGate(e.currentTarget.getBoundingClientRect().top)}
             >
               Review
             </Button>
@@ -1114,10 +1142,12 @@ function elsewhereItems(
         key: `${item.kind}:${item.id}`,
         item,
         title: across ? across[2] : item.title,
+        // An issue's title is its signature as recorded ("exit code 1"),
+        // capitalised as the Issues page and the Briefing show it.
         detail: across
-          ? `${item.title} · ${across[1]}×`
+          ? `${sentenceStart(item.title)} · ${across[1]}×`
           : issue
-            ? `${item.detail} · ${issue.title} · ${issue.count}×`
+            ? `${item.detail} · ${sentenceStart(issue.title)} · ${issue.count}×`
             : item.detail,
       };
     });
@@ -1147,6 +1177,9 @@ function AttentionQueue({
   partial: boolean;
   onOpen: (item: AttentionItem, originY: number) => void;
 }) {
+  const [opening, open] = useOpener(onOpen);
+  // Which row's Review is opening, so only that button says it is busy.
+  const [pressed, setPressed] = useState<string | null>(null);
   const shown = useListPresence(items, (i) => i.key);
   const listed = elsewhere.slice(0, ELSEWHERE_SHOWN);
   const more = elsewhere.length - listed.length;
@@ -1240,9 +1273,13 @@ function AttentionQueue({
                 size="sm"
                 iconRight="arrow-right"
                 aria-describedby={titleId}
+                aria-busy={(opening && pressed === key) || undefined}
                 // Wrapped under the text on a phone, it lines up with the text.
-                className="max-sm:ml-11"
-                onClick={(e) => onOpen(item, e.currentTarget.getBoundingClientRect().top)}
+                className="aria-busy:cursor-progress max-sm:ml-11"
+                onClick={(e) => {
+                  setPressed(key);
+                  open(item, e.currentTarget.getBoundingClientRect().top);
+                }}
               >
                 Review
               </Button>
@@ -1413,6 +1450,22 @@ export default function CommandCenter({
   if (selected && !stepEverOpened) setStepEverOpened(true);
   const [pickedGate, setPickedGate] = useState<GateSelection | null>(null);
   const rows = useMemo(() => overview.flatMap(toOverviewRows), [overview]);
+  // Fetch both drawers once the board is up and the browser idle, so the first
+  // open rarely waits at all. A failed prefetch is the open's to retry.
+  const hasBoard = rows.length > 0;
+  useEffect(() => {
+    if (!hasBoard) return;
+    const prefetch = () => {
+      loadStepDrawer().catch(() => {});
+      loadGateDrawer().catch(() => {});
+    };
+    if (typeof requestIdleCallback === "function") {
+      const id = requestIdleCallback(prefetch, { timeout: 2000 });
+      return () => cancelIdleCallback(id);
+    }
+    const id = setTimeout(prefetch, 200);
+    return () => clearTimeout(id);
+  }, [hasBoard]);
   // `#/command/<instanceId>[/<phaseId>]` opens the review drawer — the link the
   // palette and `argus tail` hand out. Derived from the hash and the board, not
   // stored, so it cannot drift from either. Never on a peer's board: a gate is
@@ -1588,20 +1641,24 @@ export default function CommandCenter({
           </div>
         </Handoff>
       )}
-      {stepEverOpened && (
-        <Suspense fallback={null}>
+      {/* The boundaries are always there and the drawers mount inside them:
+          only a boundary that has already shown its content lets a transition
+          keep the page as it is while what is new in it loads. One mounting
+          with its drawer shows its fallback, transition or not. */}
+      <Suspense fallback={null}>
+        {stepEverOpened && (
           <StepDrawer
             selection={selected}
             onClose={() => setSelected(null)}
             onCancelRun={cancelRun}
           />
-        </Suspense>
-      )}
-      {everOpened && (
-        <Suspense fallback={null}>
+        )}
+      </Suspense>
+      <Suspense fallback={null}>
+        {everOpened && (
           <GateDrawer selection={gate} onClose={closeGate} approve={approve} revise={revise} />
-        </Suspense>
-      )}
+        )}
+      </Suspense>
     </Page>
   );
 }

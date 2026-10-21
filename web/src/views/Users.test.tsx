@@ -80,6 +80,70 @@ describe("Users view", () => {
     await waitFor(() => expect(approve).toHaveBeenCalled());
   });
 
+  it("asks before rejecting a request, and Keep sends nothing and hands focus back", async () => {
+    const user = userEvent.setup();
+    const reject = vi.fn(() => okJson({ ok: true }));
+    mockFetch({
+      "/api/auth/status": () => okJson(rootStatus),
+      "/api/users": () => okJson({ users: rows }),
+      "/api/users/alice/reject": reject,
+    });
+    render(<Users />);
+    const opener = await screen.findByRole("button", { name: "Reject alice" });
+    await user.click(opener);
+    expect(opener).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("group", { name: "Reject alice's request?" })).toBeVisible();
+    // The safe answer takes focus, so an Enter pressed out of habit keeps it.
+    expect(screen.getByRole("button", { name: "Keep" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Keep" }));
+    expect(screen.queryByRole("group", { name: /reject alice/i })).toBeNull();
+    expect(opener).toHaveFocus();
+    expect(reject).not.toHaveBeenCalled();
+  });
+
+  it("rejects a request once the question is answered with Reject request", async () => {
+    const user = userEvent.setup();
+    const reject = vi.fn(() => okJson({ ok: true }));
+    mockFetch({
+      "/api/auth/status": () => okJson(rootStatus),
+      "/api/users": () => okJson({ users: rows }),
+      "/api/users/alice/reject": reject,
+    });
+    render(<Users />);
+    await user.click(await screen.findByRole("button", { name: "Reject alice" }));
+    expect(reject).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Reject request" }));
+    await waitFor(() => expect(reject).toHaveBeenCalledTimes(1));
+  });
+
+  it("asks before removing an account, and Escape keeps it", async () => {
+    const user = userEvent.setup();
+    const remove = vi.fn(() => okJson({ ok: true }));
+    const bob = { username: "bob", role: "member", status: "active", createdAt: rows[0].createdAt };
+    mockFetch({
+      "/api/auth/status": () => okJson(rootStatus),
+      "/api/users": () => okJson({ users: [...rows, bob] }),
+      "/api/users/bob/reject": remove,
+    });
+    render(<Users />);
+    const opener = await screen.findByRole("button", { name: "Remove bob" });
+    await user.click(opener);
+    const question = screen.getByRole("group", { name: "Remove bob?" });
+    // It says what else happens: whoever is signed in as bob is signed out.
+    expect(question).toHaveAccessibleDescription(
+      "The account is deleted, and anyone signed in as bob is signed out.",
+    );
+    expect(within(question).getByRole("button", { name: "Keep" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("group", { name: "Remove bob?" })).toBeNull();
+    expect(opener).toHaveFocus();
+    expect(remove).not.toHaveBeenCalled();
+
+    await user.click(opener);
+    await user.click(screen.getByRole("button", { name: "Remove account" }));
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
+  });
+
   it("says a refused approval on the row it is about, as a sentence", async () => {
     // It used to be a strip at the top of the page reading "Couldn't complete
     // that user is not pending", the subject running into the server's clause.

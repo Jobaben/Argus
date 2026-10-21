@@ -7,6 +7,7 @@ import type {
   Recording,
 } from "@argus/contracts";
 import type { Run } from "./scheduleTypes.js";
+import { classifyOutcomeMarker } from "../harness/completion.js";
 
 /**
  * The Flight Recorder derivation: a run's transcript, replayed as a timeline.
@@ -186,15 +187,24 @@ const LANE_LABEL: Record<RecorderLane, string> = {
   spend: "Tokens & cost",
 };
 
-/** A failure worth anchoring the "jump to failure" control on. Mirrors the
- *  Issues definition so the two features never disagree about what failed. */
-function runFailed(run: Run): boolean {
+/**
+ * Interrupted or cancelled with no verdict on the work: the run stopped short,
+ * which its status pill shows as a grey Stopped, not a red Failed. A failing
+ * outcome still wins, as it does on the pill.
+ */
+function runStopped(run: Run): boolean {
   return (
-    run.status === "failed" ||
-    run.status === "interrupted" ||
-    run.outcome === "failed" ||
-    run.outcome === "blocked"
+    (run.status === "interrupted" || run.status === "cancelled") &&
+    run.outcome !== "failed" &&
+    run.outcome !== "blocked"
   );
+}
+
+/** A failure worth anchoring the "jump to failure" control on. The Issues
+ *  definition, less a run that only stopped short ({@link runStopped}): Issues
+ *  counts an interrupted run, but its timeline closes on a stop, not an error. */
+function runFailed(run: Run): boolean {
+  return run.status === "failed" || run.outcome === "failed" || run.outcome === "blocked";
 }
 
 function tsOf(line: RawLine): number | null {
@@ -363,7 +373,12 @@ export function buildRecording(run: Run, rawLines: unknown[], now: Date): Record
     const endMs = Date.parse(run.endedAt);
     const at = Number.isFinite(endMs) ? endMs - origin : lastAtMs;
     const failed = runFailed(run);
-    push(at, "agent", failed ? "error" : "end", failed ? terminalLabel(run) : "Run finished", {
+    const label = runStopped(run)
+      ? clip(`Stopped — ${run.error?.trim() || run.status}`, LABEL_MAX)
+      : failed
+        ? terminalLabel(run)
+        : "Run finished";
+    push(at, "agent", failed ? "error" : "end", label, {
       detail: block(run.error ?? run.resultSummary ?? "", DETAIL_MAX) || undefined,
     });
   }
@@ -371,7 +386,16 @@ export function buildRecording(run: Run, rawLines: unknown[], now: Date): Record
   const totalEvents = events.length;
   const kept = totalEvents > EVENT_CAP ? events.slice(-EVENT_CAP) : events;
 
-  const failureIndex = runFailed(run) ? lastFailureIndex(kept) : null;
+  // A stopped run points at where it stopped, its closing marker (always the
+  // last event, which the cap never drops): the last tool error before an
+  // interruption is not why the run ended.
+  const failureIndex = runStopped(run)
+    ? run.endedAt && kept.length > 0
+      ? kept.length - 1
+      : null
+    : runFailed(run)
+      ? lastFailureIndex(kept)
+      : null;
 
   const lanes: RecorderLaneSummary[] = (["agent", "tool", "file", "spend"] as RecorderLane[])
     .map((lane) => ({
@@ -430,11 +454,22 @@ function lastFailureIndex(events: RecorderEvent[]): number | null {
   return events.length > 0 ? events.length - 1 : null;
 }
 
+/** A failed run's closing label. Never "exit code 0": a run that exited
+ *  cleanly but failed its outcome check is labelled with the agent's reason,
+ *  not with the one thing that went right. */
 function terminalLabel(run: Run): string {
   if (run.error?.trim()) return clip(`Failed — ${run.error}`, LABEL_MAX);
   if (run.outcome === "blocked") return "Blocked";
-  if (run.status === "interrupted") return "Interrupted";
-  return `Failed${run.exitCode != null ? ` — exit code ${run.exitCode}` : ""}`;
+  const exitedNonZero = run.exitCode != null && run.exitCode !== 0;
+  if (exitedNonZero) return `Failed — exit code ${run.exitCode}`;
+  if (run.outcome === "failed") {
+    // `failed: <why>` from the marker line, or a bare `failed` when the agent
+    // gave no reason; the verdict is the label's own word either way.
+    const said = classifyOutcomeMarker(run.resultSummary);
+    const why = said.kind === "failed" ? (said.reason ?? "").replace(/^failed(?::\s*|$)/, "") : "";
+    return why ? clip(`Failed — ${why}`, LABEL_MAX) : "Failed its outcome check";
+  }
+  return "Failed";
 }
 
 function unavailableReason(run: Run, lineCountSeen: number): RecorderUnavailable {

@@ -21,6 +21,7 @@ import { useRuntimes } from "../useRuntimes";
 import { RuntimeBadge } from "../ds/RuntimeBadge";
 import { withoutOutcome } from "./outcome";
 import { envelopeFields } from "./runEnvelope";
+import { reasonText } from "./text";
 
 /**
  * The "something is in flight" dot, breathing in phase with every other live
@@ -111,12 +112,15 @@ export function RunRow({
   const [open, setOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const isRunning = run.status === "running";
-  const succeeded = runDsStatus(run) === "done";
+  const ds = runDsStatus(run);
+  const succeeded = ds === "done";
+  const failed = ds === "failed";
   // Without the agent's protocol line: the status pill already shows its verdict.
   // An error that is nothing but a bare marker is still the only error on
-  // record, so that one is shown as it was stored.
+  // record, so that one is shown as it was stored. Said as a sentence: the
+  // scheduler stores a clause ("exit code 1", "interrupted: Argus restarted…").
   const summary = withoutOutcome(run.resultSummary);
-  const error = run.error ? withoutOutcome(run.error) || run.error : null;
+  const error = run.error ? reasonText(withoutOutcome(run.error) || run.error) : null;
   // Badge only the runs that didn't use this server's default agent: a mark on
   // every row when every row says the same thing is noise.
   const { default: defaultRuntime } = useRuntimes();
@@ -231,7 +235,7 @@ export function RunRow({
             <span className="min-w-0 flex-1">
               <span className="flex min-w-0 items-center gap-2.5">
                 <span className="inline-flex shrink-0 items-center gap-1.5">
-                  <StatusPill status={runDsStatus(run)} label={runStatusLabel(run)} size="sm" />
+                  <StatusPill status={ds} label={runStatusLabel(run)} size="sm" />
                   {firedMark}
                 </span>
                 <span className="min-w-0 truncate text-small font-semibold text-ink">{label}</span>
@@ -246,7 +250,7 @@ export function RunRow({
               lead={
                 <>
                   <span className="mr-2.5 inline-flex items-center gap-1.5 align-middle">
-                    <StatusPill status={runDsStatus(run)} label={runStatusLabel(run)} size="sm" />
+                    <StatusPill status={ds} label={runStatusLabel(run)} size="sm" />
                     {firedMark}
                   </span>
                   {when}
@@ -301,14 +305,29 @@ export function RunRow({
       </div>
       {open && (
         <div className="space-y-3 px-3 pb-3 pt-1 sm:pl-[2.375rem] sm:pr-4">
-          {error && (
-            <div className="flex gap-2.5 rounded-control border border-fail/25 bg-fail/[0.07] px-3 py-2.5">
-              <Icon name="alert" size={15} className="mt-px text-fail" />
-              <p className="min-w-0 whitespace-pre-wrap break-words font-mono text-caption leading-relaxed text-fail-ink">
-                {error}
-              </p>
-            </div>
-          )}
+          {error &&
+            (failed ? (
+              <div className="flex gap-2.5 rounded-control border border-fail/25 bg-fail/[0.07] px-3 py-2.5">
+                <Icon name="alert" size={15} className="mt-0.5 text-fail" />
+                <p className="min-w-0 max-w-prose whitespace-pre-wrap break-words text-small leading-relaxed text-fail-ink">
+                  {error}
+                </p>
+              </div>
+            ) : (
+              // Why a run stopped short (or was skipped) is not a failure: it
+              // is told in the row's own grey, under a grey pill, like the
+              // summary below it. Red is for a run that failed.
+              <div className="flex gap-2.5">
+                <Icon
+                  name={ds === "stopped" ? "stop" : "info"}
+                  size={15}
+                  className="mt-0.5 text-ink-faint"
+                />
+                <p className="min-w-0 max-w-prose whitespace-pre-wrap break-words text-small leading-relaxed text-ink-dim">
+                  {error}
+                </p>
+              </div>
+            ))}
           {summary && (
             <div className="flex gap-2.5">
               {/* The tick only for a run that succeeded: a failed run's summary
@@ -326,7 +345,8 @@ export function RunRow({
           <RunLog
             id={run.id}
             running={isRunning}
-            failed={run.status === "failed"}
+            failed={failed}
+            exitCode={run.exitCode}
             shown={{
               cost: run.costUsd != null,
               tokens: run.tokens != null,
@@ -355,11 +375,14 @@ function RunLog({
   id,
   running,
   failed: runFailed,
+  exitCode,
   shown,
 }: {
   id: string;
   running: boolean;
+  /** The run failed, as its pill says, whatever its process said. */
   failed: boolean;
+  exitCode: number | null;
   /** Which figures the row's metadata line already shows. */
   shown: { cost: boolean; tokens: boolean; duration: boolean };
 }) {
@@ -414,7 +437,7 @@ function RunLog({
       </div>
       {parsed.kind === "envelope" ? (
         <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-caption">
-          {envelopeFields(parsed.fields, shown, runFailed).map((f) => (
+          {envelopeFields(parsed.fields, shown, { failed: runFailed, exitCode }).map((f) => (
             <Fragment key={f.label}>
               <dt className="text-ink-faint">{f.label}</dt>
               {/* Mono for the ids only: durations, counts and the process's

@@ -109,7 +109,17 @@ export function NotificationCenter() {
   }, [open]);
 
   return (
-    <div ref={containerRef} className="relative">
+    // Tabbing out of the open panel closes it: left open, it covered the page
+    // control focus moved on to. Focus stays where it went; only a move with
+    // somewhere to go counts, so a click on the panel's own text does not.
+    <div
+      ref={containerRef}
+      className="relative"
+      onBlur={(e) => {
+        const to = e.relatedTarget;
+        if (open && to instanceof Node && !e.currentTarget.contains(to)) setOpen(false);
+      }}
+    >
       <button
         ref={bellRef}
         type="button"

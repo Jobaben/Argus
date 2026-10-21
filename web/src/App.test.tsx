@@ -1,5 +1,5 @@
 // web/src/App.test.tsx
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
@@ -21,6 +21,13 @@ beforeEach(() => {
     ) as unknown as typeof fetch,
   );
   window.location.hash = "#/command";
+  // jsdom has no layout to scroll and says so on every call; the shell resets
+  // the scroll on each change of view.
+  vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("App shell", () => {
@@ -178,14 +185,14 @@ describe("the phone menu names the page", () => {
   it("on a drill-down with no tab of its own", async () => {
     window.location.hash = "#/agents";
     await mountApp();
-    expect(screen.getByRole("button", { name: /open the menu/i })).toHaveTextContent("Agents");
+    expect(screen.getByRole("button", { name: /, menu\b/ })).toHaveTextContent("Agents");
   });
 
   it("on Users for a viewer who is not root, and More marks it as the current page", async () => {
     const user = userEvent.setup();
     window.location.hash = "#/users";
     await mountApp();
-    expect(screen.getByRole("button", { name: /open the menu/i })).toHaveTextContent("Users");
+    expect(screen.getByRole("button", { name: /, menu\b/ })).toHaveTextContent("Users");
     await user.click(screen.getByRole("button", { name: /more/i }));
     expect(screen.getByRole("menuitem", { name: "Users" })).toHaveAttribute("aria-current", "page");
   });
@@ -193,8 +200,8 @@ describe("the phone menu names the page", () => {
   it("names the agent page Agent, not Detail", async () => {
     window.location.hash = "#/agent/abc";
     await mountApp();
-    expect(screen.getByRole("button", { name: /open the menu/i })).toHaveTextContent("Agent");
-    expect(screen.getByRole("button", { name: /open the menu/i })).not.toHaveTextContent("Detail");
+    expect(screen.getByRole("button", { name: /, menu\b/ })).toHaveTextContent("Agent");
+    expect(screen.getByRole("button", { name: /, menu\b/ })).not.toHaveTextContent("Detail");
   });
 });
 
@@ -233,6 +240,17 @@ describe("arriving on a new view", () => {
     expect(main()).not.toHaveFocus();
     await act(async () => navigate("#/command/some-instance"));
     expect(main()).not.toHaveFocus();
+  });
+
+  it("opens a new view at its top, and keeps the place on a hash change within one", async () => {
+    // A run opened from a step drawer partway down the board landed with its
+    // title under the sticky bar: the window kept the board's scroll.
+    await mountApp();
+    expect(window.scrollTo).not.toHaveBeenCalled();
+    await act(async () => navigate("#/command/some-instance"));
+    expect(window.scrollTo).not.toHaveBeenCalled();
+    await act(async () => navigate("#/run/abc"));
+    expect(window.scrollTo).toHaveBeenCalledExactlyOnceWith(0, 0);
   });
 
   it("says the new page's name in a polite live region", async () => {

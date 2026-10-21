@@ -298,14 +298,37 @@ describe("Fleet", () => {
     expect(add).toBeDisabled();
   });
 
-  it("unpairing names the peer being removed", async () => {
+  it("asks before unpairing, naming the machine and what pairing again takes", async () => {
     const user = userEvent.setup();
     state.fleet = fleetOf(
       [selfMachine(), { peer: peer(), summary: summary({ machineId: "m2" }), isSelf: false }],
       2,
     );
     render(<Fleet />);
-    await user.click(screen.getByRole("button", { name: /unpair/ }));
+    const opener = screen.getByRole("button", { name: /unpair laptop/i });
+    await user.click(opener);
+    expect(opener).toHaveAttribute("aria-expanded", "true");
+    const question = screen.getByRole("group", { name: "Unpair Laptop?" });
+    expect(question).toHaveAccessibleDescription(
+      "Pairing it again needs a new secret, entered on both machines.",
+    );
+    // The safe answer has focus; Keep unpairs nothing and hands focus back.
+    expect(within(question).getByRole("button", { name: "Keep" })).toHaveFocus();
+    await user.click(within(question).getByRole("button", { name: "Keep" }));
+    expect(screen.queryByRole("group", { name: "Unpair Laptop?" })).toBeNull();
+    expect(opener).toHaveFocus();
+    expect(actions.unpair).not.toHaveBeenCalled();
+  });
+
+  it("unpairs the machine once the question is answered", async () => {
+    const user = userEvent.setup();
+    state.fleet = fleetOf(
+      [selfMachine(), { peer: peer(), summary: summary({ machineId: "m2" }), isSelf: false }],
+      2,
+    );
+    render(<Fleet />);
+    await user.click(screen.getByRole("button", { name: /unpair laptop/i }));
+    await user.click(screen.getByRole("button", { name: "Unpair machine" }));
     expect(actions.unpair).toHaveBeenCalledWith("p1");
   });
 

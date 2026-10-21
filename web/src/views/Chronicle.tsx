@@ -50,6 +50,10 @@ const BAR: Record<ChronicleStatus, string> = {
   failed: "bg-fail/25 border-fail/60 text-fail",
   queued: "bg-queue/20 border-queue/50 text-queue",
   idle: "bg-idle/15 border-idle/40 text-idle",
+  // The same neutral grey, at the weight of a bar that did some work, and
+  // dashed: cut short. Identical to idle, the key would show two swatches
+  // no bar could be told apart by.
+  stopped: "border-dashed bg-idle/25 border-idle/60 text-idle",
 };
 
 /**
@@ -85,6 +89,7 @@ const STATUS_LABEL: Record<ChronicleStatus, string> = {
   failed: "Failed",
   working: "Still running",
   queued: "Queued",
+  stopped: "Stopped",
   idle: "Idle",
 };
 
@@ -128,6 +133,12 @@ const STATUS_KEY: LegendItem[] = [
     mark: <Swatch status="queued" />,
     label: STATUS_LABEL.queued,
     description: "Queued.",
+  },
+  {
+    key: "stopped",
+    mark: <Swatch status="stopped" />,
+    label: STATUS_LABEL.stopped,
+    description: "Started, then interrupted, cancelled or stopped before it finished.",
   },
   {
     key: "idle",
@@ -358,6 +369,7 @@ function chronicleStatus(status: string): ChronicleStatus {
   if (status === "failed") return "failed";
   if (status === "succeeded") return "done";
   if (status === "running") return "working";
+  if (status === "interrupted" || status === "cancelled") return "stopped";
   return "idle";
 }
 

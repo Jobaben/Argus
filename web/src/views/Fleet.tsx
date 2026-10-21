@@ -17,6 +17,7 @@ import {
 import { useFleet } from "../useFleet";
 import type { FleetMachine, MachineSummary, PeerStatus } from "../types";
 import { InfoTip } from "../ds/InfoTip";
+import { useConfirm } from "../ds/useConfirm";
 import { HealthCounter } from "../ds/HealthCounter";
 import { loadError } from "../live/loadError";
 
@@ -146,6 +147,7 @@ function MachineCard({ machine, onUnpair }: { machine: FleetMachine; onUnpair: (
   const tone = isSelf ? null : STATUS_COPY[peer.status].tone;
   const name = summary?.label ?? peer.label;
   const critical = summary?.worstIncident != null && /^critical\b/i.test(summary.worstIncident);
+  const confirm = useConfirm();
   return (
     <Card className="relative overflow-hidden">
       {tone === "fail" && (
@@ -170,21 +172,36 @@ function MachineCard({ machine, onUnpair }: { machine: FleetMachine; onUnpair: (
                 seen <TimeAgo iso={peer.lastSeenAt} />
               </span>
             )}
-            {/* Destructive and immediate, but quiet until reached for: three red
-                outlines on a board read as three failures. Red only on hover, and
-                named for its machine, since every card has one. */}
+            {/* Destructive, but quiet until reached for: three red outlines on
+                a board read as three failures. Red only on hover, and named for
+                its machine, since every card has one. */}
             <Button
               size="sm"
               variant="quiet-danger"
               icon="trash"
               title={`Unpair ${name}`}
               aria-label={`unpair ${name}`}
-              onClick={onUnpair}
+              aria-expanded={confirm.armed === "unpair"}
+              onClick={confirm.toggle("unpair")}
             >
               <span className="inline-block first-letter:uppercase">unpair</span>
             </Button>
           </span>
         )}
+        {/* Asked first: the shared secret goes with the pairing, and it was
+            shown once, so pairing again means minting a new one and entering
+            it on both machines. */}
+        {confirm.armed === "unpair" &&
+          confirm.question(
+            {
+              title: `Unpair ${name}?`,
+              detail: "Pairing it again needs a new secret, entered on both machines.",
+              confirm: "Unpair machine",
+              cancel: "Keep",
+              icon: "trash",
+            },
+            onUnpair,
+          )}
       </div>
 
       {!isSelf && (

@@ -83,10 +83,13 @@ function EnvelopeBar({ base, warming }: { base: MetricBaseline; warming: boolean
 function MetricCell({
   metric,
   base,
+  samples,
   warming,
 }: {
   metric: AnomalyMetric;
   base: MetricBaseline | null;
+  /** The envelope's successful runs: none means nothing to learn from yet. */
+  samples: number;
   warming: boolean;
 }) {
   // The label repeats per row only below `lg`; at desktop width the panel's
@@ -94,10 +97,15 @@ function MetricCell({
   // stays for screen readers — a value has to say which metric it is.
   const label = <p className="eyebrow mb-1 lg:sr-only">{METRIC_LABEL[metric]}</p>;
   if (!base) {
+    // Two reasons for no envelope, with different fixes: every run so far
+    // failed (only successes are learned from), or the runtime never sends
+    // this metric at all. "Not reported" for both blamed the runtime.
     return (
       <div className="min-w-0">
         {label}
-        <p className="text-caption text-ink-faint">Not reported</p>
+        <p className="text-caption text-ink-faint">
+          {samples === 0 ? "No successful runs yet" : "Not reported"}
+        </p>
       </div>
     );
   }
@@ -252,10 +260,17 @@ function AnomalyRow({ anomaly }: { anomaly: Anomaly }) {
   );
 }
 
-/** Envelope, three metrics, actions — shared by the header row and every row,
- *  so the columns line up. The action column is a fixed width for the same
- *  reason: an `auto` track would size per row. */
-const ENVELOPE_GRID = "lg:grid-cols-[minmax(0,1.35fr)_repeat(3,minmax(0,1fr))_9.5rem]";
+/** Envelope, three metrics, actions. The panel owns the columns and the
+ *  header and every row take them as a subgrid, so they line up while the
+ *  actions column is only as wide as the widest row's actions: the reset icon,
+ *  or Restore beside it once any row has one. A fixed 9.5rem held Restore's
+ *  room on every install and took it from the names, cut at the part that
+ *  tells two envelopes apart. The name's 2fr hands that room to it: at the
+ *  narrow end of `lg` the metrics keep the width they had, and the name takes
+ *  what the fixed column held. */
+const ENVELOPE_GRID =
+  "lg:grid lg:grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))_auto] lg:gap-x-6";
+const ENVELOPE_ROW = "lg:col-span-full lg:grid lg:grid-cols-subgrid lg:gap-x-6";
 
 /** The reset control's reveal: there on a touch screen, which has no hover to
  *  find it by, and on a desktop under the pointer or the keyboard — so the
@@ -279,7 +294,7 @@ function BaselineRow({
     // Below `lg` the name and the actions share the first line and the metrics
     // take the second; at `lg` everything falls into the table's columns.
     <li
-      className={`group grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-3 px-4 py-3.5 lg:items-center lg:gap-x-6 ${ENVELOPE_GRID}`}
+      className={`group grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-3 px-4 py-3.5 lg:items-center ${ENVELOPE_ROW}`}
     >
       <div className="min-w-0">
         <EnvelopeName name={baseline.name} phase={baseline.scope === "phase"} />
@@ -311,7 +326,13 @@ function BaselineRow({
 
       <div className="col-span-2 row-start-2 grid grid-cols-3 gap-4 lg:contents">
         {METRICS.map((m) => (
-          <MetricCell key={m} metric={m} base={baseline[m]} warming={warming} />
+          <MetricCell
+            key={m}
+            metric={m}
+            base={baseline[m]}
+            samples={baseline.samples}
+            warming={warming}
+          />
         ))}
       </div>
 
@@ -592,10 +613,12 @@ export function WatchtowerPanel() {
                 </InfoTip>
               }
             >
-              <div className="overflow-hidden rounded-tile border border-line bg-surface shadow-raised">
+              <div
+                className={`overflow-hidden rounded-tile border border-line bg-surface shadow-raised ${ENVELOPE_GRID}`}
+              >
                 <div
                   aria-hidden="true"
-                  className={`hidden gap-x-6 border-b border-line bg-ground-2/60 px-4 py-2 lg:grid ${ENVELOPE_GRID}`}
+                  className={`hidden border-b border-line bg-ground-2/60 px-4 py-2 ${ENVELOPE_ROW}`}
                 >
                   <span className="eyebrow">Envelope</span>
                   {METRICS.map((m) => (
@@ -605,7 +628,7 @@ export function WatchtowerPanel() {
                   ))}
                   <span />
                 </div>
-                <ul className="divide-y divide-line">
+                <ul className={`divide-y divide-line ${ENVELOPE_ROW}`}>
                   {report.baselines.map((b) => (
                     <BaselineRow
                       key={b.key}

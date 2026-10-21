@@ -15,6 +15,7 @@ import {
   chipClass,
   Icon,
 } from "../ds";
+import { useConfirm } from "../ds/useConfirm";
 import { loadError } from "../live/loadError";
 
 /** An approve, reject or remove the server refused, and who it was for. */
@@ -39,6 +40,10 @@ function UserItem({
   onReject: (u: UserRow) => Promise<void>;
 }) {
   const pending = user.status === "pending";
+  // Reject and Remove both delete the account, and Remove also ends its
+  // sessions; neither can be undone, so each asks first. Approve stays one
+  // press: what it grants, Remove can take back.
+  const confirm = useConfirm();
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-2.5 px-4 py-3">
       <span
@@ -85,7 +90,8 @@ function UserItem({
             variant="quiet-danger"
             icon={pending ? "close" : "trash"}
             aria-label={`${pending ? "Reject" : "Remove"} ${user.username}`}
-            onClick={() => void onReject(user)}
+            aria-expanded={confirm.armed === "reject"}
+            onClick={confirm.toggle("reject")}
           >
             {pending ? "Reject" : "Remove"}
           </Button>
@@ -102,6 +108,25 @@ function UserItem({
           </Button>
         )}
       </div>
+      {confirm.armed === "reject" &&
+        confirm.question(
+          pending
+            ? {
+                title: `Reject ${user.username}'s request?`,
+                detail: "The account is deleted, so the name can be registered again.",
+                confirm: "Reject request",
+                cancel: "Keep",
+                icon: "close",
+              }
+            : {
+                title: `Remove ${user.username}?`,
+                detail: `The account is deleted, and anyone signed in as ${user.username} is signed out.`,
+                confirm: "Remove account",
+                cancel: "Keep",
+                icon: "trash",
+              },
+          () => void onReject(user),
+        )}
       {refusal && (
         <p
           role="alert"

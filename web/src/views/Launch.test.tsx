@@ -200,8 +200,103 @@ describe("Launch", () => {
     const user = userEvent.setup();
     render(<Launch />);
     await user.click(screen.getByRole("button", { name: /Quick audit/, expanded: false }));
-    expect(await screen.findByText("lint found 3 errors")).toBeInTheDocument();
+    expect(await screen.findByText("Lint found 3 errors")).toBeInTheDocument();
     expect(screen.queryByText(/ARGUS_OUTCOME/)).not.toBeInTheDocument();
+  });
+
+  it("tells a failed run's reason as a sentence in the reading face, in the failure style", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ log: "" }) } as Response),
+    );
+    mockState.runs = [
+      run({ status: "failed", exitCode: 1, resultSummary: null, error: "exit code 1" }),
+    ];
+    const user = userEvent.setup();
+    render(<Launch />);
+    await user.click(screen.getByRole("button", { name: /Quick audit/, expanded: false }));
+    // It read "exit code 1", lower-case and in mono, as though it were a value.
+    const reason = await screen.findByText("Exit code 1");
+    expect(reason).not.toHaveClass("font-mono");
+    expect(reason).toHaveClass("text-fail-ink");
+    expect(reason.closest("[class*=border-fail]")).not.toBeNull();
+  });
+
+  it("tells a stopped run's reason in the stopped grey, not the failure red", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ log: "" }) } as Response),
+    );
+    mockState.runs = [
+      run({
+        status: "interrupted",
+        exitCode: null,
+        resultSummary: null,
+        error: "interrupted: Argus restarted while this run was in flight",
+      }),
+    ];
+    const user = userEvent.setup();
+    render(<Launch />);
+    const row = screen.getByRole("button", { name: /Quick audit/, expanded: false });
+    expect(row).toHaveTextContent("Stopped");
+    await user.click(row);
+    // Under a grey Stopped pill it was a red box with an alert icon.
+    const reason = await screen.findByText(
+      "Interrupted: Argus restarted while this run was in flight",
+    );
+    expect(reason).toHaveClass("text-ink-dim");
+    expect(reason).not.toHaveClass("font-mono");
+    expect(reason.closest("[class*=fail]")).toBeNull();
+  });
+
+  it("says a process that exited non-zero exited so, whatever its envelope said", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          log: JSON.stringify({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            num_turns: 3,
+          }),
+        }),
+      } as Response),
+    );
+    mockState.runs = [run({ status: "failed", exitCode: 1, error: "exit code 1" })];
+    const user = userEvent.setup();
+    render(<Launch />);
+    await user.click(screen.getByRole("button", { name: /Quick audit/, expanded: false }));
+    // "success" is the CLI's subtype; it read "exited cleanly — the run failed
+    // its outcome check all the same" over a process that exited 1.
+    expect(await screen.findByText("exited with code 1")).toBeInTheDocument();
+    expect(screen.queryByText(/exited cleanly/)).toBeNull();
+    expect(screen.queryByText(/failed its outcome check/)).toBeNull();
+  });
+
+  it("explains a clean exit under a failed outcome", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          log: JSON.stringify({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            num_turns: 3,
+          }),
+        }),
+      } as Response),
+    );
+    // Exited 0, but the agent's outcome was failed: the pill says Failed.
+    mockState.runs = [run({ status: "succeeded", exitCode: 0, outcome: "failed" })];
+    const user = userEvent.setup();
+    render(<Launch />);
+    await user.click(screen.getByRole("button", { name: /Quick audit/, expanded: false }));
+    expect(await screen.findByText(/^exited cleanly/)).toBeInTheDocument();
+    expect(screen.getByText("The run failed its outcome check all the same.")).toBeInTheDocument();
   });
 
   it("words an expanded run's log as the step drawer does, without the row's own figures", async () => {

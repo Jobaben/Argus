@@ -414,7 +414,55 @@ describe("Briefing — numbers that agree", () => {
       />,
     );
     expect(screen.queryByText(/New issues/)).not.toBeInTheDocument();
-    expect(screen.getAllByText("timeout after 42s")).toHaveLength(1);
+    expect(screen.getAllByText("Timeout after 42s")).toHaveLength(1);
+  });
+
+  it("capitalises an issue's signature as #/issues does, and leaves names as typed", () => {
+    const newIssue = {
+      fingerprint: "1234123412341234",
+      title: "interrupted: Argus restarted while the run was in flight",
+      count: 1,
+      firstSeen: "2026-07-11T02:05:00.000Z",
+      lastSeen: "2026-07-11T02:05:00.000Z",
+      schedules: ["Nightly triage"],
+      state: "open" as const,
+      members: ["abcdef0123456789"],
+      failureClass: null,
+      lastRunId: "r1",
+    };
+    render(
+      <Briefing
+        briefing={briefing({
+          attention: [
+            {
+              kind: "issue-open",
+              id: "abcdefabcdefabcd",
+              title: "exit code 1",
+              detail: "2× across Nightly triage",
+              at: "2026-07-11T04:05:00.000Z",
+            },
+            {
+              kind: "monitor-down",
+              id: "s9",
+              title: "nightly-audit",
+              detail: "expected a run, none arrived",
+              at: "2026-07-11T04:00:00.000Z",
+            },
+          ],
+          attentionCount: 2,
+          window: win({ totalRuns: 1, newIssues: [newIssue] }),
+        })}
+        loading={false}
+        error={null}
+        ack={async () => {}}
+      />,
+    );
+    expect(screen.getByText("Exit code 1")).toHaveAttribute("title", "Exit code 1");
+    expect(screen.queryByText("exit code 1")).not.toBeInTheDocument();
+    const row = screen.getByText("Interrupted: Argus restarted while the run was in flight");
+    expect(row.closest("a")).toHaveAttribute("href", "#/issues");
+    // A schedule's name is its owner's word, not a clause from the server.
+    expect(screen.getByText("nightly-audit")).toBeInTheDocument();
   });
 });
 

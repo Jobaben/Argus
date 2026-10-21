@@ -43,8 +43,17 @@ function runStatus(run: Run): ChronicleStatus {
       return "done";
     case "failed":
       return "failed";
+    // Started and cut short. "Idle" over "interrupted: Argus restarted…" said
+    // the run never did anything.
+    case "interrupted":
+    case "cancelled":
+      return "stopped";
+    // Never ran. A status this build doesn't know lands here too: a Vault
+    // row's status is a string cast to the union, and a span with no status
+    // would draw unclassed under an "undefined" tooltip.
+    case "skipped":
     default:
-      return "idle"; // skipped / interrupted / cancelled
+      return "idle";
   }
 }
 
@@ -54,9 +63,10 @@ function agentStatus(agent: Agent): ChronicleStatus {
     case "done":
     case "failed":
     case "queued":
+    case "stopped":
       return agent.status;
     default:
-      return "idle"; // idle / stopped / unknown
+      return "idle"; // idle / unknown
   }
 }
 

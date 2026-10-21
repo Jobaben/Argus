@@ -137,6 +137,9 @@ function cardDetail(detail: string): string {
 
 function AttentionCard({ item }: { item: AttentionItem }) {
   const meta = ATTENTION_KINDS[item.kind];
+  // An issue's title is its signature ("exit code 1"), capitalised as #/issues
+  // shows it. The other kinds' titles are names, kept as their owners typed them.
+  const title = item.kind === "issue-open" ? sentenceStart(item.title) : item.title;
   const detail = cardDetail(item.detail);
   const beat = useSyncedDelay(DURATION.pulse);
   // Only a gate is *happening* — someone's pipeline is paused on you right now
@@ -196,9 +199,9 @@ function AttentionCard({ item }: { item: AttentionItem }) {
             </div>
             <p
               className="mt-2 line-clamp-2 break-words text-heading font-semibold text-ink"
-              title={item.title}
+              title={title}
             >
-              {item.title}
+              {title}
             </p>
             {/* Two lines, as on the rows below: the detail is the reason, and
                 one line cut it to a few words on a phone. */}
@@ -507,7 +510,7 @@ export default function Briefing({
                 href="#/issues"
                 icon="layers"
                 iconClass={i.state === "open" ? "text-fail" : "text-ink-faint"}
-                title={<span title={i.title}>{i.title}</span>}
+                title={<span title={sentenceStart(i.title)}>{sentenceStart(i.title)}</span>}
                 // A count only when it is news, as on Failures: "×1" said nothing.
                 trailing={i.count > 1 ? <RunCount n={i.count} /> : undefined}
                 detail={

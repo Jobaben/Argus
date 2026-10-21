@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   LOG_CAP,
@@ -170,6 +170,30 @@ describe("NotificationCenter", () => {
     expect(bell).toHaveFocus();
   });
 
+  it("closes when Tab leaves it, leaving focus on the page where it went", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <NotificationCenter />
+        <button type="button">On the page</button>
+      </>,
+    );
+    const bell = screen.getByRole("button", { name: /notifications/i });
+    await user.click(bell);
+    // From the bell into the panel is still inside: it stays open.
+    await user.tab();
+    expect(screen.getByRole("link", { name: "Briefing" })).toHaveFocus();
+    expect(screen.getByRole("dialog", { name: "Notifications" })).toBeInTheDocument();
+
+    // Past the panel's one link and on to the page: the panel goes, and does
+    // not pull focus back to the bell.
+    await user.tab();
+    const page = screen.getByRole("button", { name: "On the page" });
+    expect(page).toHaveFocus();
+    expect(bell).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("leaves focus where it is when Escape closes it from out on the page", async () => {
     const user = userEvent.setup();
     render(
@@ -178,12 +202,12 @@ describe("NotificationCenter", () => {
         <button type="button">On the page</button>
       </>,
     );
-    await user.click(screen.getByRole("button", { name: /notifications/i }));
-    // Past the panel's one link and on to the page, with the panel still open.
-    await user.tab();
-    await user.tab();
     const page = screen.getByRole("button", { name: "On the page" });
-    expect(page).toHaveFocus();
+    page.focus();
+    // Opened by a click that leaves focus where it was, as Safari's does: a
+    // button there takes no focus from a click.
+    fireEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(page).toHaveFocus();
@@ -202,10 +226,10 @@ describe("NotificationCenter", () => {
         />
       </>,
     );
-    await user.click(screen.getByRole("button", { name: /notifications/i }));
-    await user.tab();
-    await user.tab();
-    expect(screen.getByRole("textbox", { name: "Claims Escape" })).toHaveFocus();
+    const field = screen.getByRole("textbox", { name: "Claims Escape" });
+    field.focus();
+    // Opened without moving focus (see above), so the Escape starts there.
+    fireEvent.click(screen.getByRole("button", { name: /notifications/i }));
     await user.keyboard("{Escape}");
     expect(screen.getByRole("dialog", { name: "Notifications" })).toBeInTheDocument();
   });

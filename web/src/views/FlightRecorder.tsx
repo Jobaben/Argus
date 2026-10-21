@@ -46,6 +46,7 @@ import {
   trackTime,
 } from "./recorderTrack";
 import { firstProseLine, withoutOutcome } from "./outcome";
+import { reasonText } from "./text";
 import { loadError } from "../live/loadError";
 
 /**
@@ -128,6 +129,58 @@ function isError(event: RecorderEvent): boolean {
 
 const FAILURE_MESSAGE_MAX = 240;
 
+/** The verdict a closing marker's label opens with: "Failed — <why>" on a run
+ *  that failed, "Stopped — <why>" on one that stopped short. */
+const CLOSING_PREFIX = /^(?:Failed|Stopped)\s*[—–-]\s*/i;
+
+/** Text as compared for repetition: without that prefix or a verdict, in one
+ *  case and spacing. */
+function loose(text: string): string {
+  return reasonText(text.replace(CLOSING_PREFIX, "")).replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * A stopped run's closing marker as a sentence ("Interrupted: Argus
+ * restarted…"), or null for any other event. The server labels it "Stopped —
+ * <why>" on an end event; one that predates that made it an error labelled
+ * "Failed — <why>", which put a red "Failed — interrupted: …" with an Error
+ * chip under a grey Stopped pill. A bare "Run finished" has no reason to tell.
+ */
+function stopReason(event: RecorderEvent): string | null {
+  if (event.lane !== "agent") return null;
+  const said = event.label.replace(CLOSING_PREFIX, "");
+  const marker = event.kind === "error" || (event.kind === "end" && said !== event.label);
+  return marker ? reasonText(said) || "Stopped" : null;
+}
+
+/**
+ * The run's closing marker, told as the run's status tells it: a stopped run's
+ * as a plain end, its reason a sentence. A run that exited 0 but failed its
+ * outcome check closed on "Failed — exit code 0", naming the one thing that
+ * went right.
+ */
+function closingEvent(event: RecorderEvent, stopped: boolean): RecorderEvent {
+  if (stopped) {
+    const reason = stopReason(event);
+    return reason == null ? event : { ...event, kind: "end", label: reason };
+  }
+  const exitedClean =
+    event.lane === "agent" &&
+    event.kind === "error" &&
+    /^exit code 0$/i.test(event.label.replace(CLOSING_PREFIX, "").trim());
+  return exitedClean ? { ...event, label: "Failed its outcome check" } : event;
+}
+
+/**
+ * Where a stopped run stopped: its closing marker, the last event, rather than
+ * the last tool error before it, which is not why a run was interrupted. Null
+ * when the run left no marker to say why.
+ */
+function stopIndex(events: RecorderEvent[]): number | null {
+  const last = events.length - 1;
+  return last >= 0 && stopReason(events[last]) != null ? last : null;
+}
+
 /**
  * What the failure strip says: the failing event's label — minus a leading
  * "Failed —", which the strip's own badge already says — and the first line of
@@ -136,7 +189,7 @@ const FAILURE_MESSAGE_MAX = 240;
  * carries is, when the detail has nothing else to say.
  */
 function failureSummary(event: RecorderEvent): { subject: string; message: string } {
-  const stripped = event.label.replace(/^Failed\s*[—–-]\s*/, "").trim();
+  const stripped = event.label.replace(CLOSING_PREFIX, "").trim();
   const subject = stripped ? stripped[0].toUpperCase() + stripped.slice(1) : event.label;
   const first = firstProseLine(event.detail);
   const clipped =
@@ -352,7 +405,10 @@ function NowPanel({ event }: { event: RecorderEvent | null }) {
   // protocol line is for the scheduler: the event's label already says how it
   // ended. Events read from the transcript are shown as they were written.
   const terminal = event?.lane === "agent" && (event.kind === "end" || event.kind === "error");
-  const detail = terminal ? withoutOutcome(event.detail) : event?.detail;
+  const full = terminal ? withoutOutcome(event.detail) : event?.detail;
+  // A box that only repeats the heading goes: "Failed — exit code 1" sat over
+  // a code box reading "exit code 1".
+  const detail = full && event && loose(full) !== loose(event.label) ? full : null;
   return (
     <div className="min-h-[10rem] rounded-tile border border-line bg-surface p-4 shadow-raised">
       <div className="mb-3 flex items-center justify-between gap-3">
@@ -633,8 +689,14 @@ export default function FlightRecorder() {
 
   // Referentially stable when there is no recording: a fresh `[]` per render
   // would invalidate every memo below on every frame of playback.
-  const events = recording?.events ?? NO_EVENTS;
-  const failureIndex = recording?.failureIndex ?? null;
+  const recorded = recording?.events ?? NO_EVENTS;
+  // Interrupted or cancelled: grey Stopped in the header, so not a failure on
+  // the strip, the track or the list below it either.
+  const stopped = recording != null && runDsStatus(recording) === "stopped";
+  const events = useMemo(() => recorded.map((e) => closingEvent(e, stopped)), [recorded, stopped]);
+  // On a stopped run, where it stopped: everything that points at "the
+  // failure" (the strip, F, the mark on the scrubber) points there instead.
+  const failureIndex = stopped ? stopIndex(recorded) : (recording?.failureIndex ?? null);
   const live = recording?.status === "running";
   // A running run's track ends at "now", which the server can only say as of
   // its last answer — and a quiet run may not be refetched for minutes. Between
@@ -998,17 +1060,38 @@ export default function FlightRecorder() {
           as the last row of the event list. */}
       {failure && failureEvent && (
         <div className="mb-6">
-          <AlertStrip
-            tone="failed"
-            subject={failure.subject}
-            message={failure.message}
-            when={`at ${trackTime(failureEvent.atMs)}`}
-            action={
+          {stopped ? (
+            // A run that stopped short is not news the way a failure is: the
+            // same strip, in the Stopped grey, without the pulse.
+            <div
+              role="status"
+              className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 rounded-tile border border-line bg-surface px-4 py-3"
+            >
+              <StatusPill status="stopped" />
+              <span className="min-w-0 flex-1 basis-48 text-small">
+                <b className="font-semibold text-ink">{failure.subject}</b>{" "}
+                <span className="break-words text-ink-dim">{failure.message}</span>
+              </span>
+              <span className="whitespace-nowrap text-caption text-ink-dim">
+                at {trackTime(failureEvent.atMs)}
+              </span>
               <Button size="sm" onClick={jumpToFailure}>
-                Jump to failure
+                Jump to the end
               </Button>
-            }
-          />
+            </div>
+          ) : (
+            <AlertStrip
+              tone="failed"
+              subject={failure.subject}
+              message={failure.message}
+              when={`at ${trackTime(failureEvent.atMs)}`}
+              action={
+                <Button size="sm" onClick={jumpToFailure}>
+                  Jump to failure
+                </Button>
+              }
+            />
+          )}
         </div>
       )}
 
@@ -1072,7 +1155,7 @@ export default function FlightRecorder() {
                 </span>
                 {failureIndex != null && (
                   <span className="inline-flex items-center gap-1.5">
-                    <kbd className="kbd">F</kbd> failure
+                    <kbd className="kbd">F</kbd> {stopped ? "end" : "failure"}
                   </span>
                 )}
               </p>
@@ -1105,8 +1188,10 @@ export default function FlightRecorder() {
                 {failurePct != null && (
                   <span
                     aria-hidden="true"
-                    title="Failure"
-                    className="pointer-events-none absolute top-1/2 h-3.5 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-fail"
+                    title={stopped ? "Stopped" : "Failure"}
+                    className={`pointer-events-none absolute top-1/2 h-3.5 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full ${
+                      stopped ? "bg-ink-dim" : "bg-fail"
+                    }`}
                     style={{ left: `${failurePct}%` }}
                   />
                 )}

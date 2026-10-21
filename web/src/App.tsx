@@ -266,10 +266,16 @@ function Dashboard() {
   // nav tab that was clicked, a field the new view focused itself) is left
   // where it is. Compared against the last view rather than skipped once, so
   // a development double-run of the effect does not take focus on load.
+  //
+  // A new view also opens at its top. The window kept the old view's scroll,
+  // so a run opened from a step drawer partway down the board landed with its
+  // title under the sticky bar. Only here, on a change of view: a hash change
+  // within one (a drawer opening) never reaches this, and keeps its place.
   const shownRef = useRef(active);
   useEffect(() => {
     if (shownRef.current === active) return;
     shownRef.current = active;
+    window.scrollTo(0, 0);
     const focused = document.activeElement;
     if (!focused || focused === document.body || !focused.isConnected) {
       document.getElementById("main")?.focus({ preventScroll: true });
@@ -414,8 +420,11 @@ function Dashboard() {
         return <FlightRecorder />;
       case "command":
       default:
-        // The Briefing's attention list is already here for the nav badge; the
-        // board's "Needs you" lists the same set, so the two counts agree.
+        // The Briefing's attention list is already here for the nav badge, so
+        // "Needs you" can list what the board has no card for. The two counts
+        // are not the same number: the badge is the Briefing's count, and
+        // "Needs you" adds the board's failed pipelines and folds an issue into
+        // the failed pipeline or monitor row it repeats.
         return <CommandCenter attention={briefingState.briefing?.attention ?? null} />;
     }
   };

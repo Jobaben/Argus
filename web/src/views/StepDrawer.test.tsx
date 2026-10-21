@@ -165,6 +165,7 @@ describe("StepDrawer", () => {
   it("words the log's envelope as the process's, without the figures shown above it", async () => {
     stubRun({
       id: "run_0003",
+      exitCode: 0,
       log: JSON.stringify({
         type: "result",
         subtype: "success",
@@ -189,6 +190,23 @@ describe("StepDrawer", () => {
     // stay, in the app's own format and the reading face.
     expect(screen.getAllByText("Cost")).toHaveLength(1);
     expect(screen.getByText("115.6k in / 25.4k out")).not.toHaveClass("font-mono");
+  });
+
+  it("says a non-zero exit as the exit code, whatever the CLI's envelope said", async () => {
+    // The envelope's "success" is the CLI's verdict on its session; this
+    // process exited 1, and the drawer said "exited cleanly — the run failed
+    // its outcome check all the same".
+    stubRun({
+      id: "run_0003",
+      exitCode: 1,
+      log: JSON.stringify({ type: "result", subtype: "success", is_error: false, num_turns: 4 }),
+    });
+    render(
+      <StepDrawer selection={selection({ step: step({ status: "failed" }) })} onClose={vi.fn()} />,
+    );
+    expect(await screen.findByText("exited with code 1")).toBeInTheDocument();
+    expect(screen.queryByText(/exited cleanly/)).toBeNull();
+    expect(screen.queryByText(/failed its outcome check/)).toBeNull();
   });
 
   it("shows the agent's summary without the protocol line it ends with", async () => {
