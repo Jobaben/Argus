@@ -6,6 +6,7 @@ import type { AppendOutcome } from "../transitionLog/store.js";
 import type {
   AbortCause,
   TransitionRecord,
+  GateActionRefusal,
   GateDecision,
   GateDecisionChannel,
   GateDecisionConditionBasis,
@@ -25,6 +26,7 @@ import type {
 import type { PipelineProcessHandle } from "../pipelineProcess.js";
 import type { Run } from "../sources/scheduleTypes.js";
 import type {
+  InstanceParentRef,
   PhaseDef,
   PhaseStep,
   RetryableClass,
@@ -173,6 +175,12 @@ export interface EngineDeps {
    * failing at exactly that point. Never set in production.
    */
   gateEffectProbe?: (point: GateEffectPoint, instanceId: string) => Promise<void> | void;
+  /**
+   * Test seam for deterministic fault injection in spawn phases: called at
+   * each {@link ChildEffectPoint}. A probe that throws simulates the process
+   * failing at exactly that point. Never set in production.
+   */
+  childEffectProbe?: (point: ChildEffectPoint, instanceId: string) => Promise<void> | void;
   /** The environment step env policies are applied to. Defaults to process.env. */
   parentEnv?: NodeJS.ProcessEnv;
   /**
@@ -214,8 +222,11 @@ export interface EngineDeps {
 export interface ActionResult {
   ok: boolean;
   code: number;
-  /** Human-readable reason on the failure paths (404/409), for surfacing to a client. */
+  /** Human-readable reason on the failure paths (400/404/409/500), for surfacing to a client. */
   error?: string;
+  /** Machine-readable reason on the refusals a client acts on; the HTTP reply
+   *  carries it as `code`. */
+  errorCode?: GateActionRefusal;
 }
 
 /** The effect boundaries {@link EngineDeps.gateEffectProbe} is called at. */
@@ -237,6 +248,48 @@ export type GateEffectPoint =
   | "approve:realizations-settled"
   | "approve:saved";
 
+/**
+ * The effect boundaries {@link EngineDeps.childEffectProbe} is called at:
+ * `spawn:planned` (after the save that minted child ids, before any start is
+ * queued); `spawn:starting` (in a child start, before `startInstance`);
+ * `spawn:started` (after `startInstance` created or found the child);
+ * `spawn:reviving` (before a child's revise); `spawn:cascade` (before each
+ * child abort of a cascade).
+ */
+export type ChildEffectPoint =
+  "spawn:planned" | "spawn:starting" | "spawn:started" | "spawn:reviving" | "spawn:cascade";
+
+/** What starts an instance: the firing payload, and, for a spawned child, the
+ *  id its parent minted, the parent, and the ref its worktrees are cut from. */
+export interface StartFiring {
+  /** The webhook body, the chained source's outcome, or the spawned task's payload. */
+  triggerPayload?: unknown;
+  chainedFrom?: string;
+  /** Start with this id. An instance that already has it is returned as it
+   *  is; a file under it that cannot be read is never overwritten. */
+  instanceId?: string;
+  parent?: InstanceParentRef;
+  workspaceBase?: string;
+}
+
+/**
+ * What `startInstance` found or did:
+ * - `started`: created now;
+ * - `existing`: `firing.instanceId` already exists, returned untouched;
+ * - `busy`: `overlapPolicy: "skip"` and another instance of the pipeline is live;
+ * - `no-pipeline`: the pipeline does not exist;
+ * - `unreadable`: a file exists under `firing.instanceId` but cannot be read, or
+ *   belongs to another pipeline;
+ * - `not-wanted`: the caller's `stillWanted`, asked under the starts lock, said no.
+ */
+export type StartOutcome =
+  | { kind: "started"; instance: PipelineInstance }
+  | { kind: "existing"; instance: PipelineInstance }
+  | { kind: "busy" }
+  | { kind: "no-pipeline" }
+  | { kind: "unreadable"; reason: string }
+  | { kind: "not-wanted" };
+
 /** Which paused phase a gate action means, when more than one could be. */
 export interface GateTarget {
   phaseId?: string;
@@ -253,6 +306,13 @@ export interface GateTarget {
    * `unspecified` / `unknown` rather than guessed.
    */
   source?: OperatorSource;
+  /**
+   * Set only by the engine itself when it carries out a decision on this
+   * instance's parent (a revise of the parent's spawn phase reviving this
+   * child): recorded with mechanism `parent-decision` and `parentDecisionId`,
+   * and exempt from the parent check. Never from a request.
+   */
+  byParent?: { decisionId?: string };
 }
 
 /** A person-facing channel's account of who asked. Operators only: an
@@ -315,9 +375,10 @@ export interface Engine {
   start(
     pipelineId: string,
     trigger?: PipelineInstance["trigger"],
-    /** Set for `trigger: "webhook"` (the request body) or `"chained"` (the
-     *  source instance's outcome) — omitted for `"manual"`/`"scheduled"`. */
-    firing?: { triggerPayload?: unknown; chainedFrom?: string },
+    /** Set for `"webhook"` (the request body), `"chained"` (the source
+     *  instance's outcome) or `"spawned"` (the task payload, the parent, the
+     *  id it minted and the base) — omitted for `"manual"`/`"scheduled"`. */
+    firing?: StartFiring,
   ): Promise<PipelineInstance | null>;
   onSignal(instanceId: string, signal: PipelineSignal): Promise<ActionResult>;
   /** Open a gate. `phaseId` names which paused phase when a fan-out has more
@@ -332,10 +393,12 @@ export interface Engine {
   /** Send a paused phase back to its agent with the human's note. */
   revise(instanceId: string, note?: string, options?: GateTarget): Promise<ActionResult>;
   /** Stop the instance. `cause` records why, when the operator did not
-   *  choose this instance itself (see `AbortCause`). */
+   *  choose this instance itself (see `AbortCause`); `byParent` is set only
+   *  by the engine, carrying out a decision on a spawned child's parent (see
+   *  {@link GateTarget.byParent}). */
   abort(
     instanceId: string,
-    options?: { source?: OperatorSource; cause?: AbortCause },
+    options?: { source?: OperatorSource; cause?: AbortCause; byParent?: { decisionId?: string } },
   ): Promise<ActionResult>;
   /**
    * Run `work` while no instance of the pipeline can be created: a `start`

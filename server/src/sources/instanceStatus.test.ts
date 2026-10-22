@@ -4,6 +4,7 @@ import {
   appliesResults,
   hasWaitingGate,
   inFlight,
+  isLiveTask,
   isTerminal,
   liveStatus,
   pendingRetry,
@@ -89,4 +90,66 @@ test("inFlight: something moves without a person", () => {
     false,
     "an ended instance never moves",
   );
+});
+
+test("inFlight: a spawn phase whose children wait on a person is not in flight", () => {
+  const spawning = (...states: string[]) => ({
+    status: "running" as const,
+    phases: [
+      phase("succeeded"),
+      phase("running", {
+        children: { tasks: states.map((state, i) => ({ key: `t${i}`, state })) },
+      }),
+    ],
+  });
+  assert.equal(
+    inFlight(spawning("awaiting-approval", "pending")),
+    false,
+    "every live child waits at its own gate",
+  );
+  assert.equal(inFlight(spawning("running")), true, "a child runs");
+  assert.equal(inFlight(spawning("planned")), true, "a start is owed");
+  assert.equal(inFlight(spawning("reviving")), true, "a revive is owed");
+  assert.equal(
+    inFlight(spawning("awaiting-approval", "running")),
+    true,
+    "one child waits, another runs",
+  );
+  assert.equal(inFlight(spawning("succeeded", "pending")), true, "a plan is owed");
+  assert.equal(
+    inFlight({ status: "running", phases: [phase("succeeded"), phase("running")] }),
+    true,
+    "a running phase without children",
+  );
+  assert.equal(
+    inFlight({
+      status: "running",
+      phases: [
+        phase("running", { children: { tasks: [{ key: "a", state: "awaiting-approval" }] } }),
+        phase("running"),
+      ],
+    }),
+    true,
+    "a sibling phase runs beside the waiting children",
+  );
+  assert.equal(
+    inFlight({
+      status: "running",
+      phases: [
+        phase("running", { children: { tasks: [{ key: "a", state: "awaiting-approval" }] } }),
+        phase("failed", { retryAt: "2026-10-13T12:00:00.000Z" }),
+      ],
+    }),
+    true,
+    "a retry is due beside the waiting children",
+  );
+});
+
+test("isLiveTask: a task that holds one of its phase's slots", () => {
+  for (const s of ["planned", "reviving", "running", "awaiting-approval"] as const) {
+    assert.equal(isLiveTask(s), true, `${s} is live`);
+  }
+  for (const s of ["pending", "succeeded", "failed", "aborted", "blocked"] as const) {
+    assert.equal(isLiveTask(s), false, `${s} is not live`);
+  }
 });

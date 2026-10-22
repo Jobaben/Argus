@@ -29,9 +29,15 @@ import {
   type LogReading,
 } from "./fold.js";
 import { appendTransitionRecord, readTransitionLog, transitionLogPath } from "./store.js";
+import { decidedChildren, owedEffects } from "./effects.js";
 import { atomicWriteFileDurable } from "../sources/atomicWrite.js";
 import { pruneInstances, writeInstance } from "../sources/instances.js";
-import type { PipelineInstance, TransitionRecord } from "@argus/contracts";
+import type {
+  PhaseProgress,
+  PipelineInstance,
+  SpawnTask,
+  TransitionRecord,
+} from "@argus/contracts";
 
 let home: string;
 beforeEach(() => {
@@ -124,6 +130,32 @@ function advanced(base: PipelineInstance): PipelineInstance {
   next.phases[1].status = "running";
   next.updatedAt = "2026-10-04T12:00:05.000Z";
   return next;
+}
+
+/** A running spawn phase `tasks` (no steps), with `tasks` as its task list
+ *  when given. */
+function spawnPhase(tasks?: SpawnTask[], over: Partial<PhaseProgress> = {}): PhaseProgress {
+  return {
+    id: "tasks",
+    name: "Tasks",
+    gated: false,
+    status: "running",
+    steps: [],
+    attempt: 2,
+    retries: 0,
+    payload: null,
+    ...(tasks
+      ? {
+          children: {
+            pipelineId: "task-loop",
+            source: { phaseId: "a", attempt: 0 },
+            maxParallel: 1,
+            tasks,
+          },
+        }
+      : {}),
+    ...over,
+  };
 }
 
 // ── projection ───────────────────────────────────────────────────────────────
@@ -221,6 +253,103 @@ test("the status view covers pipeline statuses only, and names each change", () 
   assert.deepEqual(statusChanges(before, statusView(payloadOnly)), []);
 });
 
+test("the status view covers spawn tasks: each task's child and state, by position", () => {
+  const at = (task: SpawnTask) => statusView(instance({ phases: [spawnPhase([task])] }));
+  const before = at({ key: "A", state: "pending" });
+  assert.equal(before["child:tasks#0"], "-|pending", "no child yet");
+  const after = at({ key: "A", state: "running", instanceId: "c-1" });
+  assert.equal(after["child:tasks#0"], "c-1|running");
+  assert.deepEqual(statusChanges(before, after), ["child:tasks#0: -|pending → c-1|running"]);
+  // Why a start waits is not a status change.
+  const planned = at({ key: "A", state: "planned", instanceId: "c-1" });
+  const deferred = at({
+    key: "A",
+    state: "planned",
+    instanceId: "c-1",
+    deferred: { reason: "the spend budget is exceeded", at: "t" },
+  });
+  assert.deepEqual(statusChanges(planned, deferred), [], "deferred alone is not a status");
+});
+
+// ── owed effects ─────────────────────────────────────────────────────────────
+
+test("owed effects name a spawn phase's plan, its starts and its revives", () => {
+  const owed = (phase: PhaseProgress) => owedEffects(instance({ phases: [phase] }));
+  assert.deepEqual(
+    owed(spawnPhase()),
+    [{ kind: "spawn", phaseId: "tasks", attempt: 2, action: "plan" }],
+    "no task list yet: building it is owed",
+  );
+  assert.deepEqual(
+    owed(
+      spawnPhase([
+        { key: "A", state: "planned", instanceId: "c-a" },
+        { key: "B", state: "reviving", instanceId: "c-b", reviveDecisionId: "GD-1" },
+        { key: "C", state: "pending" },
+      ]),
+    ),
+    [
+      { kind: "spawn", phaseId: "tasks", attempt: 2, action: "start", instanceId: "c-a" },
+      { kind: "spawn", phaseId: "tasks", attempt: 2, action: "revive", instanceId: "c-b" },
+    ],
+    "a planned child's start and a reviving child's revive; no slot for C",
+  );
+  assert.deepEqual(
+    owed(
+      spawnPhase([
+        { key: "A", state: "succeeded", instanceId: "c-a" },
+        { key: "B", state: "pending", dependsOn: [0] },
+      ]),
+    ),
+    [{ kind: "spawn", phaseId: "tasks", attempt: 2, action: "plan" }],
+    "a ready task owes a plan",
+  );
+  const paused = spawnPhase(
+    [
+      { key: "A", state: "failed", instanceId: "c-a" },
+      { key: "B", state: "blocked", dependsOn: [0] },
+    ],
+    { status: "awaiting-approval", pause: "children" },
+  );
+  assert.deepEqual(owed(paused), [], "a phase paused at children owes nothing");
+  assert.deepEqual(
+    owedEffects(instance()).filter((e) => e.kind === "spawn"),
+    [],
+    "a phase with steps is not a spawn phase",
+  );
+});
+
+test("decidedChildren names the children of a spawn phase that is over", () => {
+  const tasks: SpawnTask[] = [
+    { key: "A", state: "succeeded", instanceId: "c-a" },
+    { key: "B", state: "running", instanceId: "c-b", previousInstanceIds: ["c-b0"] },
+    { key: "C", state: "pending" },
+  ];
+  const decided = (over: Partial<PhaseProgress>, status: PipelineInstance["status"] = "running") =>
+    decidedChildren(
+      instance({
+        status,
+        phases: [instance().phases[0], spawnPhase(structuredClone(tasks), over)],
+      }),
+    );
+  const every = ["c-a", "c-b0", "c-b"];
+  assert.deepEqual(decided({}), ["c-b0"], "running: only the replaced child");
+  assert.deepEqual(
+    decided({ status: "awaiting-approval", pause: "children" }),
+    ["c-b0"],
+    "paused at children: a person may still re-run a child",
+  );
+  assert.deepEqual(decided({ status: "aborted" }), every, "an aborted phase waits for none");
+  assert.deepEqual(decided({ status: "succeeded" }), every, "nor does a joined or accepted one");
+  assert.deepEqual(decided({ status: "failed" }), every, "nor a failed one");
+  assert.deepEqual(
+    decided({ status: "awaiting-approval", pause: "children" }, "aborted"),
+    every,
+    "an instance that ended waits for none",
+  );
+  assert.deepEqual(decidedChildren(instance()), [], "no spawn phase, no children");
+});
+
 // ── records ──────────────────────────────────────────────────────────────────
 
 test("a record too large for a line keeps its sequence but not its changes", () => {
@@ -265,6 +394,32 @@ test("a legitimate init baseline and a signal transition fit comfortably", () =>
     })),
   });
   assert.equal(encodeTransition(chain([wide])[0]).oversized, false);
+});
+
+test("a spawn phase of 50 tasks still fits a record", () => {
+  // The largest list a spawn phase may hold, every field at its limit: a
+  // 64-character key, a 60-character title, a UUID child and three dependency
+  // positions (two digits each; the order is not what this test measures).
+  const tasks: SpawnTask[] = Array.from({ length: 50 }, (_, i) => ({
+    key: `${String(i).padStart(2, "0")}-${"k".repeat(61)}`,
+    title: `${"t".repeat(59)}…`,
+    dependsOn: [47, 48, 49],
+    state: "running",
+    instanceId: `0f6c2e4a-9b1d-4c3e-8a7f-${String(i).padStart(12, "0")}`,
+  }));
+  assert.equal(tasks[0].key.length, 64, "a key at its limit");
+  const base = instance();
+  const wide = instance({ phases: [base.phases[0], { ...spawnPhase(tasks), id: "b" }] });
+  assert.equal(encodeTransition(chain([wide])[0]).oversized, false, "a baseline fits");
+  // A record that sets the whole list at once, as `children-started` does
+  // (larger here: a fresh list names no child yet).
+  const before = instance({ phases: [base.phases[0], { ...spawnPhase(), id: "b" }] });
+  const record = encodeTransition(chain([before, wide])[1]);
+  assert.equal(
+    record.oversized,
+    false,
+    `the change record fits (${Buffer.byteLength(record.text)} bytes)`,
+  );
 });
 
 // ── fold ─────────────────────────────────────────────────────────────────────

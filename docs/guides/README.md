@@ -55,6 +55,7 @@ Some features are panels within a page rather than separate destinations.
 | Sentinel                            | More → Sentinel, `#/sentinel`                   | [Incidents](health-and-quality.md#sentinel)                                                    |
 | Weave                               | Pipelines form and Command Center               | [Dependencies, routes and artifacts](pipelines.md#weave)                                       |
 | Approval conditions (`approveWhen`) | Pipeline definition (API); Command Center gate  | [A gate a command opens](pipelines.md#open-a-gate-when-its-pull-request-merges)                |
+| Spawn phases                        | Pipeline definition (API); Command Center       | [Spawn child instances](pipelines.md#spawn-child-instances)                                    |
 | Spend Ledger                        | Budget                                          | [Attribution and forecasts](budget-and-history.md#ledger)                                      |
 | Vault                               | Stats, Search and Chronicle history             | [Historical cache](budget-and-history.md#the-vault)                                            |
 | Omnibar                             | Command palette                                 | [Natural-language preview](navigation.md#omnibar)                                              |
@@ -72,8 +73,9 @@ Some options are API-authored and preserved by the form. The [advanced pipeline
 recipes](pipelines.md#advanced-feature-recipes) map capability profiles, a
 pipeline's own Claude setup folder, verification (and what a command check is
 told about its instance and the task it was started for), worktrees,
-candidates, memory, recovery, trajectory checks and a gate a polled command
-opens to worked examples. The
+candidates, memory, recovery, trajectory checks, a gate a polled command
+opens and a spawn phase that runs one child instance per task to worked
+examples. The
 [knowledge authoring map](knowledge.md#authoring-knowledge-workflows) covers
 discovery, verification, change intent and targeted realization.
 

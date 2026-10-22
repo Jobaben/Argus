@@ -38,7 +38,11 @@ export interface ElidedValue {
   bytes: number;
 }
 
-/** Why the engine moved the instance: the operation it was carrying out. */
+/**
+ * Why the engine moved the instance: the operation it was carrying out.
+ * `spawn`: the commits of a parent's children pass (building, planning,
+ * mirroring, deferring, refusing).
+ */
 export type TransitionSource =
   | "start"
   | "launch"
@@ -52,13 +56,26 @@ export type TransitionSource =
   | "verdict-watcher"
   | "approval-poll"
   | "gate-recovery"
-  | "engine";
+  | "engine"
+  | "spawn";
 
 /**
  * The pure transitions that ran inside one recorded transition, in order.
  * Nested transitions (a signal that settles the graph, an approval that
  * commits knowledge) each contribute their own event; the engine collects
  * them from return values, never from shared mutable state.
+ *
+ * A spawn phase's own events:
+ * - `children-started`: the task list was built;
+ * - `children-planned`: ids were minted for ready tasks (the commit point of
+ *   their starts);
+ * - `child-observed`: a child's state was mirrored, or a task became blocked
+ *   or pending again;
+ * - `child-deferred`: a start or revive was put off;
+ * - `child-refused`: a start or revive was refused for good;
+ * - `child-revived`: a revise of the spawn phase re-opened the tasks that did
+ *   not succeed;
+ * - `children-resumed`: a phase paused at `children` runs again.
  */
 export type TransitionEventKind =
   | "init"
@@ -94,6 +111,13 @@ export type TransitionEventKind =
   | "gate-linked"
   | "gate-completed"
   | "candidate-tree-removed"
+  | "children-started"
+  | "children-planned"
+  | "child-observed"
+  | "child-deferred"
+  | "child-refused"
+  | "child-revived"
+  | "children-resumed"
   | "sidecar-updated"
   | "engine-update";
 
@@ -116,7 +140,20 @@ export type OwedEffect =
   | { kind: "verify"; phaseId: string; attempt: number; candidate?: number }
   | { kind: "stop"; runIds: string[]; reason: string }
   | { kind: "commit-knowledge"; phaseId: string; attempt: number }
-  | { kind: "gate-operation"; decisionId: string };
+  | { kind: "gate-operation"; decisionId: string }
+  /**
+   * A spawn phase owes work to its children: `plan` (build its task list, or
+   * mint ids for tasks that are ready), `start` the planned child `instanceId`
+   * by id, or `revive` the reviving child `instanceId`. Evidence only: recovery
+   * reads the saved parent, never this.
+   */
+  | {
+      kind: "spawn";
+      phaseId: string;
+      attempt: number;
+      action: "plan" | "start" | "revive";
+      instanceId?: string;
+    };
 
 /** One line of `transitions/<instanceId>.jsonl`, inside the checksummed envelope. */
 export interface TransitionRecord {

@@ -98,6 +98,55 @@ export async function readInstance(id: string): Promise<PipelineInstance | null>
   return inst ? structuredClone(inst) : null;
 }
 
+/** What is on disk under an instance id, without guessing. */
+export type InstanceProbe =
+  | { kind: "absent" }
+  | { kind: "present"; instance: PipelineInstance }
+  | { kind: "unreadable"; reason: string };
+
+/**
+ * One instance, for a caller that must not mistake a damaged record for a
+ * missing one: starting a child by id (where "absent" means "create it"), the
+ * retention pin, the parent check and the sweep. Only a file that does not
+ * exist is absent. A file that cannot be read, or holds something that is not
+ * this instance, is `unreadable`, and so is an id no record can have: the
+ * caller waits and asks again, because creating under that id could overwrite
+ * a live instance, and pruning on it could delete one a parent still needs.
+ *
+ * Bypasses the parse memo ({@link readInstance} swallows every error into
+ * `null`); what it returns is a private copy, parsed from the file each time.
+ */
+export async function probeInstance(id: string): Promise<InstanceProbe> {
+  if (!INSTANCE_ID_RE.test(id)) {
+    return { kind: "unreadable", reason: `invalid instance id "${id}"` };
+  }
+  let text: string;
+  try {
+    text = await readFile(instancePath(id), "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return { kind: "absent" };
+    return { kind: "unreadable", reason: e instanceof Error ? e.message : String(e) };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    return {
+      kind: "unreadable",
+      reason: `unparseable: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    (parsed as { id?: unknown }).id !== id ||
+    !Array.isArray((parsed as { phases?: unknown }).phases)
+  ) {
+    return { kind: "unreadable", reason: "the file does not hold this instance" };
+  }
+  return { kind: "present", instance: parsed as PipelineInstance };
+}
+
 async function scanInstances(): Promise<PipelineInstance[]> {
   let names: string[];
   try {
@@ -116,12 +165,22 @@ async function scanInstances(): Promise<PipelineInstance[]> {
   return all.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+/**
+ * Instances, newest first: all of them, one pipeline's (`pipelineId`), the
+ * children one parent spawned (`parentId`, matched on `parent.instanceId`), or
+ * both. The objects are the scan's shared ones: read them, never mutate them.
+ */
 export async function readInstances(
-  opts: { pipelineId?: string; limit?: number } = {},
+  opts: { pipelineId?: string; parentId?: string; limit?: number } = {},
 ): Promise<PipelineInstance[]> {
   const all = await cached(scanKey(), SCAN_TTL_MS, scanInstances);
   // Never hand callers the cached array itself: some sort/splice in place.
-  let out = opts.pipelineId ? all.filter((i) => i.pipelineId === opts.pipelineId) : [...all];
+  // `filter` always returns a new array.
+  let out = all.filter(
+    (i) =>
+      (!opts.pipelineId || i.pipelineId === opts.pipelineId) &&
+      (!opts.parentId || i.parent?.instanceId === opts.parentId),
+  );
   if (opts.limit && opts.limit > 0) out = out.slice(0, opts.limit);
   return out;
 }
@@ -200,9 +259,36 @@ export async function ensureTriggerPayloadFile(
   return file;
 }
 
+/**
+ * Retention: a pipeline's newest `keep` instances stay, older ones are deleted
+ * with everything that belongs to them.
+ *
+ * A spawned child is kept past the window while its parent's record exists,
+ * or cannot be read right now: the parent's spawn phase mirrors it and its
+ * gate review links to it. Only a parent record that is provably gone
+ * (`probeInstance` reads it as absent) releases the child, so a transient read
+ * error never deletes one. Pinned children still count toward `keep`: the
+ * window is "the newest N, plus every pinned one older". Pruning a parent does
+ * not prune its children; they fall to their own pipeline's window at its next
+ * start.
+ */
 export async function pruneInstances(pipelineId: string, keep: number): Promise<void> {
   const mine = await readInstances({ pipelineId });
-  const drop = mine.slice(keep);
+  // One read per parent, however many of its children are past the window.
+  const parents = new Map<string, Promise<boolean>>();
+  const held = (i: PipelineInstance): Promise<boolean> => {
+    const parentId = i.parent?.instanceId;
+    if (!parentId) return Promise.resolve(false);
+    let known = parents.get(parentId);
+    if (!known) {
+      known = probeInstance(parentId).then((r) => r.kind !== "absent");
+      parents.set(parentId, known);
+    }
+    return known;
+  };
+  const candidates = mine.slice(keep);
+  const pinned = await Promise.all(candidates.map(held));
+  const drop = candidates.filter((_, n) => !pinned[n]);
   await Promise.all(
     drop.map(async (i) => {
       // Before the record: the worktrees are found *through* it, and an

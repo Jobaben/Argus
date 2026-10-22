@@ -428,6 +428,37 @@ test("a disabled runner skips every remaining phase without calling it again", a
   assert.equal(report.phasesDone, 3);
 });
 
+test("a spawn phase is skipped without a pass, and the phases around it are tuned", async () => {
+  const d = def({
+    phases: [
+      phase({ id: "plan", name: "Plan" }),
+      phase({
+        id: "tasks",
+        name: "Tasks",
+        steps: [],
+        needs: ["plan"],
+        spawn: { pipelineId: "task", items: { phase: "plan", path: ["tasks"] }, key: "id" },
+      }),
+      phase({ id: "ship", name: "Ship", needs: ["tasks"] }),
+    ],
+  });
+  const { done, calls } = run(d, [
+    { ok: true, value: { summary: "fine", proposals: [] } },
+    { ok: true, value: { summary: "fine", proposals: [] } },
+  ]);
+  const report = await done;
+  assert.equal(calls.length, 2, "no pass for the spawn phase: it runs no agent");
+  assert.match(calls[0].prompt, /name: Plan/);
+  assert.match(calls[1].prompt, /name: Ship/, "the second pass is the phase after it");
+  assert.deepEqual(
+    report.phases.map((p) => p.status),
+    ["ready", "skipped", "ready"],
+  );
+  assert.equal(report.phases[1].error, "a spawn phase runs no agent", "and says why");
+  assert.equal(report.status, "ready");
+  assert.equal(report.phasesDone, 3);
+});
+
 test("every phase failing makes the report failed", async () => {
   const { done } = run(def(), [{ ok: false, failure: "spawn-failed", error: "ENOENT" }]);
   const report = await done;

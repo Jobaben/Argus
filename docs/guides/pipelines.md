@@ -107,10 +107,13 @@ the buttons (_Couldn't complete that: …_).
   anyway** or **Keep editing**, which leaves your edit in the form — so you
   know a fixed prompt lands on the _next_ start rather than the one you are
   watching; renaming, changing the trigger or overlap policy, and enabling or
-  disabling save without asking.
+  disabling save without asking. Editing a pipeline that a live parent's
+  [spawn phase](#spawn-child-instances) still starts children of asks the same
+  way: those children would run your edit.
   **Delete** stops the pipeline's running and waiting instances first (the
   question says how many), then removes it. Pipelines chained `after` it do
-  not start from those stops. An instance left live by a pipeline
+  not start from those stops. A spawned child is one of those instances: each
+  parent that spawned one then waits for you at its spawn phase. An instance left live by a pipeline
   deleted before this existed still gets a card on the Command Center, marked
   **Pipeline deleted**, with a **Stop** button that asks first (**Stop
   instance** or **Keep running**).
@@ -631,6 +634,189 @@ knowledge delta; a person must approve it. A person can approve, revise or abort
 at any time; a poll that finishes afterwards changes nothing. The details are in
 [the harness reference](../HARNESS.md#approval-conditions).
 
+### Spawn child instances
+
+A pipeline can work through a list of tasks with one instance of another
+pipeline per task. One phase writes the task list into its result; a **spawn
+phase** after it starts one _child_ instance of the task pipeline per task, in
+dependency order and one at a time, and succeeds once every child has. Each
+child is an ordinary instance, with its own phases, gates and worktrees. The
+pipelines form cannot save a phase with no steps yet: author both pipelines
+through the API, and edit the parent there too.
+
+**Before you start:** a git repository the agents work in, fetched
+(`git fetch origin`), and a runtime that works for a plain pipeline. Each
+child's worktree is cut from your local `origin/main` here, and Argus never
+fetches it. The task pipeline must have no trigger (manual) or a webhook one,
+and no spawn phase of its own; give it `overlapPolicy: "allow"`, because with
+`"skip"` a child waits while any other instance of it is live. The phase that
+writes the task list declares a `result` whose schema is an array of objects
+with the key property required, and lists `signal` in its `retry.retryOn`, so
+a task list Argus cannot run gets another attempt with the reason.
+
+1. Save the task pipeline with `POST /api/pipelines`. Its prompts read the
+   task as `{{trigger.payload}}`:
+
+   ```json
+   {
+     "name": "Task loop",
+     "trigger": null,
+     "overlapPolicy": "allow",
+     "workspace": { "scope": "instance" },
+     "phases": [
+       {
+         "id": "implement",
+         "name": "Implement",
+         "cwd": "/home/you/repo",
+         "gated": true,
+         "steps": [
+           {
+             "name": "implement",
+             "prompt": "Do this task and commit it on your branch: {{trigger.payload}}"
+           }
+         ]
+       }
+     ]
+   }
+   ```
+
+   **Expected:** `201` with the saved definition. Note its `id`.
+
+2. Save the parent with `POST /api/pipelines`, naming that id as
+   `spawn.pipelineId`:
+
+   ```json
+   {
+     "name": "Delivery",
+     "trigger": null,
+     "phases": [
+       {
+         "id": "plan",
+         "name": "Plan",
+         "cwd": "/home/you/repo",
+         "gated": true,
+         "steps": [
+           {
+             "name": "plan",
+             "prompt": "Split docs/spec.md into small tasks, each with an id, a title and the ids of the tasks it needs first (after)."
+           }
+         ],
+         "retry": { "attempts": 2, "retryOn": ["spawn", "exit-code", "unverified", "signal"] },
+         "result": {
+           "artifact": "plan",
+           "schema": {
+             "type": "object",
+             "required": ["tasks"],
+             "properties": {
+               "tasks": {
+                 "type": "array",
+                 "items": {
+                   "type": "object",
+                   "required": ["id", "title"],
+                   "properties": {
+                     "id": { "type": "string" },
+                     "title": { "type": "string" },
+                     "after": { "type": "array", "items": { "type": "string" } }
+                   }
+                 }
+               }
+             }
+           }
+         }
+       },
+       {
+         "id": "tasks",
+         "name": "Tasks",
+         "cwd": "/home/you/repo",
+         "needs": ["plan"],
+         "spawn": {
+           "pipelineId": "<the id from step 1>",
+           "items": { "phase": "plan", "path": ["tasks"] },
+           "key": "id",
+           "dependsOn": "after",
+           "title": "title",
+           "base": "origin/main"
+         }
+       }
+     ]
+   }
+   ```
+
+   **Expected:** `201`. A `400` names what to change, for example
+   `phase "tasks": spawn.pipelineId names "Task loop", which has a "interval" trigger; …`.
+
+3. Start the parent with **Run now** on its card (or
+   `POST /api/pipelines/<id>/start`). This alters state and runs Plan's agent,
+   which invokes its provider. Plan waits at its gate with the task list as
+   its result; review it and **Approve**. A task list Argus could
+   not run (a missing or repeated `id`, an `after` naming an unknown task, a
+   cycle, more than 20 tasks) never reaches the gate: Plan fails under
+   `signal` with the reason, and its retry tries again.
+
+   **Expected:** the Tasks phase starts, the parent's journal records
+   `children.started` and `child.planned`, and an instance of Task loop starts
+   for the first task whose `after` tasks are done. Every child runs Task
+   loop's agents, which invoke their provider.
+
+4. Watch a task run. `argus tail` names a child after its task:
+   `Task loop [<task id>]`. When the child's Implement phase waits at its
+   gate, review and approve it in the Command Center like any gate (a state
+   change: the child succeeds, and the parent starts the next task). Meanwhile the parent's
+   Tasks phase stays `running`, and `argus tail --until-idle` returns: only
+   the child waits for you. To have that gate open when the task's pull request
+   merges, give Implement an approval condition
+   ([Open a gate when its pull request merges](#open-a-gate-when-its-pull-request-merges));
+   its checks can read the task too
+   ([Check work against the task it was started for](#check-work-against-the-task-it-was-started-for)).
+5. Read the children: `GET /api/pipelines/<Task loop id>/instances?parent=<parent instance id>`
+   lists them, newest first. It is only a read. The parent's own record
+   (`GET /api/instances/<parent instance id>`) holds each task's `state` and
+   its child's `instanceId` in the Tasks phase's `children`.
+
+**Expected result:** one child per task, in `after` order, one at a time. When
+the last child succeeds, the Tasks phase succeeds with a summary of every task
+as its payload, and the phases after it start.
+
+**If a task fails:** no new task starts, the tasks that depend on it show
+`blocked`, and once no child is running the Tasks phase waits for you
+(`pause: "children"`; the tail says
+`waiting for you at "Tasks" (2 of 5 tasks did not succeed)`). The Command
+Center shows the pause like a gate; its drawer does not list the tasks yet, so
+read them from `GET /api/instances/<parent id>/phases/tasks/review`
+(`children`, with the phase to act on in each child). Each choice alters state:
+
+- **Re-run one task:** revise the child's failed phase, on the child (its
+  drawer, or `argus revise <child id> --phase <phase> --note "<what to change>"`).
+  Its agent runs again and invokes its provider; the Tasks phase resumes, and
+  once the child succeeds the tasks it blocked continue.
+- **Re-run every task that did not succeed:** revise the Tasks phase on the
+  parent (`argus revise <parent id> --phase tasks --note "<what to change>"`).
+  Each failed child is revised in place with your note; an aborted or blocked
+  task gets a fresh child when it is ready. Tasks that succeeded stay done, and
+  the task list is not rebuilt.
+- **Accept the rest:** approve the Tasks phase (`argus approve <parent id>`).
+  It succeeds, its summary's `notSucceeded` names the tasks it dropped, and the
+  phases after it start. Answers are refused here
+  (`400 answers-not-accepted`), and so is an approval while a child you re-ran
+  is still running (`409 children-running`).
+- **Abort** the parent: its children are aborted with it, and none of them
+  fires an `after` chain.
+
+Approving or revising a child its parent no longer waits for (the parent
+ended, or the Tasks phase moved on) is refused with `409 parent-decided`;
+aborting it always works. A restart never starts a task twice: each child's id
+is saved on the parent before the child starts, and Argus picks up from the
+saved parent.
+
+Children run one at a time until parallel Claude sessions are safe (reliability
+WS13). Argus never fetches `base`: a child starts from the commit it named at
+your last fetch, unless the task pipeline's first phase fetches and resets.
+Spend adds up per task, and no new child starts while the spend budget's hard
+stop is on. `after` chains of the task pipeline fire once per child, and
+`{{previous.instance}}` in a child names another task's child. To rewind to
+Plan, accept the rest and start a follow-up instance. The details are in
+[the harness reference](../HARNESS.md#20-spawn-phases).
+
 ## Advanced feature recipes
 
 The form preserves API-authored settings that it does not expose as editable controls. Use the protocol examples in the harness reference for these options:
@@ -648,5 +834,6 @@ The form preserves API-authored settings that it does not expose as editable con
 | Assess the execution trajectory                              | [Trajectory signals and judging](../HARNESS.md#19-trajectory-signals-and-judging)                                             |
 | Check the work against the task the instance was started for | [Command check inputs](../HARNESS.md#what-a-command-check-is-told), [recipe](#check-work-against-the-task-it-was-started-for) |
 | Open a gate when its pull request merges                     | [Approval conditions](../HARNESS.md#approval-conditions), [recipe](#open-a-gate-when-its-pull-request-merges)                 |
+| Work through a task list with one child instance per task    | [Spawn phases](../HARNESS.md#20-spawn-phases), [recipe](#spawn-child-instances)                                               |
 
 Start with the [reference pipeline](../HARNESS.md#9-reference-pipeline), then add only the options your task needs. An unenforceable capability, unavailable transcript or incomplete check is not proof of compliance.

@@ -10,6 +10,8 @@ import type { EngineCore, EngineFns } from "./context.js";
 /** Saving an instance and the housekeeping a settled one triggers: worktree cleanup, memory trimming, the definition an instance runs against. Moved verbatim from `createEngine`. */
 export function createStore(core: EngineCore) {
   const { nowISO, track, persist, cleaned, memoryChecked } = core.ctx;
+  const queueParentSync: EngineFns["queueParentSync"] = (...args) =>
+    core.fns.queueParentSync(...args);
   const retireStagedDeltas: EngineFns["retireStagedDeltas"] = (...args) =>
     core.fns.retireStagedDeltas(...args);
 
@@ -24,10 +26,17 @@ export function createStore(core: EngineCore) {
    * somebody eventually forgets. The removal is detached and never throws into
    * the transition that caused it: a worktree Argus cannot delete is a warning
    * in the log, never a pipeline that fails to finish.
+   *
+   * A spawned child's every save, terminal or not, also queues its parent's
+   * sync, which mirrors the child into the parent's spawn phase
+   * (engine/children.ts). Only queued: the caller holds the child's lock.
    */
   async function saveInstance(inst: PipelineInstance): Promise<void> {
     await retireStagedDeltas(inst);
     await persist.commit(inst);
+    // A spawned child's parent mirrors it. Queued, never awaited: the caller
+    // holds this child's lock, and a parent's lock is never taken under it.
+    if (inst.parent) queueParentSync(inst.parent.instanceId);
     if (resumable(inst.status)) {
       // Alive again — a revise of a failed instance, a scheduled retry. What it
       // creates from here is cleaned up by the settlement that follows.

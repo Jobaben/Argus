@@ -20,9 +20,11 @@
  * over with {@link InstancePersistence.noteResult}. At commit, every pipeline
  * status change between the snapshot and the instance being saved must be
  * accounted for by an event about that phase (or, for the instance status, by
- * any event). One that is not is a forgotten transition: it is written on the
- * record as `unattributed` and reported — never relabelled as a trustworthy
- * replay.
+ * any event). A spawn phase's task records (`child:<phaseId>#<i>`: the child's
+ * id and the task's state) are pipeline status too, accounted for by an event
+ * about their spawn phase. One that is not is a forgotten transition: it is
+ * written on the record as `unattributed` and reported — never relabelled as a
+ * trustworthy replay.
  *
  * Degradation. A log that cannot be written (an I/O error, or the size cap)
  * does not stop the instance: the save proceeds and the instance records
@@ -94,7 +96,7 @@ function attributed(key: string, events: readonly TransitionEvent[]): boolean {
   if (key === "gateOperation") {
     return events.some((e) => e.kind === "gate-linked" || e.kind === "gate-completed");
   }
-  const m = /^(?:phase|step):(.+?)(?:#\d+)?$/.exec(key);
+  const m = /^(?:phase|step|child):(.+?)(?:#\d+)?$/.exec(key);
   if (!m) return false;
   const phaseId = m[1];
   return events.some((e) => e.phaseId === phaseId || e.kind === "abort" || e.kind === "init");

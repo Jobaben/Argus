@@ -158,7 +158,9 @@ instance and its housekeeping), `persistence` (the transition commit),
 `launch`, `lifecycle` (a run's exit, deadlines, stalls and `terminateRun`),
 `failure` (failure classes and retries), `verification`, `knowledgeIntake`,
 `knowledgeCommit`, `realization`, `candidates`, `signals`, `gates`,
-`reconcile` and `gatePolls` (approval conditions), with pure leaves for
+`reconcile`, `gatePolls` (approval conditions) and `children` (spawn phases:
+each child's start, the mirror into its parent, the abort cascade and the
+sweep), with pure leaves for
 `types`, `prompts`, `outcome`, `spawn` and `constants`. The split was mechanical — every function body moved byte for
 byte — and its rules are a test (`engine/boundaries.test.ts`): a module calls
 another's functions only through the late-bound, typed `core.fns`, never by

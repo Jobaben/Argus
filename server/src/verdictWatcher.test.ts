@@ -610,6 +610,29 @@ test("regression: a needs-input pause is never answered by a score", async () =>
   assert.equal(approved.length, 0);
 });
 
+test("a spawn phase's children pause is never answered by a score", async () => {
+  // Even with a verdict over the bar on the run its phase record still names.
+  await writeVerdict(verdict("step-1", 10));
+  const stopped = instance({
+    phases: [
+      {
+        ...instance().phases[0],
+        pause: "children",
+        children: {
+          pipelineId: "task",
+          source: { phaseId: "plan", attempt: 0 },
+          maxParallel: 1,
+          tasks: [{ key: "a", state: "failed", instanceId: "child-a", reason: "tests broke" }],
+        },
+      },
+    ],
+  });
+  const { w, approved, withheld } = watcher({ pipelines: [pipeline()], instances: [stopped] });
+  await w.check();
+  assert.equal(approved.length, 0, "a person decides on the tasks");
+  assert.equal(withheld.length, 0, "and nothing is reported as withheld: it was never the rule's");
+});
+
 test("a pause of unknown cause (written before causes were recorded) waits for a person", async () => {
   await writeVerdict(verdict("step-1", 10));
   const { pause: _drop, ...legacyPhase } = instance().phases[0];

@@ -115,9 +115,10 @@ export function approveWhenRefusal(phaseLabel: string, reasons: readonly string[
 /**
  * Whether an approval poll may run for this phase attempt (DL-A3): it waits
  * at a known `gate` pause — never a question an agent asked (`needs-input`),
- * never a pause of unknown cause — its own definition declares `approveWhen`,
- * and its gate commits no knowledge, by configuration or by what the attempt
- * staged. Pure; the engine decides again under the instance lock.
+ * never a spawn phase waiting on its children (`children`), never a pause of
+ * unknown cause — its own definition declares `approveWhen`, and its gate
+ * commits no knowledge, by configuration or by what the attempt staged. Pure;
+ * the engine decides again under the instance lock.
  */
 export type ApprovalConditionEligibility =
   | { ok: true; condition: ApprovalCondition }
@@ -308,8 +309,9 @@ export function trajectoryBar(phaseDef: PhaseDef): number | null {
  * rule would open the gate:
  *
  * - `ineligible` — not a gate the rule may open: not a `gate` pause
- *   (`cause: "pause"`), or the gate commits knowledge by configuration or by
- *   what the attempt staged (`cause: "knowledge"`);
+ *   (`cause: "pause"`: a question put to a person, or a spawn phase whose
+ *   children stopped short), or the gate commits knowledge by configuration
+ *   or by what the attempt staged (`cause: "knowledge"`);
  * - `not-configured` — the phase declares no `autoApprove` bar, or no rubric;
  * - `insufficient-data` — a relevant step did not succeed, has no run, or has
  *   no current, `ready`, scored verdict with an id under this rubric; or, when
@@ -373,7 +375,9 @@ export function autoApprovalQualification(
           ? `phase is ${phase.status}`
           : phase.pause === "needs-input"
             ? "needs-input pause"
-            : "pause of unknown cause",
+            : phase.pause === "children"
+              ? "children pause"
+              : "pause of unknown cause",
       ],
     };
   }

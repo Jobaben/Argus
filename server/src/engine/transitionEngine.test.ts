@@ -23,7 +23,7 @@ import { readLedger } from "../knowledge/store.js";
 import { readTransitionLog, appendTransitionRecord } from "../transitionLog/store.js";
 import { compareIntegrity } from "../transitionLog/fold.js";
 import { testRunToken } from "../testSignalToken.js";
-import type { TransitionRecord } from "@argus/contracts";
+import type { TransitionEvent, TransitionRecord } from "@argus/contracts";
 
 let home: string;
 beforeEach(() => {
@@ -476,24 +476,33 @@ test("no engine module assigns a pipeline status field itself", () => {
   const holders =
     "(?:phase|progress|step|s|inst|instance|current|fresh|aborted|healed|settled\\.instance|res\\.instance|out\\.instance|next\\.instance)";
   const fields =
-    "(?:status|attempt|retryAt|pause|pendingGateOperation|gateDecisionIds|retries|steps|currentPhaseIndex)";
+    "(?:status|attempt|retryAt|pause|pendingGateOperation|gateDecisionIds|retries|steps|currentPhaseIndex|children)";
   const assign = new RegExp(`\\b${holders}\\.${fields}\\s*=(?!=)`);
   const del = new RegExp(`\\bdelete\\s+${holders}\\.${fields}\\b`);
+  // A spawn phase's tasks are pipeline state too: the engine reads them and
+  // hands what it learned to a transition, never writes a task itself.
+  const taskFields =
+    "(?:state|instanceId|reviveDecisionId|previousInstanceIds|deferred|reason|waitingPhaseId)";
+  const taskAssign = new RegExp(`\\b(?:task|t)\\.${taskFields}\\s*=(?!=)`);
+  const taskDel = new RegExp(`\\bdelete\\s+(?:task|t)\\.${taskFields}\\b`);
   const offenders: string[] = [];
   for (const file of engineFiles) {
     readFileSync(file, "utf8")
       .split("\n")
       .forEach((line, i) => {
         if (/^\s*(\/\/|\*)/.test(line)) return;
-        if (assign.test(line) || del.test(line)) {
+        if ([assign, del, taskAssign, taskDel].some((rule) => rule.test(line))) {
           offenders.push(`${path.relative(SRC, file)}:${i + 1}: ${line.trim()}`);
         }
       });
   }
   assert.deepEqual(offenders, []);
-  // And the rule is not vacuous: the transitions module does exactly this.
+  // And the rules are not vacuous: the transitions module does exactly this.
   const transitions = readFileSync(path.join(SRC, "pipelineTransitions.ts"), "utf8");
-  assert.ok(assign.test(transitions));
+  assert.ok(assign.test(transitions), "the transitions assign status fields");
+  assert.ok(/\bphase\.children\s*=(?!=)/.test(transitions), "and a spawn phase's task list");
+  assert.ok(taskAssign.test(transitions), "and a task's fields");
+  assert.ok(taskDel.test(transitions), "and delete them");
 });
 
 test("a status change made behind the engine's back shows as a disagreement", async () => {
@@ -555,4 +564,63 @@ test("a commit whose status change no event accounts for records it as unattribu
   inst.phases[0].status = "running";
   persist.note(inst, [{ kind: "revise", phaseId: "a" }]);
   assert.deepEqual((await persist.commit(inst)).unattributed, []);
+});
+
+test("a spawn task's change is attributed by an event about its spawn phase, or an abort", async () => {
+  const { createInstancePersistence } = await import("./persistence.js");
+  /** Plan task 0 of spawn phase `tasks`, noting `events`; what went unattributed. */
+  async function planned(events: TransitionEvent[]): Promise<string[]> {
+    const persist = createInstancePersistence({
+      now: () => new Date("2026-10-04T12:00:00.000Z"),
+      publish: async () => {},
+      readSaved: async () => null,
+      append: async () => ({ ok: true, bytes: 1, oversized: false }),
+      readLog: async () => ({
+        records: [],
+        corruptLines: [],
+        invalidLines: [],
+        tornTail: 0,
+        present: false,
+      }),
+      onUnattributed: () => {},
+      onDegraded: () => {},
+    });
+    const inst: any = {
+      id: "s1",
+      status: "running",
+      phases: [
+        {
+          id: "plan",
+          status: "succeeded",
+          attempt: 0,
+          steps: [{ runId: "r", status: "succeeded" }],
+        },
+        {
+          id: "tasks",
+          status: "running",
+          attempt: 0,
+          steps: [],
+          children: { tasks: [{ key: "A", state: "pending" }] },
+        },
+      ],
+    };
+    persist.fresh(inst, "start");
+    persist.note(inst, [{ kind: "init" }]);
+    await persist.commit(inst);
+    inst.phases[1].children.tasks[0] = { key: "A", state: "planned", instanceId: "c-1" };
+    persist.note(inst, events);
+    return (await persist.commit(inst)).unattributed;
+  }
+  assert.deepEqual(
+    await planned([]),
+    ["child:tasks#0: -|pending → c-1|planned"],
+    "a task planned with no event is a forgotten transition",
+  );
+  assert.deepEqual(
+    await planned([{ kind: "signal", phaseId: "plan" }]),
+    ["child:tasks#0: -|pending → c-1|planned"],
+    "an event about another phase does not account for it",
+  );
+  assert.deepEqual(await planned([{ kind: "children-planned", phaseId: "tasks" }]), []);
+  assert.deepEqual(await planned([{ kind: "abort" }]), [], "an abort accounts for every task");
 });

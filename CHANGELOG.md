@@ -93,6 +93,34 @@ All notable changes to Argus are documented here. The format follows
   approve, revise or abort at any time, and `autoApprove` may sit beside it.
   The H1 experiment counts these gates with the `autoApprove` ones, and never
   takes their approvals as an operator's label.
+- **Spawn phases: one child instance per task, joined.** A phase can declare
+  `spawn` instead of steps: it starts one instance of another pipeline per task
+  in an earlier phase's result, in `dependsOn` order, one at a time, and
+  succeeds once every child has succeeded, publishing a children summary. Each
+  child's id is saved on the parent before it starts, so a restart never
+  starts a task twice; the child gets the task, `spawn.include` values and
+  `spawn.base` in its trigger payload (`trigger: "spawned"`, `parent`), and
+  its worktrees are cut from that base, which Argus does not fetch. A task
+  list Argus could not run fails the phase that produced it before its gate,
+  classed `signal`. A failed or aborted child stops new starts and blocks its
+  dependents; once the running children finish, the spawn phase waits for you
+  (`pause: "children"`): approve it to accept the rest, revise it to re-run
+  every task that did not succeed, revise one child, or abort. Aborting the
+  parent aborts its children (`parent-aborted`), and no `after` chain fires
+  for them. New children wait while the spend budget's hard stop is on, a
+  child is kept as long as its parent's record exists, the parent reads
+  `running` while a child waits at its own gate, `argus tail --until-idle`
+  returns, and `argus tail` names a child by its task key.
+  `GET /api/pipelines/:id/instances?parent=<id>` lists one parent's children;
+  the gate review of a spawn phase carries `children`; approve and revise
+  answer `409 parent-decided` on a child its parent no longer waits for (an
+  automated decision on one is refused too), and approve answers
+  `400 answers-not-accepted` to answers at a `children` pause and
+  `409 children-running` while a re-run child is live; these replies carry a
+  `code`. Editing a pipeline a live parent still spawns is held like an edit
+  under its own live instances (`409 instances-running`, `?force=1`), whose
+  `instances` entries now carry `pipelineId`. The pipelines form cannot save a
+  phase with no steps yet: author spawn phases through the API.
 
 ### Changed
 

@@ -70,6 +70,8 @@ export function gateEligibility(
   if (phase.attempt !== item.attempt) return { ok: false, reason: "attempt-moved" };
   if (phase.status !== "awaiting-approval") return { ok: false, reason: `phase-${phase.status}` };
   if (phase.pause === "needs-input") return { ok: false, reason: "needs-input" };
+  // A spawn phase whose children stopped short: no step's work to judge.
+  if (phase.pause === "children") return { ok: false, reason: "children" };
   if (phase.pause !== "gate") return { ok: false, reason: "unknown-pause" };
   if (inst.pendingGateOperation) return { ok: false, reason: "pending-operation" };
   if (recordsFor(item, decisions).length > 0) return { ok: false, reason: "prior-decision-record" };

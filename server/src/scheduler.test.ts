@@ -585,6 +585,61 @@ test("tick chains an aborted source into an on:failed target, but not one its pi
   assert.deepEqual(chainedFrom.sort(), ["stopped", "stopped"], "an operator's abort still chains");
 });
 
+test("tick does not chain a spawned child its parent's abort stopped", async () => {
+  const { scheduler } = await load();
+  const { pipelines, instances, chains } = await loadChainDeps();
+  await pipelines.createPipeline(
+    pipelines.validatePipelineInput(sourcePipelineInput()),
+    new Date(2026, 5, 22, 8, 0),
+    "source",
+  );
+  await pipelines.createPipeline(
+    pipelines.validatePipelineInput(
+      sourcePipelineInput({
+        name: "on-any",
+        trigger: { kind: "after", pipelineId: "source", on: "any" },
+      }),
+    ),
+    new Date(2026, 5, 22, 8, 0),
+    "on-any",
+  );
+  const parent = { instanceId: "parent-1", pipelineId: "loop", phaseId: "tasks", key: "a" };
+  await instances.writeInstance(
+    fakeInstance({
+      id: "cascaded",
+      status: "aborted",
+      abortCause: "parent-aborted",
+      trigger: "spawned",
+      parent: { ...parent, index: 0 },
+    }),
+  );
+  await instances.writeInstance(
+    fakeInstance({
+      id: "sibling",
+      status: "aborted",
+      trigger: "spawned",
+      parent: { ...parent, index: 1, key: "b" },
+    }),
+  );
+
+  const chainedFrom: string[] = [];
+  const startPipeline = async (_id: string, _trigger: string, firing: { chainedFrom: string }) => (
+    chainedFrom.push(firing.chainedFrom),
+    { id: "x" }
+  );
+  await scheduler.tick(deps({ startPipeline }));
+  assert.deepEqual(
+    chainedFrom,
+    ["sibling"],
+    "a child aborted on its own still chains; one its parent's abort stopped does not",
+  );
+  assert.equal((await chains.readChainLedger()).cascaded, undefined, "no fire is recorded for it");
+
+  // Skipped for good, not left for a later tick to retry.
+  await scheduler.tick(deps({ startPipeline }));
+  assert.deepEqual(chainedFrom, ["sibling"], "a later tick fires nothing more");
+});
+
 test("tick chains an after-triggered schedule as a normal scheduled run, trigger: chained", async () => {
   const { scheduler, schedules, runs } = await load();
   const { pipelines, instances } = await loadChainDeps();

@@ -201,9 +201,11 @@ export function formatPath(path: ProjectionPath): string {
 /**
  * A pure view of every pipeline *status* field of an instance — the instance
  * status, each phase's status, attempt, pause and retry time, each step's run
- * id and status, and the gate operation in flight. These are the fields a
- * transition must account for; a run record's status, a verification report's
- * status or a Verdict's are not pipeline state and are deliberately absent.
+ * id and status, each spawn task's child id and state, and the gate operation
+ * in flight. These are the fields a transition must account for; a run
+ * record's status, a verification report's status or a Verdict's are not
+ * pipeline state and are deliberately absent (nor is a task's `deferred`,
+ * which says why nothing moved).
  */
 export function statusView(inst: {
   status?: unknown;
@@ -215,6 +217,7 @@ export function statusView(inst: {
     pause?: unknown;
     retryAt?: unknown;
     steps?: Array<{ runId?: unknown; status?: unknown }>;
+    children?: { tasks?: Array<{ instanceId?: unknown; state?: unknown }> };
   }>;
 }): Record<string, string> {
   const view: Record<string, string> = {
@@ -225,6 +228,11 @@ export function statusView(inst: {
     view[`phase:${p.id}`] = [p.status, p.attempt, p.pause ?? "-", p.retryAt ?? "-"].join("|");
     (p.steps ?? []).forEach((s, i) => {
       view[`step:${p.id}#${i}`] = `${String(s.runId ?? "-")}|${String(s.status)}`;
+    });
+    // Keyed by position, as `InstanceParentRef.index` is. A phase id has no
+    // `#`, so the key cannot be read two ways.
+    (p.children?.tasks ?? []).forEach((t, i) => {
+      view[`child:${p.id}#${i}`] = `${String(t.instanceId ?? "-")}|${String(t.state)}`;
     });
   }
   return view;

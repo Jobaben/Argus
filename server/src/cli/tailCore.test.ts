@@ -1,6 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { Agent, OverviewEntry, PipelineInstance, Run } from "@argus/contracts";
+import type {
+  Agent,
+  OverviewEntry,
+  PhaseProgress,
+  PipelineInstance,
+  Run,
+  SpawnTaskState,
+} from "@argus/contracts";
 import {
   boardInstances,
   buildSnapshot,
@@ -122,6 +129,67 @@ function agent(over: Partial<Agent> = {}): Agent {
     pid: 1,
     ...over,
   };
+}
+
+/** A parent whose spawn phase "Tasks" runs one child per task, in these states. */
+function spawnParent(
+  states: SpawnTaskState[],
+  over: Partial<PhaseProgress> = {},
+  inst: Partial<PipelineInstance> = {},
+) {
+  return instance({
+    id: "inst-loop",
+    pipelineId: "loop",
+    pipelineName: "Task loop",
+    phases: [
+      {
+        id: "tasks",
+        name: "Tasks",
+        gated: false,
+        status: "running",
+        attempt: 0,
+        payload: null,
+        steps: [],
+        children: {
+          pipelineId: "task",
+          source: { phaseId: "plan", attempt: 0 },
+          maxParallel: 1,
+          tasks: states.map((state, i) => ({ key: "abc"[i], state, instanceId: `child-${i}` })),
+        },
+        ...over,
+      },
+    ],
+    ...inst,
+  });
+}
+
+/** A child the parent above spawned for task `key`, with its one phase "work". */
+function spawnedChild(
+  key: string,
+  index: number,
+  phase: Partial<PhaseProgress> = {},
+  inst: Partial<PipelineInstance> = {},
+) {
+  return instance({
+    id: `child-${index}`,
+    pipelineId: "task",
+    pipelineName: "Task",
+    trigger: "spawned",
+    parent: { instanceId: "inst-loop", pipelineId: "loop", phaseId: "tasks", index, key },
+    phases: [
+      {
+        id: "work",
+        name: "work",
+        gated: true,
+        status: "running",
+        attempt: 0,
+        payload: null,
+        steps: [{ name: "s", runId: `child-run-${index}`, status: "running" }],
+        ...phase,
+      },
+    ],
+    ...inst,
+  });
 }
 
 describe("parseDuration", () => {
@@ -454,6 +522,55 @@ describe("buildSnapshot", () => {
     );
     assert.equal(lines[2].text, "agent refactor-auth · working · editing auth.ts");
   });
+
+  it("says a children pause waits for a person, and names each child by its task key", () => {
+    const paused = spawnParent(
+      ["succeeded", "failed", "blocked"],
+      {
+        status: "awaiting-approval",
+        pause: "children",
+        // The children summary: nothing in it reads as a note for the line.
+        payload: { pipelineId: "task", tasks: [], counts: {}, notSucceeded: ["b", "c"] },
+      },
+      { status: "awaiting-approval", updatedAt: "2026-07-07T10:18:00.000Z" },
+    );
+    const failed = spawnedChild(
+      "b",
+      1,
+      { status: "failed", payload: { reason: "tests broke" } },
+      { status: "failed", endedAt: "2026-07-07T10:25:00.000Z" },
+    );
+    const lines = buildSnapshot({
+      ...base,
+      runs: [],
+      overview: [entry(paused), entry(failed)],
+    });
+    assert.deepEqual(
+      lines.map((l) => `${l.kind}|${l.text}`),
+      [
+        "snapshot.summary|Argus 0.4.0 at http://127.0.0.1:7777 — 0 running · 1 waiting for approval",
+        'snapshot.gate|Task loop · waiting for you at "Tasks" (2 of 3 tasks did not succeed) for 12m 00s · review http://127.0.0.1:7777/#/command/inst-loop/tasks · argus approve inst-loop --phase tasks',
+        'snapshot.recent|✗ pipeline Task [b] failed at "work": tests broke',
+      ],
+    );
+    assert.equal(lines[2].label, "Task [b]", "the child's label carries its key too");
+    const one = buildSnapshot({
+      ...base,
+      runs: [],
+      overview: [
+        entry(
+          spawnParent(
+            ["aborted"],
+            { status: "awaiting-approval", pause: "children" },
+            {
+              status: "awaiting-approval",
+            },
+          ),
+        ),
+      ],
+    });
+    assert.match(one[1].text, /\(1 of 1 task did not succeed\)/, "one task, singular");
+  });
 });
 
 describe("Tracker", () => {
@@ -610,6 +727,97 @@ describe("Tracker", () => {
     assert.equal(t.isIdle(), true, "a gate alone waits on a person");
     t.applyOverview([entry(waiting("2026-07-07T10:40:00.000Z"))]);
     assert.equal(t.isIdle(), false, "the retry will run without one");
+  });
+
+  it("is idle while a parent's only live children wait at their own gates", () => {
+    const t = new Tracker(() => NOW);
+    const board = (states: SpawnTaskState[], child: PipelineInstance) => {
+      const parent = spawnParent(states);
+      return [entry(parent, [parent, child])];
+    };
+    const waits = (key: string, index: number) =>
+      spawnedChild(
+        key,
+        index,
+        { status: "awaiting-approval", pause: "gate" },
+        { status: "awaiting-approval" },
+      );
+    t.applyOverview(board(["succeeded", "awaiting-approval", "pending"], waits("b", 1)));
+    assert.equal(t.isIdle(), true, "the parent reads running, but only a person moves it on");
+
+    t.applyOverview(board(["succeeded", "running", "pending"], spawnedChild("b", 1)));
+    assert.equal(t.isIdle(), false, "a running child is work in flight");
+
+    // Fresh trackers: this one still remembers child b running.
+    const owed = new Tracker(() => NOW);
+    owed.applyOverview(board(["awaiting-approval", "planned", "pending"], waits("a", 0)));
+    assert.equal(owed.isIdle(), false, "so is a task whose child's start is owed");
+    const none = new Tracker(() => NOW);
+    none.applyOverview(board(["awaiting-approval", "pending", "pending"], waits("a", 0)));
+    assert.equal(none.isIdle(), true, "and with no start owed, only a person moves it on");
+  });
+
+  it("names a spawned child by its task key, so two children of one pipeline read apart", () => {
+    const t = new Tracker(() => NOW);
+    t.applyOverview([entry(instance())]);
+    t.applyRuns([]);
+    const a = spawnedChild("a", 0);
+    const b = spawnedChild("b", 1);
+    assert.deepEqual(
+      t.applyOverview([entry(a, [a, b])]).map((l) => [l.kind, l.text, l.label]),
+      [
+        ["pipeline.started", "pipeline Task [a] started (spawned)", "Task [a]"],
+        ["pipeline.started", "pipeline Task [b] started (spawned)", "Task [b]"],
+      ],
+    );
+    assert.equal(
+      t.applyRuns([run({ id: "child-run-0", scheduleName: "Task · work" })])[0].text,
+      "Task [a] › work started",
+      "a child's step runs carry the key too",
+    );
+
+    const aWaits = spawnedChild(
+      "a",
+      0,
+      { status: "awaiting-approval", pause: "gate" },
+      { status: "awaiting-approval" },
+    );
+    const bFailed = spawnedChild(
+      "b",
+      1,
+      { status: "failed", payload: { reason: "tests broke" } },
+      { status: "failed", endedAt: "2026-07-07T10:31:00.000Z" },
+    );
+    assert.deepEqual(
+      t.applyOverview([entry(aWaits, [aWaits, bFailed])]).map((l) => [l.kind, l.text]),
+      [
+        [
+          "pipeline.gate",
+          'pipeline Task [a] is waiting for approval at "work" · argus approve child-0 --phase work',
+        ],
+        ["phase.changed", "Task [b] › work failed: tests broke"],
+        ["pipeline.ended", '✗ pipeline Task [b] failed at "work": tests broke'],
+      ],
+    );
+  });
+
+  it("says a parent's children pause waits for a person, not for an approval of work", () => {
+    const t = new Tracker(() => NOW);
+    t.applyOverview([entry(spawnParent(["succeeded", "running", "pending"]))]);
+    const paused = spawnParent(
+      ["succeeded", "failed", "blocked"],
+      { status: "awaiting-approval", pause: "children" },
+      { status: "awaiting-approval", updatedAt: "2026-07-07T10:31:00.000Z" },
+    );
+    const [gate, ...rest] = t.applyOverview([entry(paused)]);
+    assert.deepEqual(rest, [], "the phase's own change is said by the gate line");
+    assert.equal(gate.kind, "pipeline.gate");
+    assert.equal(
+      gate.text,
+      'pipeline Task loop is waiting for you at "Tasks" (2 of 3 tasks did not succeed) · argus approve inst-loop --phase tasks',
+    );
+    assert.equal(gate.phaseId, "tasks", "the approve command names the spawn phase");
+    assert.equal(t.isIdle(), true, "nothing moves until a person decides");
   });
 
   it("tags a webhook- or chain-fired instance start the same way", () => {

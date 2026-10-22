@@ -111,6 +111,36 @@ export type JournalKind =
   | "realization.succeeded"
   | "realization.failed"
   | "realization.stale"
+  /**
+   * Spawn phases (engine/children.ts), on the parent's journal:
+   *
+   *   children.started      the task list was built
+   *   child.planned         a task's child id was minted (`key → id`)
+   *   child.started         the child was created, or found already started
+   *   child.deferred        a start or revive waits (a read error, a busy
+   *                         target, the spend budget, a failed preflight)
+   *   child.refused         a start or revive was refused for good; the task failed
+   *   child.revived         a failed child was revised for the spawn phase's revise
+   *   child.revive-refused  that revise was refused by the child
+   *   child.aborted         the child was aborted with its parent
+   *   children.held         the spend budget holds new children
+   *   children.released     the hold lifted
+   *   children.joined       every task succeeded; the phase succeeded
+   *   children.halted       a task did not succeed and nothing is live: the
+   *                         phase waits for a person (`pause: "children"`)
+   */
+  | "children.started"
+  | "child.planned"
+  | "child.started"
+  | "child.deferred"
+  | "child.refused"
+  | "child.revived"
+  | "child.revive-refused"
+  | "child.aborted"
+  | "children.held"
+  | "children.released"
+  | "children.joined"
+  | "children.halted"
   | "instance.ended";
 
 export interface JournalEntry {

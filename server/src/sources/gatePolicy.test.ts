@@ -4,6 +4,7 @@ import {
   approvalConditionEligibility,
   conditionFailureReason,
   conditionOutcome,
+  autoApprovalQualification,
   knowledgeCommitReasons,
   stagedKnowledgeReasons,
 } from "./gatePolicy.js";
@@ -255,6 +256,11 @@ test("approvalConditionEligibility: only a known gate pause of a phase that decl
     "a question for a person",
   );
   assert.deepEqual(
+    approvalConditionEligibility(progress({ pause: "children" }), whenDef()),
+    { ok: false, cause: "pause" },
+    "a spawn phase whose children stopped short, even with approveWhen in its snapshot",
+  );
+  assert.deepEqual(
     approvalConditionEligibility(progress({ pause: undefined }), whenDef()),
     { ok: false, cause: "pause" },
     "a pause of unknown cause",
@@ -328,4 +334,36 @@ test("conditionFailureReason: the label, the exit and the last line printed, bou
   );
   const long = conditionFailureReason("c", 3, `first\r\n${"y".repeat(400)}`);
   assert.equal(long, `approval condition "c" exited 3: …${"y".repeat(299)}`);
+});
+
+test("autoApprovalQualification: only a gate pause may be opened, and a refusal names the pause", () => {
+  // A phase whose autoApprove bar and rubric would otherwise let the rule run.
+  const def = phase({}) as unknown as PhaseDef;
+  const reasons = (extra: Partial<PhaseProgress>) => {
+    const q = autoApprovalQualification(
+      {
+        id: "p1",
+        name: "P1",
+        gated: true,
+        status: "awaiting-approval",
+        attempt: 0,
+        payload: null,
+        steps: [{ name: "s", runId: "r", status: "succeeded" }],
+        ...extra,
+      } as PhaseProgress,
+      def,
+      new Map(),
+    );
+    assert.equal(q.status, "ineligible", `${JSON.stringify(extra)} is not for the rule`);
+    assert.equal((q as { cause: string }).cause, "pause", "because of its pause");
+    return (q as { reasons: string[] }).reasons;
+  };
+  assert.deepEqual(reasons({ pause: "needs-input" }), ["needs-input pause"]);
+  assert.deepEqual(
+    reasons({ pause: "children" }),
+    ["children pause"],
+    "a spawn phase whose children stopped short waits for a person",
+  );
+  assert.deepEqual(reasons({ pause: undefined }), ["pause of unknown cause"]);
+  assert.deepEqual(reasons({ status: "running" }), ["phase is running"]);
 });

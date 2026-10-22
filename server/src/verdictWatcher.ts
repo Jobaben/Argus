@@ -226,9 +226,10 @@ async function openQualifiedGates(
     // snapshot — a definition edited since cannot move them.
     const def = inst.definition ?? pipelines.find((p) => p.id === inst.pipelineId);
     for (const phase of inst.phases) {
-      // Only a gate pause: a `needs-input` pause is a question for a person,
-      // and a pause of unknown cause (written before causes were recorded)
-      // is treated as one. A pre-check only, over what this tick read: the
+      // Only a gate pause: a `needs-input` pause is a question for a person
+      // (a pause of unknown cause, written before causes were recorded, is
+      // treated as one), and a `children` pause leaves a spawn phase's tasks
+      // to a person. A pre-check only, over what this tick read: the
       // engine decides again, from the verdict store under its lock, and
       // records the basis from the stored verdicts — this request only names
       // which ones.

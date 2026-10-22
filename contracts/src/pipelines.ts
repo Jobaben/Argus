@@ -435,6 +435,219 @@ export interface StepFailure {
   reason: string;
 }
 
+// ── Spawn phases (one child instance per task) ───────────────────────────────
+
+/**
+ * Where a spawn phase reads a value from: the validated `result` of an earlier
+ * phase of the same instance, and a path of property names into it (`[]` =
+ * the whole result). The phase must be a transitive `needs` dependency of the
+ * spawn phase and declare a `result` whose schema declares the path, all
+ * checked when the pipeline is saved.
+ */
+export interface SpawnSource {
+  phase: string;
+  path: string[];
+}
+
+/**
+ * Turns a phase into a **spawn phase**: instead of running steps, it starts one
+ * instance of another pipeline (a *child*) per element of a task list an
+ * earlier phase produced, in dependency order, and succeeds once every child
+ * has succeeded. A child that fails or is aborted stops new spawns and, once
+ * the running children have finished, pauses the phase for a person
+ * (`pause: "children"`).
+ *
+ * Exactly one child per task: each child's instance id is minted and saved on
+ * the parent before the child is started, and starting it again with that id
+ * returns the existing instance.
+ */
+export interface SpawnPolicy {
+  /** The pipeline every child runs. It must exist, be another pipeline, have
+   *  no trigger or a webhook trigger, and have no spawn phase of its own (one
+   *  level deep). Checked when either pipeline is saved. */
+  pipelineId: string;
+  /** The task list: an array of objects at `items.path` in `items.phase`'s
+   *  result. The result schema must declare it as one. */
+  items: SpawnSource;
+  /** The task property that names each task: a required string in the item
+   *  schema. Each value must be unique and 1-64 letters, digits, ".", "-" or
+   *  "_", starting with a letter or digit. */
+  key: string;
+  /** The task property listing the keys of the tasks it waits for: an array of
+   *  strings in the item schema. A task starts only when every task it names
+   *  has succeeded. Absent = no ordering beyond `maxParallel`. */
+  dependsOn?: string;
+  /** The task property shown as its title: a string in the item schema,
+   *  clipped to 60 characters on the parent (the child gets it whole). Absent =
+   *  the key is the title. */
+  title?: string;
+  /** How many children may be live at once. Default 1. Above 1 is refused
+   *  until parallel Claude sessions are safe (reliability WS13). */
+  maxParallel?: number;
+  /** The most tasks the list may hold. Default 20, at most 50. A longer list
+   *  fails the phase that produced it. */
+  maxItems?: number;
+  /** The git ref every child's worktrees are cut from, instead of the child
+   *  definition's `workspace.base` (`PipelineInstance.workspaceBase`). Also in
+   *  the child's payload. Argus does not fetch it. */
+  base?: string;
+  /** Values from earlier phases' results copied into every child's payload
+   *  under `include.<name>`: the approved spec's path and commit, say. Up to
+   *  16 names of 1-40 letters, digits, "-" or "_". A path the result does not
+   *  hold is copied as null. */
+  include?: Record<string, SpawnSource>;
+}
+
+/**
+ * Where one task stands, as its spawn phase last saw it:
+ * - `pending`: not started; waiting for its dependencies or a free slot;
+ * - `planned`: its child's instance id is minted and saved; the start is owed;
+ * - `reviving`: its failed child is being revised in place (a revise of the
+ *   spawn phase); the revise is owed;
+ * - `running`, `awaiting-approval`: the child's own status;
+ * - `succeeded`, `failed`, `aborted`: the child ended so (`failed` also for a
+ *   start Argus refused for good, see `reason`);
+ * - `blocked`: a task it depends on, directly or through others, failed or
+ *   was aborted, so it will not start unless that task is re-run.
+ */
+export type SpawnTaskState =
+  | "pending"
+  | "planned"
+  | "reviving"
+  | "running"
+  | "awaiting-approval"
+  | "succeeded"
+  | "failed"
+  | "aborted"
+  | "blocked";
+
+/**
+ * One task of a spawn phase, and the child that runs it. Kept small on
+ * purpose: the parent's transition log records it, one line at most 16 KiB.
+ * Its position in `PhaseChildren.tasks` is its index everywhere
+ * (`InstanceParentRef.index`, the `child:<phaseId>#<i>` status key).
+ */
+export interface SpawnTask {
+  /** The task's `spawn.key` value. */
+  key: string;
+  /** The task's `spawn.title` value, clipped to 60 characters. */
+  title?: string;
+  /** Positions in `PhaseChildren.tasks` of the tasks this one waits for.
+   *  Absent = none. */
+  dependsOn?: number[];
+  state: SpawnTaskState;
+  /** The current child's instance id: minted when the task is planned, kept
+   *  through a revive. Absent while the task has no child. */
+  instanceId?: string;
+  /** Earlier children of this task that a fresh child replaced (an aborted
+   *  child, a refused start), oldest first. */
+  previousInstanceIds?: string[];
+  /** While `awaiting-approval`: the child's phase that waits at a gate. */
+  waitingPhaseId?: string;
+  /** While `failed` or `aborted`: one line (at most 200 characters) saying why. */
+  reason?: string;
+  /** The latest start or revive of a `planned` or `reviving` task that was
+   *  put off (a read error, the spend budget, a busy target pipeline).
+   *  Cleared once the child is seen to move. */
+  deferred?: { reason: string; at: string };
+  /** While `reviving`: the parent's revise decision (`GD-…`) the revive
+   *  carries out. The child's own decision record names it as
+   *  `parentDecisionId`. */
+  reviveDecisionId?: string;
+}
+
+/**
+ * A spawn phase's task list and the state of each task's child. Built once,
+ * when the phase first starts, and kept across a revise of the spawn phase:
+ * tasks that succeeded are not re-run.
+ */
+export interface PhaseChildren {
+  /** The pipeline every child runs (`spawn.pipelineId`), frozen when the list
+   *  was built. */
+  pipelineId: string;
+  /** The phase attempt whose result the tasks were read from. */
+  source: { phaseId: string; attempt: number };
+  /** `spawn.maxParallel` in force, frozen with the list. */
+  maxParallel: number;
+  tasks: SpawnTask[];
+}
+
+/** A spawned child's link to the parent task it runs. */
+export interface InstanceParentRef {
+  instanceId: string;
+  pipelineId: string;
+  /** The parent's spawn phase. */
+  phaseId: string;
+  /** The task's position in that phase's `PhaseChildren.tasks`. */
+  index: number;
+  key: string;
+}
+
+/**
+ * A spawned child's `triggerPayload`, which its prompts read as
+ * `{{trigger.payload}}` (capped like any placeholder, 16 KiB by default; the
+ * whole payload is at most 64 KiB).
+ */
+export interface SpawnTriggerPayload {
+  /** The task, exactly as the parent's validated result held it. */
+  task: Record<string, unknown>;
+  /** The task's key. */
+  key: string;
+  /** `spawn.base`, when the spawn phase names one. */
+  base?: string;
+  /** `spawn.include`, resolved: each name's value from the parent's results. */
+  include?: Record<string, unknown>;
+  parent: InstanceParentRef;
+}
+
+/** What a spawn phase publishes as its payload (and under its `produces`
+ *  name) when it succeeds, and holds as its payload while paused at
+ *  `children`. */
+export interface SpawnChildrenSummary {
+  pipelineId: string;
+  /** Every task, in list order. */
+  tasks: Array<{ key: string; title?: string; state: SpawnTaskState; instanceId?: string }>;
+  /** Task counts by state; a state with no task is absent. */
+  counts: Partial<Record<SpawnTaskState, number>>;
+  /** Keys of the tasks that did not succeed, in list order: what approving the
+   *  phase at its `children` pause drops. Empty on a join. */
+  notSucceeded: string[];
+}
+
+/** A spawned child as a parent's gate review shows it, read per request. */
+export interface SpawnChildView {
+  status: InstanceStatus;
+  /**
+   * The child phase that waits on a person, or else its failed phase: where
+   * the drawer links, and the `{ phaseId, attempt }` a revise of that child
+   * names. Absent when no phase of the child waits or failed.
+   */
+  decisionPhase?: {
+    phaseId: string;
+    phaseName: string;
+    attempt: number;
+    status: "awaiting-approval" | "failed";
+  };
+}
+
+/** One task of a spawn phase, with its child as read for a review. */
+export interface SpawnTaskReview extends SpawnTask {
+  /** Absent while the task has no child, or when its record is gone. */
+  child?: SpawnChildView;
+}
+
+/**
+ * A spawn phase's children as a person deciding on it sees them: the phase's
+ * own record of each task, plus each child as it is now. Derived per read;
+ * nothing here is stored.
+ */
+export interface PhaseChildrenReview extends PhaseChildren {
+  tasks: SpawnTaskReview[];
+  /** Keys of the tasks that did not succeed, in task order: what approving at a
+   *  `children` pause drops, and what revising the spawn phase re-runs. */
+  notSucceeded: string[];
+}
+
 /**
  * A deterministic check Argus runs itself once every step of a phase has
  * reported success — the difference between "the agent said the tests pass"
@@ -715,6 +928,7 @@ export interface PhaseDef {
   id: string;
   name: string;
   cwd: string;
+  /** Empty only on a spawn phase. */
   steps: PhaseStep[];
   gated: boolean;
   /**
@@ -872,6 +1086,15 @@ export interface PhaseDef {
    * realization needs both.
    */
   acceptanceVerification?: AcceptanceVerificationPolicy;
+  /**
+   * Turn this phase into a **spawn phase**: one child instance of
+   * `spawn.pipelineId` per task in an earlier phase's result, joined before
+   * the phases that need this one (see {@link SpawnPolicy}). A spawn phase runs
+   * no agent: it declares only `id`, `name`, `cwd`, `needs`, `produces` and
+   * `spawn`, with `steps: []` and `gated: false`. Its payload is the
+   * {@link SpawnChildrenSummary}.
+   */
+  spawn?: SpawnPolicy;
 }
 
 // ── Harness: Argus-owned invocation channels ─────────────────────────────────
@@ -1267,12 +1490,16 @@ export interface PhaseProgress {
    * Why the phase is (or last was) `awaiting-approval`: `gate` — every step
    * finished, its result validated and its checks passed, and the phase is
    * gated; `needs-input` — an agent asked a question, which pauses the phase
-   * before any of that ran. Set when the pause begins, cleared on a fresh
-   * attempt. Absent on pauses written before it was recorded: unknown. Only a
-   * `gate` pause may be opened by an automated rule — a question put to a
-   * person is not answered by a score.
+   * before any of that ran; `children` — a spawn phase whose children stopped
+   * short (a child failed or was aborted, nothing more spawns, and no child is
+   * still live). Approving a `children` pause accepts the tasks that succeeded
+   * and drops the rest; revising it re-runs every task that did not succeed.
+   * Set when the pause begins, cleared on a fresh attempt. Absent on pauses
+   * written before it was recorded: unknown. Only a `gate` pause may be opened
+   * by an automated rule — a question put to a person is not answered by a
+   * score, and a spawn phase's children are not judged by one.
    */
-  pause?: "gate" | "needs-input";
+  pause?: "gate" | "needs-input" | "children";
   /** Free-form: a gated phase carries whatever its agent signalled, a failed
    *  phase carries a {@link PhaseFailurePayload}. Narrow before reading. */
   payload: unknown | null;
@@ -1329,6 +1556,9 @@ export interface PhaseProgress {
    * that is not part of one.
    */
   realization?: PhaseRealizationRef;
+  /** A spawn phase's tasks and their children. Absent until the phase first
+   *  starts, and on every other phase. */
+  children?: PhaseChildren;
 }
 
 /** A phase attempt's link into the durable realization it belongs to. */
@@ -1367,19 +1597,28 @@ export interface PipelineInstance {
   currentPhaseIndex: number;
   phases: PhaseProgress[];
   /** `"webhook"` — fired by `POST /api/hooks/pipelines/:id`. `"chained"` —
-   *  fired by an `after` trigger once a source pipeline instance ended. */
-  trigger: "manual" | "scheduled" | "webhook" | "chained";
+   *  fired by an `after` trigger once a source pipeline instance ended.
+   *  `"spawned"` — started by a parent's spawn phase (`parent`). */
+  trigger: "manual" | "scheduled" | "webhook" | "chained" | "spawned";
   /**
    * The firing payload, when the trigger carried one: the webhook's JSON body
    * (capped at 64 KiB; a larger body is rejected with 413 before an instance
-   * is created) for `trigger: "webhook"`, or
-   * `{ sourceInstanceId, sourcePipelineId, status }` for `trigger: "chained"`.
+   * is created) for `trigger: "webhook"`,
+   * `{ sourceInstanceId, sourcePipelineId, status }` for `trigger: "chained"`,
+   * or the {@link SpawnTriggerPayload} for `trigger: "spawned"`.
    * Absent for `"manual"`/`"scheduled"`. The instance's command checks read a
    * JSON copy through `ARGUS_TRIGGER_PAYLOAD_FILE` (HARNESS.md §6).
    */
   triggerPayload?: unknown;
   /** `trigger: "chained"` only: the source instance this one was fired from. */
   chainedFrom?: string;
+  /** `trigger: "spawned"` only: the parent instance, spawn phase and task this
+   *  child runs. Retention keeps a child while its parent's record exists. */
+  parent?: InstanceParentRef;
+  /** The ref this instance's worktrees are cut from instead of the
+   *  definition's `workspace.base`: a spawned child's `spawn.base`. Absent =
+   *  the definition's. Argus does not fetch it. */
+  workspaceBase?: string;
   /**
    * The instance-wide signal credential every run of an instance used to
    * share. Accepted only for a step recorded without its own
@@ -1578,6 +1817,10 @@ export interface PhaseReview {
    * first attempt's, and approving them is not the same decision.
    */
   realization?: PhaseRealizationRef;
+  /** On a spawn phase: every task, its child and the child phase a person
+   *  would act on. Absent on any other phase, and on a spawn phase whose task
+   *  list was never built. */
+  children?: PhaseChildrenReview;
 }
 
 /** One artifact's bytes, for the read-only viewer. */
@@ -1595,6 +1838,8 @@ export interface PhaseArtifactContent {
 /** The body of `POST /api/instances/:id/approve`. Every field optional — a
  *  bare POST stays a valid approval of the single paused phase. */
 export interface ApproveRequest {
+  /** What a person answered to a phase that asked (`needs-input`). Refused
+   *  with 400 `answers-not-accepted` at a `children` pause. */
   answers?: unknown;
   /** Which paused phase to approve when more than one is waiting. */
   phaseId?: string;
@@ -1606,4 +1851,27 @@ export interface ReviseRequest {
   note?: string;
   /** Which paused phase to revise when more than one is waiting. */
   phaseId?: string;
+}
+
+/**
+ * Why `POST /api/instances/:id/approve` or `/revise` was refused, for the
+ * refusals a client acts on:
+ * - `parent-decided` (409): the instance is a spawned child whose parent no
+ *   longer waits for it (the parent ended, its spawn phase moved on, or a newer
+ *   child replaced this one). Abort the child, or start a follow-up instead;
+ * - `answers-not-accepted` (400): `answers` was sent to a spawn phase paused
+ *   at `children`, which asked no question;
+ * - `children-running` (409): approving a `children` pause while a child a
+ *   person re-ran is live again, or its revise is still being applied. Wait
+ *   for it, or abort it, then decide.
+ */
+export type GateActionRefusal = "parent-decided" | "answers-not-accepted" | "children-running";
+
+/** The reply of approve, revise and abort. */
+export interface GateActionReply {
+  ok: boolean;
+  /** Why it was refused, for a person. */
+  error?: string;
+  /** Why it was refused, for a client; set only for a {@link GateActionRefusal}. */
+  code?: GateActionRefusal;
 }

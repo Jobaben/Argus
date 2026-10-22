@@ -339,10 +339,20 @@ A failed phase with a retry scheduled (`retryAt`) counts as live in
 pending: no `onFailure`, no `instance.ended`, no `after: failed` chain and no
 worktree cleanup. A due retry runs while a sibling waits at its gate.
 
+A spawn phase (§20) stays `running` while its children run or wait at their
+own gates: a child's gate is the child's, and never makes its parent
+`awaiting-approval`. The parent waits only when the spawn phase pauses at
+`children` (a child failed or was aborted, and none is live), and only a person
+opens that pause. Whether an instance is in flight, moving without a person,
+reads the spawn phase's tasks: a parent whose live children all wait at their
+own gates is not, so `argus tail --until-idle` returns.
+
 The questions are named once, in `server/src/sources/instanceStatus.ts`:
 `resumable` (the engine may still act), `isTerminal`, `appliesResults`
 (results apply only while no gate waits), `hasWaitingGate` (asked of the
-phases, for every count and badge), `pendingRetry` and `liveStatus`.
+phases, for every count and badge), `pendingRetry`, `liveStatus`, `inFlight`
+(something moves without a person) and `isLiveTask` (a spawn phase's task
+holds one of its `maxParallel` slots).
 `engine/instanceStatus.test.ts` fails on an inline `running` or
 `awaiting-approval` comparison of an instance's status in the engine or the
 transitions, on a spelled-out terminal check, and on a hand-written live status.
@@ -610,16 +620,19 @@ it (`PhaseDef.approveWhen`, `ApprovalCondition` in `@argus/contracts`;
   condition calls make it wait forever, journalled once; look there when a gate
   that should have opened has not.
 - **What is never polled.** A phase paused for an agent's question
-  (`needs-input`), a pause recorded before pause causes were, a gate whose
-  attempt staged knowledge (journalled once per attempt as "not polled"), an
-  instance whose pipeline was deleted, and an instance whose gate decision is
-  still being completed.
+  (`needs-input`), a spawn phase waiting on its children (`children`, §20; a
+  spawn phase cannot declare `approveWhen` either), a pause recorded before
+  pause causes were, a gate whose attempt staged knowledge (journalled once per
+  attempt as "not polled"), an instance whose pipeline was deleted, and an
+  instance whose gate decision is still being completed.
 - **A person first, and `autoApprove` beside it.** A person can approve,
   revise or abort at any time; a poll that finishes after the phase moved is
   refused under the instance lock (`approveOnCondition` and `failOnCondition`
   in `engine/gates.ts` decide again, on exactly the terms a Verdict
-  auto-approval does) and journalled as "not applied". `approveWhen` may sit
-  beside `autoApprove`; whichever qualifies first opens the gate.
+  auto-approval does) and journalled as "not applied". So is a poll on a
+  spawned child its parent no longer waits for (`409 parent-decided`, §20).
+  `approveWhen` may sit beside `autoApprove`; whichever qualifies first opens
+  the gate.
 - **Read-only and repeatable.** A shutdown cuts a poll in flight and discards
   its result, and the next server runs it again, so a condition must only
   read. It never holds a shell open between polls.
@@ -1166,7 +1179,10 @@ The directory itself:
   record once it falls outside the per-pipeline retention window
   (`INSTANCE_KEEP`). Invocation records, by contrast, are pruned per _run_ —
   with `pruneRuns`'s retention window, because they are keyed by `runId` — so
-  the two can fall out of retention on different schedules.
+  the two can fall out of retention on different schedules. A spawned child
+  (§20) is kept past the window while its parent's record exists, or cannot be
+  read right now: only a parent record that is provably gone releases it.
+  Kept children still count toward the window.
 
 File artifacts are the counterpart of `produces`/`PhaseResult` payload
 artifacts: a payload is a small validated JSON value pasted into a later
@@ -1336,9 +1352,11 @@ exactly like its steps.
   or candidate of the instance verifying or polling at the same time, since
   they share the one copy. List a check that judges the work against the
   payload before any check that runs repository code. The copy is pruned with
-  the instance (§5). A payload is set by a webhook start (the request body)
-  and by a chained start (`{ sourceInstanceId, sourcePipelineId, status }`); a
-  manual or scheduled start has none.
+  the instance (§5). A payload is set by a webhook start (the request body),
+  by a chained start (`{ sourceInstanceId, sourcePipelineId, status }`) and by
+  a spawned start (its `SpawnTriggerPayload`,
+  `{ task, key, base?, include?, parent }`, §20); a manual or scheduled start
+  has none.
 - **A file, not a variable.** A webhook body can be 64 KiB, and a Windows
   environment value is capped at 32,767 characters. A copy, never the instance
   record: the record also holds the definition snapshot and its `hookToken`.
@@ -1840,11 +1858,11 @@ the work a **git worktree** of its own:
 }
 ```
 
-| Field   | Meaning                                                                                                                                                                                                                                                          |
-| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scope` | `"instance"` — one worktree per pipeline instance, shared by every phase that opts in. `"attempt"` — a fresh worktree per phase attempt. `"none"` — this phase opts _out_ of a policy it would otherwise inherit and runs in its own `cwd`, no worktree created. |
-| `base`  | The ref the worktree is cut from. Default: `HEAD` of the repository at the phase's `cwd`. Validated as a ref: no whitespace, no leading `-`.                                                                                                                     |
-| `keep`  | Keep the directory after the instance ends. Default `false` — the directory is removed, the branch is kept.                                                                                                                                                      |
+| Field   | Meaning                                                                                                                                                                                                                                                                                            |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scope` | `"instance"` — one worktree per pipeline instance, shared by every phase that opts in. `"attempt"` — a fresh worktree per phase attempt. `"none"` — this phase opts _out_ of a policy it would otherwise inherit and runs in its own `cwd`, no worktree created.                                   |
+| `base`  | The ref the worktree is cut from. Default: `HEAD` of the repository at the phase's `cwd`. Validated as a ref: no whitespace, no leading `-`. A spawned child's trees are cut from its `workspaceBase` (its parent's `spawn.base`, §20) instead. Argus never fetches: the child's first phase does. |
+| `keep`  | Keep the directory after the instance ends. Default `false` — the directory is removed, the branch is kept.                                                                                                                                                                                        |
 
 Narrowest wins, as everywhere else: `phase.workspace ?? pipeline.workspace`.
 Absent at both levels, nothing changes — the phase runs in its own `cwd`
@@ -2834,7 +2852,9 @@ this is what it means for someone running pipelines.
 Each instance has `~/.claude/argus/transitions/<instanceId>.jsonl`: a numbered
 record for every save of the instance, saying which pure transitions ran
 (`events`), what they changed, and a summary of the side effects the saved
-state owes (`effects`: launches, checks, stops, knowledge commits). It supports
+state owes (`effects`: launches, checks, stops, knowledge commits, and a spawn
+phase's `spawn` work: `plan` its task list or its next tasks, `start` a planned
+child, `revive` a failed one). It supports
 **replay and integrity diagnosis, not authority**. The saved instance is what
 Argus acts on, and a record is never executed on its own word. The `effects`
 field in particular is a diagnostic snapshot, written for a reader. Nothing in
@@ -2956,6 +2976,21 @@ and it is at-least-once. "Exactly once" is not claimed for effects in general.
   or a shutdown is lost and runs again on the new process's first tick;
   nothing about a poll is stored on the instance. A condition failure is one
   transition save, so there is nothing to recover.
+- **An owed spawn** (§20). Every live parent's spawn phases are re-driven
+  under the parent's lock: a task list a crash left unbuilt is built, every
+  `planned` child is started under the id the parent saved (an existing record
+  is found, never created twice; one Argus cannot read is waited for, never
+  overwritten), and every `reviving` child is revived, once: whether its revise
+  happened is asked of the child's own linked decisions.
+- **A child that ended while Argus was down.** The same pass reads every child
+  the saved parent names and mirrors it: the spawn phase joins, pauses at
+  `children`, or plans its next task. A `children` pause is not a gate here:
+  an observation of a child is what ends it.
+- **A child its parent no longer waits for.** A live child of a parent that
+  ended before its abort cascade ran, whose spawn phase joined or was accepted,
+  or whose task now names a fresh child, is aborted (`parent-aborted`). The
+  candidates come from the saved parent (`decidedChildren` in
+  `transitionLog/effects.ts`), never from `effects`.
 
 The tests for all of this simulate recovery — they discard an engine and build a
 fresh one over the same files — and do not establish power-loss durability.
@@ -2963,16 +2998,18 @@ fresh one over the same files — and do not establish power-loss durability.
 ### For contributors: forgotten transitions
 
 At each commit, every pipeline status change (the instance's status, a phase's
-status, attempt, pause or retry time, a step's run id or status, the pending gate
-operation — not run records, verification reports or Verdicts) must be
+status, attempt, pause or retry time, a step's run id or status, a spawn task's
+child id or state, keyed `child:<phaseId>#<i>`, the pending gate operation — not
+run records, verification reports or Verdicts) must be
 accounted for by an event about that phase. One that is not is written on the
 record as `unattributed` and logged as a warning in production. The test
 preload sets `ARGUS_STRICT_TRANSITIONS=1`, which makes it throw, so a status
 write that bypasses a pure transition fails the suite. The engine no longer
 writes those fields itself: launch planning, retry scheduling, failure
-classification, gate link/complete and candidate tree cleanup are pure
-transitions in `pipelineTransitions.ts`, and a targeted static test bans direct
-writes of them in engine modules.
+classification, gate link/complete, candidate tree cleanup and every change to
+a spawn phase's tasks are pure transitions in `pipelineTransitions.ts`, and a
+targeted static test bans direct writes of them, of a phase's `children` and of
+a task's fields, in engine modules.
 
 ## 19. Trajectory signals and judging
 
@@ -3361,3 +3398,340 @@ v2 digest names a digest no registered definition has: it is **never re-read**
 under the current v2 (the report selects captures by exact digest, so it is in
 no Verdict row set), and the qualification definition row reports
 `digest-mismatch` while a recorded configuration carries an unregistered digest.
+
+## 20. Spawn phases
+
+A **spawn phase** works through a list of tasks with one pipeline instance per
+task. Instead of running steps, it reads a task list from an earlier phase's
+validated `result`, starts one instance of another pipeline (a _child_) per
+task, in dependency order, and succeeds once every child has succeeded. It runs
+no agent of its own, so it has no steps, checks, gate, retry or worktree: each
+task's work, and its review, happen in its child, at the child's own gates.
+
+The pure half (the limits, the item check, the order, the payload, the summary)
+is `server/src/sources/children.ts`; the engine half (the starts, the mirror,
+the abort cascade, recovery) is `engine/children.ts`. Every change to the
+parent is a pure transition in `pipelineTransitions.ts` (§18). The pipelines
+form refuses a phase with no steps, so a pipeline with a spawn phase is
+authored and edited through the API. The worked recipe is
+[Spawn child instances](guides/pipelines.md#spawn-child-instances).
+
+### What a spawn phase is
+
+```jsonc
+{
+  "id": "tasks",
+  "name": "Tasks",
+  "cwd": "/src/app", // must exist, although nothing runs there
+  "needs": ["plan"],
+  "produces": "tasks-summary", // publishes the children summary
+  "spawn": {
+    "pipelineId": "task-loop", // the pipeline every child runs
+    "items": { "phase": "plan", "path": ["tasks"] }, // the task list in plan's result
+    "key": "id", // names each task
+    "dependsOn": "after", // optional: the keys a task waits for
+    "title": "title", // optional: shown for the task
+    "maxParallel": 1, // optional: default 1, and 1 is the most for now
+    "maxItems": 20, // optional: default 20, at most 50
+    "base": "origin/main", // optional: every child's worktrees are cut from it
+    "include": { "spec": { "phase": "plan", "path": ["spec"] } }, // optional
+  },
+}
+```
+
+| Field         | Meaning                                                                                                                                                                                                                                          |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pipelineId`  | The pipeline every child runs (the _task pipeline_). See [Targets](#targets).                                                                                                                                                                    |
+| `items`       | `{ phase, path }`: the task list is the array at `path` (property names; `[]` is the whole result) in `phase`'s result.                                                                                                                          |
+| `key`         | The task property that names each task. Each value must be unique and 1-64 letters, digits, `.`, `-` or `_`, starting with a letter or digit: it is safe in a label, a path segment or a branch name.                                            |
+| `dependsOn`   | The task property listing the keys of the tasks it waits for. A task starts only when every task it names has succeeded. Absent: no order beyond `maxParallel`.                                                                                  |
+| `title`       | The task property shown as its title, clipped to 60 characters on the parent. Absent: the key is the title.                                                                                                                                      |
+| `maxParallel` | How many children may be live at once. Default 1. Above 1 is refused until parallel Claude sessions are safe (reliability WS13); it is a constant, not a setting, so one machine never runs what another refuses to save.                        |
+| `maxItems`    | The most tasks the list may hold. Default 20, at most 50.                                                                                                                                                                                        |
+| `base`        | The git ref every child's worktrees are cut from, instead of the task pipeline's own `workspace.base` (§11). Also in each child's payload. Validated like `workspace.base`.                                                                      |
+| `include`     | Named values from earlier phases' results, copied into every child's payload under `include.<name>`: the approved spec's path and commit, say. Up to 16 names of 1-40 letters, digits, `-` or `_`; each `{ phase, path }`, the path of any type. |
+
+A spawn phase declares only `id`, `name`, `cwd`, `needs`, `produces` and
+`spawn`. It is stored with `steps: []` and `gated: false`, and accepts those two
+values back, so a `GET` → `PUT` round trip saves. Anything else is a `400`: a
+`retry` or `checks` that looks meaningful but would be ignored is worse than a
+refusal. The checks made when the pipeline is saved
+(`validateSpawnPhases` in `sources/pipelines.ts`):
+
+- `items.phase` and every `include` source is another phase that is a
+  transitive `needs` dependency of the spawn phase (so its result exists before
+  any child starts) and declares a `result` whose schema declares the path.
+  A path is at most 8 property names.
+- The schema at `items.path` is an array of objects; each task declares `key`
+  as a required string, `dependsOn` as an array of strings and `title` as a
+  string.
+- A spawn phase may not sit between an implementation phase and its acceptance
+  verifier (§16): a remediation re-runs exactly those phases to re-verify an
+  implementation, and re-running children is not what it means.
+
+The exact messages are in [API.md § Phase fields](API.md#phase-fields).
+
+**The item check.** The task list is checked again, against the result itself,
+when the source phase submits it (`readSpawnItems`, from
+`resolvePhaseResult`): before the source phase's own checks and gate, so nobody
+approves a plan that could not run. The source phase fails, classed `signal`,
+when the list is missing, is not a list, is empty, holds more than `maxItems`
+tasks, or holds a task that is not an object, has no `key` string, has a key
+outside the alphabet above or one another task already has, is over 16 KiB as
+JSON, has a `dependsOn` that is not a list of strings, or depends on itself, on
+a key not in the list, or through a cycle. The reason reads
+`the task list for spawn phase "tasks" is not usable: …` and counts tasks from 1.
+A key listed twice in one `dependsOn` counts once. `signal` is not in the default
+`retryOn` (§2): add it to the source phase's `retry.retryOn` to give its agent
+another attempt with the reason in its retry note (§13).
+
+| Limit                    | Value                                 | Enforced                                       |
+| ------------------------ | ------------------------------------- | ---------------------------------------------- |
+| Children live at once    | 1 (`maxParallel`), until WS13         | at save                                        |
+| Tasks in the list        | default 20 (`maxItems`), at most 50   | `maxItems` at save; the list by the item check |
+| Task key                 | 1-64 characters, unique               | the item check                                 |
+| Task title on the parent | 60 characters (the child gets it all) | clipped when the list is built                 |
+| One task as JSON         | 16 KiB                                | the item check                                 |
+| A child's whole payload  | 64 KiB, the webhook body cap          | when the list is built (see below)             |
+| `include` names          | 16                                    | at save                                        |
+| A source `path`          | 8 property names                      | at save                                        |
+
+### The payload
+
+Each child starts with `trigger: "spawned"`, `parent` (which parent instance,
+spawn phase, task position and key it runs) and this
+`triggerPayload` (`SpawnTriggerPayload`):
+
+```jsonc
+{
+  "task": { "id": "auth", "title": "Add sign-in", "after": ["schema"] }, // as the result held it
+  "key": "auth",
+  "base": "origin/main", // when spawn.base is set
+  "include": { "spec": "docs/specs/auth.md" }, // when spawn.include is set
+  "parent": {
+    "instanceId": "…",
+    "pipelineId": "delivery",
+    "phaseId": "tasks",
+    "index": 1,
+    "key": "auth",
+  },
+}
+```
+
+The child's prompts read it as `{{trigger.payload}}`, capped like any
+placeholder (16 KiB by default, §13), and its `command` checks read a copy at
+`ARGUS_TRIGGER_PAYLOAD_FILE` (§6). An `include` path the result does not hold
+is copied as `null`.
+
+Every task's payload is built and measured when the list is built, before any
+child starts, and built again, identically, when each child starts. A task
+alone is at most 16 KiB, so only `include` can push a payload over 64 KiB; one
+that does is a definition problem, and the spawn phase fails under
+`configuration` (never retried), naming the largest `include` value. A
+source phase with no result to read when the spawn phase starts (one reached
+through an `allowSkipped` edge, say) fails it the same way.
+
+`base` is recorded on the child as `workspaceBase`, and its worktrees are cut
+from it instead of its definition's `workspace.base` (§11). Argus never fetches
+it: the tree is cut from wherever that ref points in the local repository, so
+the child's first phase should fetch and reset to the remote ref. A task
+pipeline with no workspace policy only sees `base` in its payload.
+
+### How a child starts: exactly once, by identity
+
+1. **Plan, under the parent's lock.** The tasks that are ready (every
+   dependency succeeded, and a slot free under `maxParallel`) each get a newly
+   minted instance id, saved on the parent with the task `planned`. That save is
+   the commit point.
+2. **Start, off the parent's lock**, under the task pipeline's start lock. The
+   id is looked up first. A record with that id is returned as it is. A file
+   Argus cannot read for any reason but "file not found" is never overwritten:
+   the start waits and is asked again on the next tick. Only a missing record is
+   created, after asking again whether the parent still waits for that id; then
+   it starts like any instance, from the task pipeline's definition as it is
+   now, through its `overlapPolicy`, the preflight, the first save and the
+   first launches. A record under that id whose `parent` names another instance
+   is never adopted: the task fails, and a revise of the spawn phase gives it a
+   fresh id.
+3. **Mirror, under the parent's lock.** Every save of a child queues its
+   parent's sync, which reads the child's record (without its lock) and updates
+   the task.
+
+A crash after step 1 repeats step 2 with the same id; a crash after step 2
+finds the child. Reconcile repeats steps 1 to 3 for every live parent on every
+tick, from the saved parent alone (§18).
+
+| Argus stopped after                                    | The saved parent says           | Recovery                                                     |
+| ------------------------------------------------------ | ------------------------------- | ------------------------------------------------------------ |
+| the spawn phase started, before its list was built     | the phase runs, no task list    | builds the list (the same one: the source result is settled) |
+| the plan save, before the start                        | task `planned`, no child        | starts the child under that id, once                         |
+| the child's first save, before the parent mirrored it  | task `planned`, the child runs  | the start finds the child and mirrors it                     |
+| a child's record was damaged or locked                 | task `planned`, unreadable      | waits (`deferred`), asks each tick, never re-creates it      |
+| a child ended while Argus was down                     | task `running`, the child ended | mirrors it: the join, the pause, or the next task            |
+| the parent's abort, before its children were aborted   | parent `aborted`, children live | the sweep aborts each child (`parent-aborted`)               |
+| a revise of the spawn phase, before the child's revise | task `reviving`, child `failed` | revives the child once                                       |
+| the child's revise link, before the revise completed   | task `reviving`, child `failed` | gate recovery completes it; no second revise                 |
+| the child's revise, before the parent mirrored it      | task `reviving`, child running  | mirrors it; no second revise                                 |
+
+A revive is a revise of the child, and whether it happened is asked of the
+child alone: some decision it links, and has finished applying, carries the
+parent's decision id (`parentDecisionId`). So an interrupted revive is carried
+out exactly once. While the child's revise is still being applied (it carries
+`pendingGateOperation`, §18), its `failed` is the failure being revived: the
+task stays `reviving`, and the revise's last save mirrors the child.
+
+### Lock order
+
+A parent's lock is never held while waiting for a child's lock or for a
+pipeline's start lock, and a child's lock never waits for its parent's.
+Anything one locked section needs from another lock (a start, a revive, the
+abort cascade, the parent's sync after a child's save) is queued, and starts
+with no lock held; children are read from disk, never locked, from the parent's
+side, and the parent is read, never locked, from a child's. A start lock may be
+followed by one instance lock (a start, the cascade, `DELETE` of the pipeline),
+never by another start lock.
+
+### Order, the join and the children pause
+
+- **Order.** Tasks start in list order as their dependencies succeed, at most
+  `maxParallel` live at a time. "Succeeded" is the child instance succeeding,
+  through whatever gates its own pipeline has.
+- **The join.** When every task has succeeded, the spawn phase succeeds. Its
+  payload, published under `produces`, is the children summary
+  (`SpawnChildrenSummary`: every task's key, title, state and child, counts by
+  state, and `notSucceeded`), and the phases that need it start. Journal
+  `children.joined`.
+- **A child that fails or is aborted** stops new starts. Waiting tasks that
+  depend on it, directly or through others, become `blocked`, and running
+  children finish. Once no child is live, the spawn phase pauses:
+  `awaiting-approval` with `pause: "children"` and the summary as its payload,
+  so the parent reads `awaiting-approval`. Journal `children.halted`.
+
+At a `children` pause a person chooses one of four actions. Each is a state
+change; a re-run child runs its pipeline's agents again, and an approval starts
+the phases after the spawn phase:
+
+- **Accept the rest: approve the spawn phase.** It succeeds with the summary,
+  whose `notSucceeded` lists the tasks it drops, and the phases after it start.
+  It takes no `answers` (`400 answers-not-accepted`), and is refused
+  `409 children-running` while a child a person re-ran is live again, or its
+  revise is still being applied.
+- **Re-run every task that did not succeed: revise the spawn phase.** A failed
+  child is revived in place: Argus revises the child's failed phase with a
+  decision whose mechanism is `parent-decision`, principal
+  `{ kind: "system", component: "spawn" }`, `parentDecisionId` the parent's
+  revise and `note` the parent's note, which the child's next attempt reads
+  like any revise note (§13). An aborted, refused or never-started task gets a
+  fresh child (the old id moves to `previousInstanceIds`), and blocked tasks
+  wait again. Tasks that succeeded stay; the task list is never rebuilt.
+- **Re-run one child: revise that child's failed phase**, on the child. The
+  task runs again, the spawn phase resumes (`children-resumed`), and once the
+  child succeeds the tasks it blocked continue.
+- **Abort** the parent (below).
+
+Rewinding to the phase that wrote the task list is deferred: accept the rest
+and start a follow-up instance instead. A `children` pause is never opened by
+an automated rule: auto-approval (§19) and its qualification treat it as
+ineligible, as they do a `needs-input` pause, and an approval condition (§2)
+never polls it; a spawn phase cannot declare `approveWhen` or `autoApprove`.
+
+### Abort, delete, edit and retention
+
+- **Aborting the parent aborts its children.** Its live tasks are recorded
+  `aborted` in the same save, and each child is then aborted with
+  `abortCause: "parent-aborted"`, recorded as carrying out the parent's abort
+  (mechanism `parent-decision`, principal `spawn`, `parentDecisionId`). No
+  `after` chain fires for those children.
+- **The sweep.** A live child its parent no longer waits for (the parent ended
+  before the cascade reached it, its spawn phase joined or was accepted, or a
+  fresh child replaced it) is aborted by reconcile the same way, with no
+  `parentDecisionId`: it acts on the parent's state, not on one decision.
+- **Aborting a child** always works. Its task becomes `aborted`; the parent
+  lets its running children finish, then pauses at `children`.
+- **Deciding on a child its parent no longer waits for.** Approve and revise,
+  and an automated decision (a Verdict auto-approval, or an approval
+  condition's exit 0 or `failOnExit`), are refused with `409 parent-decided`:
+  its outcome would count for nothing. A refused poll is journalled once as
+  "not applied", and the sweep aborts the child. The parent waits for a child
+  while the parent is live, its spawn phase runs or waits at `children`, and
+  the task still names that child. A child whose parent's record is gone is the
+  operator's alone; a parent record Argus cannot read refuses the decision
+  until it can.
+- **Deleting the task pipeline** aborts its live instances, the children among
+  them (`pipeline-deleted`). A start still owed then finds no pipeline and fails
+  its task for good, and each parent pauses at `children` once its running
+  children finish. A recreated pipeline has a new id, and a parent's task list
+  keeps naming the old one: accept the rest, or abort.
+- **Deleting the parent's pipeline** aborts the parents (`pipeline-deleted`), and
+  each parent's abort aborts its children (`parent-aborted`).
+- **Editing the task pipeline.** Each child reads the task pipeline's
+  definition when it starts. So an execution edit is held with
+  `409 instances-running`, as under the pipeline's own live instances, while a
+  live instance of another pipeline has a spawn phase that targets it and has
+  not succeeded or been skipped; `?force=1` saves it anyway.
+- **Retention.** A child is kept past its pipeline's window of 50 instances
+  while its parent's record exists, or cannot be read right now; only a parent
+  record that is provably gone releases it, at the task pipeline's next start.
+  Kept children still count toward the window. Pruning a parent does not prune
+  its children.
+
+### Status
+
+The parent's spawn phase stays `running` while its children run or wait at
+their own gates: a child's gate belongs to the child, and never makes its parent
+`awaiting-approval`. Only the `children` pause does. `inFlight`
+(`sources/instanceStatus.ts`) reads the spawn phase's tasks: a parent whose live
+children all wait at their own gates is not in flight, so
+`argus tail --until-idle` returns; a planned child whose start waits (a budget
+hold, a busy task pipeline) keeps it in flight. Each child is an instance of the
+task pipeline: its gates are its own, and `argus tail` names it
+`<pipeline> [<key>]`.
+
+### Budget
+
+While the spend budget's hard stop is on (`isSpendBlocked`, the authority
+scheduled firings obey: the ladder's `stop` step, or an exceeded limit with
+`blockScheduled`), no new child is planned, and a planned child's start waits
+with `deferred.reason` "the spend budget is exceeded". The parent's journal gets
+`children.held` when a hold begins and `children.released` when it lifts. A
+budget that cannot be read holds too. A revive is not held (it is a person's
+decision), and a running child is never stopped. Spend multiplies with the task
+count: every child runs its own pipeline's agents.
+
+### Targets
+
+- **Trigger none or webhook.** A spawned pipeline is started by its parent; a
+  schedule or `after` trigger would start it without one.
+- **One level deep.** The task pipeline may not have a spawn phase of its own,
+  and a pipeline may not spawn itself.
+- **Both directions.** Checked when the parent is saved (it names a pipeline
+  that exists and qualifies) and when the task pipeline is saved (it may gain
+  neither such a trigger nor a spawn phase while any pipeline spawns it). It is
+  validation, a `400`, so `?force=1` does not bypass it.
+- **`overlapPolicy: "skip"`** on the task pipeline is honoured: while one of its
+  instances is live, the next child waits (`deferred`). With `maxParallel: 1` a
+  parent's previous child has ended before the next is planned, so it only
+  waits on another parent's child or a manual start; set the task pipeline's
+  `overlapPolicy` to `"allow"` to avoid that.
+- **`enabled`** on the task pipeline is not consulted.
+
+### Known limits
+
+- **One child at a time** until reliability WS13 makes parallel Claude sessions
+  safe.
+- **A revive can race its child's worktree cleanup.** A failed child's worktree
+  removal starts when it fails; a revive soon after reuses the tree or checks
+  the branch out again (§11), and the race between the two is the reliability
+  plan's WS5. Not fixed here.
+- **A stale base.** Argus does not fetch `spawn.base`; a child whose first
+  phase does not fetch works from an old commit.
+- **`after` chains of the task pipeline fire once per child** that ends on its
+  own. Only children stopped by their parent (`parent-aborted`) or by a deleted
+  pipeline fire none.
+- **`{{previous.instance}}` in a child** names the last settled instance of the
+  task pipeline: usually another task's child.
+- **The record bound.** The parent's transition log records the task list in
+  full (§18), one line at most 16 KiB. The records a spawn phase writes fit at
+  50 tasks, but a baseline record, which carries the whole instance, of a parent
+  with many phases and 50 tasks with long keys and titles can exceed it. That
+  parent's log then reads `partial`; recovery never reads the log.

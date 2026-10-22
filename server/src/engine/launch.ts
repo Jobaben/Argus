@@ -85,7 +85,12 @@ import {
 import { acceptanceInstruction } from "../knowledge/acceptance.js";
 import { acceptanceVerificationFile, ensureAcceptanceDir } from "../knowledge/acceptanceStaging.js";
 import { markPipelineStarted } from "../sources/pipelines.js";
-import { INSTANCE_KEEP, pruneInstances, readInstances } from "../sources/instances.js";
+import {
+  INSTANCE_KEEP,
+  probeInstance,
+  pruneInstances,
+  readInstances,
+} from "../sources/instances.js";
 import { initInstance, applyLaunchPlan } from "../pipelineTransitions.js";
 import { interpolate, previousPayloadFor, resultStepName } from "../sources/dag.js";
 import { journal } from "../sources/journal.js";
@@ -110,6 +115,8 @@ import type {
   PlannedKnowledgeContext,
   PlannedRun,
   SpawnUnit,
+  StartFiring,
+  StartOutcome,
 } from "./types.js";
 import { PreflightError } from "./spawn.js";
 import { revisionHistory, revisionNotes, revisionNotesFile } from "./outcome.js";
@@ -144,6 +151,8 @@ export function createLaunch(core: EngineCore) {
   const saveInstance: EngineFns["saveInstance"] = (...args) => core.fns.saveInstance(...args);
   const settleCandidates: EngineFns["settleCandidates"] = (...args) =>
     core.fns.settleCandidates(...args);
+  const startSpawnPhase: EngineFns["startSpawnPhase"] = (...args) =>
+    core.fns.startSpawnPhase(...args);
   const trackStep: EngineFns["trackStep"] = (...args) => core.fns.trackStep(...args);
 
   /**
@@ -156,6 +165,9 @@ export function createLaunch(core: EngineCore) {
    * one it was cut from however many phases reuse it. `scope: "attempt"` gives
    * each attempt its own, and the superseded attempt's tree is removed as the
    * new one is created unless the policy says to keep it.
+   *
+   * The base is the instance's `workspaceBase` when it has one (a spawned
+   * child), else the policy's.
    *
    * Throws {@link WorkspaceError} (with git's own words) when the repository,
    * the base ref or git itself is not what the definition assumed: the caller
@@ -186,11 +198,15 @@ export function createLaunch(core: EngineCore) {
     // branch already there without it (checked out again, keeping its commits).
     const shared =
       policy.scope === "instance" && inst.workspace?.path === target.path ? inst.workspace : null;
+    // A spawned child's worktrees are cut from the ref its parent named
+    // (`spawn.base`), whatever its own definition says. Argus does not fetch
+    // it: the child's first phase fetches and resets to the remote ref.
+    const base = inst.workspaceBase ?? policy.base;
     const created = await createWorktree({
       repoCwd: phaseDef.cwd,
       path: target.path,
       branch: target.branch,
-      ...(policy.base ? { base: policy.base } : {}),
+      ...(base ? { base } : {}),
     });
     const record = shared ?? created;
     if (policy.scope === "instance") inst.workspace = record;
@@ -259,6 +275,13 @@ export function createLaunch(core: EngineCore) {
     const phaseDef = def.phases.find((p) => p.id === progress.id);
     if (!phaseDef) {
       await failUnlaunchable(def, inst, progress.id);
+      return;
+    }
+    // A spawn phase runs no agent: its "launch" is building the task list,
+    // mirroring the children and planning the next ones (engine/children.ts).
+    // Before workspaces, artifacts and the folder wipe, none of which it has.
+    if (phaseDef.spawn) {
+      await startSpawnPhase(def, inst, phaseDef.id);
       return;
     }
     // "Previous" is the phase's own dependency, which for a linear pipeline is
@@ -1365,20 +1388,47 @@ export function createLaunch(core: EngineCore) {
     return locks.withLock(startsOf(pipelineId), work);
   }
 
-  async function start(
+  /**
+   * Create an instance or, given `firing.instanceId`, return the one that
+   * already has that id. Under the pipeline's start lock, in this order:
+   *  1. by id: an existing instance is returned as it is (`existing`); a file
+   *     Argus cannot read is reported (`unreadable`) and never overwritten.
+   *     Before the overlap guard: a child restarted after a crash *is* the
+   *     pipeline's live instance;
+   *  2. `stillWanted` (a spawned child: does its parent still wait for this
+   *     id?), asked here so a cascade holding this lock is ordered against it;
+   *  3. the definition, the overlap guard, the preflight, the first save and
+   *     the first launches, as for any new instance.
+   */
+  async function startInstance(
     pipelineId: string,
     trigger: PipelineInstance["trigger"] = "manual",
-    firing?: { triggerPayload?: unknown; chainedFrom?: string },
-  ) {
+    firing: StartFiring = {},
+    opts: { stillWanted?: () => Promise<boolean> } = {},
+  ): Promise<StartOutcome> {
     // From reading the definition until the first phases are launched, so a
     // delete holding the pipeline's starts finds every instance it has to
     // stop, and never stops one whose launch is still to come.
-    const instance = await withStartsHeld(pipelineId, async () => {
+    const out = await withStartsHeld(pipelineId, async (): Promise<StartOutcome> => {
+      if (firing.instanceId !== undefined) {
+        const found = await probeInstance(firing.instanceId);
+        if (found.kind === "unreadable") return { kind: "unreadable", reason: found.reason };
+        if (found.kind === "present") {
+          return found.instance.pipelineId === pipelineId
+            ? { kind: "existing", instance: found.instance }
+            : {
+                kind: "unreadable",
+                reason:
+                  `instance ${firing.instanceId} belongs to pipeline ` + found.instance.pipelineId,
+              };
+        }
+        if (opts.stillWanted && !(await opts.stillWanted())) return { kind: "not-wanted" };
+      }
       const def = await loadDef(pipelineId);
-      if (!def) throw new Error("pipeline not found");
+      if (!def) return { kind: "no-pipeline" };
       if (def.overlapPolicy === "skip") {
         const busy = (await readInstances({ pipelineId })).some((i) => resumable(i.status));
-        if (busy) return null;
+        if (busy) return { kind: "busy" };
       }
       if (deps.preflight) {
         const pf = await deps.preflight();
@@ -1387,7 +1437,8 @@ export function createLaunch(core: EngineCore) {
       const init = initInstance(
         def,
         trigger,
-        { instanceId: deps.newId(), token: deps.newId() },
+        // Instance id first, then token: tests with id counters depend on the order.
+        { instanceId: firing.instanceId ?? deps.newId(), token: deps.newId() },
         nowISO(),
         firing,
       );
@@ -1405,12 +1456,38 @@ export function createLaunch(core: EngineCore) {
       // whose launch was lost. Runs past the concurrency cap are left queued
       // for a slot, off the lock; this returns without waiting for them.
       await locks.withLock(instance.id, () => startPhases(def, instance, ready));
-      return instance;
+      return { kind: "started", instance };
     });
-    if (!instance) return null;
-    await pruneInstances(pipelineId, INSTANCE_KEEP);
-    deps.onChange?.();
-    return instance;
+    if (out.kind === "started") {
+      await pruneInstances(pipelineId, INSTANCE_KEEP);
+      deps.onChange?.();
+    }
+    return out;
+  }
+
+  /**
+   * {@link startInstance} for the callers that want an instance or nothing:
+   * `null` when the overlap guard (or `stillWanted`) declined, a throw when
+   * the pipeline does not exist or the id names a file that cannot be read.
+   */
+  async function start(
+    pipelineId: string,
+    trigger: PipelineInstance["trigger"] = "manual",
+    firing?: StartFiring,
+  ): Promise<PipelineInstance | null> {
+    const out = await startInstance(pipelineId, trigger, firing);
+    switch (out.kind) {
+      case "started":
+      case "existing":
+        return out.instance;
+      case "busy":
+      case "not-wanted":
+        return null;
+      case "no-pipeline":
+        throw new Error("pipeline not found");
+      case "unreadable":
+        throw new Error(`instance ${firing?.instanceId} exists but cannot be read: ${out.reason}`);
+    }
   }
 
   /**
@@ -1463,6 +1540,7 @@ export function createLaunch(core: EngineCore) {
     startPhase,
     resolveChangeRequest,
     launchStep,
+    startInstance,
     start,
     withStartsHeld,
     queueReadyPhases,

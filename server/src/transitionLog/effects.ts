@@ -11,6 +11,8 @@
  * Pure.
  */
 import type { OwedEffect, PipelineInstance } from "@argus/contracts";
+import { nextSpawns } from "../sources/children.js";
+import { isTerminal } from "../sources/instanceStatus.js";
 
 export function owedEffects(
   inst: Pick<PipelineInstance, "phases" | "pendingGateOperation" | "status">,
@@ -49,6 +51,28 @@ export function owedEffects(
       if (phase.knowledge?.status === "pending") {
         out.push({ kind: "commit-knowledge", phaseId: phase.id, attempt: phase.attempt });
       }
+      // A spawn phase (the only kind with no steps): its task list, a plan, a
+      // start or a revive may be owed.
+      if (phase.steps.length === 0 && !phase.children) {
+        out.push({ kind: "spawn", phaseId: phase.id, attempt: phase.attempt, action: "plan" });
+      }
+      if (phase.children) {
+        for (const task of phase.children.tasks) {
+          if (!task.instanceId) continue;
+          if (task.state === "planned" || task.state === "reviving") {
+            out.push({
+              kind: "spawn",
+              phaseId: phase.id,
+              attempt: phase.attempt,
+              action: task.state === "planned" ? "start" : "revive",
+              instanceId: task.instanceId,
+            });
+          }
+        }
+        if (nextSpawns(phase.children).length > 0) {
+          out.push({ kind: "spawn", phaseId: phase.id, attempt: phase.attempt, action: "plan" });
+        }
+      }
     }
   }
   return out;
@@ -78,6 +102,31 @@ export function decidedRuns(inst: Pick<PipelineInstance, "phases">): string[] {
       ) {
         out.push(step.runId);
       }
+    }
+  }
+  return out;
+}
+
+/**
+ * Spawned children a parent no longer waits for: every child a fresh one
+ * replaced, and every current child of a spawn phase that is no longer live
+ * (the parent ended; the phase joined, was accepted at its `children` pause,
+ * failed or was aborted). Each one that is still live owes an abort
+ * (`parent-aborted`). Liveness is the engine's question; this only names the
+ * candidates. Pure.
+ */
+export function decidedChildren(inst: Pick<PipelineInstance, "status" | "phases">): string[] {
+  const out: string[] = [];
+  const ended = isTerminal(inst.status);
+  for (const phase of inst.phases) {
+    if (!phase.children) continue;
+    const live =
+      !ended &&
+      (phase.status === "running" ||
+        (phase.status === "awaiting-approval" && phase.pause === "children"));
+    for (const task of phase.children.tasks) {
+      out.push(...(task.previousInstanceIds ?? []));
+      if (!live && task.instanceId) out.push(task.instanceId);
     }
   }
   return out;

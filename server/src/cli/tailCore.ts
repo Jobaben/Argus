@@ -30,6 +30,7 @@ import type {
   LiveFrame,
   MonitorAlert,
   OverviewEntry,
+  PhaseProgress,
   PipelineInstance,
   Run,
   Situation,
@@ -412,7 +413,7 @@ export function stepLabels(instances: PipelineInstance[]): Map<string, string> {
       for (const step of phase.steps) {
         if (!step.runId) continue;
         const tail = phase.steps.length > 1 ? ` › ${step.name}` : "";
-        out.set(step.runId, `${inst.pipelineName} › ${phase.name}${tail}`);
+        out.set(step.runId, `${instanceLabel(inst)} › ${phase.name}${tail}`);
       }
     }
   }
@@ -427,6 +428,24 @@ function runtimeTag(runtime: string | null | undefined): string {
  *  since that is what most lines are and calling it out would be noise. */
 function triggerTag(trigger: string): string {
   return trigger === "scheduled" ? "" : ` (${trigger})`;
+}
+
+/** An instance as tail lines name it: a spawned child carries its task key,
+ *  so two children of one pipeline read apart. */
+function instanceLabel(inst: Pick<PipelineInstance, "pipelineName" | "parent">): string {
+  return inst.parent ? `${inst.pipelineName} [${inst.parent.key}]` : inst.pipelineName;
+}
+
+/** What a paused phase waits for, in a tail line's words. A `children` pause
+ *  is a spawn phase whose children stopped short: a person decides what
+ *  happens to the tasks; there is no work of its own to approve. */
+function waitingFor(phase: PhaseProgress | undefined): string {
+  if (phase?.pause === "children") {
+    const tasks = phase.children?.tasks ?? [];
+    const short = tasks.filter((t) => t.state !== "succeeded").length;
+    return `waiting for you at "${phase.name}" (${short} of ${tasks.length} task${tasks.length === 1 ? "" : "s"} did not succeed)`;
+  }
+  return `waiting for approval at "${phase?.name ?? "?"}"`;
 }
 
 function firstString(v: unknown, keys: string[]): string | null {
@@ -604,10 +623,10 @@ export function buildSnapshot(input: SnapshotInput): TailLine[] {
     lines.push({
       at,
       kind: "snapshot.gate",
-      text: `${inst.pipelineName} · waiting for approval at "${phase?.name ?? "?"}" for ${formatMs(now.getTime() - since)}${note ? ` — ${clip(note, 140)}` : ""}${hints.text}`,
+      text: `${instanceLabel(inst)} · ${waitingFor(phase)} for ${formatMs(now.getTime() - since)}${note ? ` — ${clip(note, 140)}` : ""}${hints.text}`,
       instanceId: inst.id,
       phaseId: phase?.id,
-      label: inst.pipelineName,
+      label: instanceLabel(inst),
       status: "awaiting-approval",
       detail: note ?? undefined,
       reviewUrl: hints.reviewUrl,
@@ -652,9 +671,9 @@ export function buildSnapshot(input: SnapshotInput): TailLine[] {
     lines.push({
       at: inst.endedAt ?? at,
       kind: "snapshot.recent",
-      text: `${OUTCOME_ICON[inst.status] ?? "■"} pipeline ${inst.pipelineName} ${inst.status}${failedPhaseNote(inst)}`,
+      text: `${OUTCOME_ICON[inst.status] ?? "■"} pipeline ${instanceLabel(inst)} ${inst.status}${failedPhaseNote(inst)}`,
       instanceId: inst.id,
-      label: inst.pipelineName,
+      label: instanceLabel(inst),
       status: inst.status,
     });
   }
@@ -817,9 +836,9 @@ export class Tracker {
           lines.push({
             at: inst.createdAt || at,
             kind: "pipeline.started",
-            text: `pipeline ${inst.pipelineName} started${triggerTag(inst.trigger)}`,
+            text: `pipeline ${instanceLabel(inst)} started${triggerTag(inst.trigger)}`,
             instanceId: inst.id,
-            label: inst.pipelineName,
+            label: instanceLabel(inst),
             status: "running",
           });
         } else if (isTerminal(inst.status)) {
@@ -843,10 +862,10 @@ export class Tracker {
         lines.push({
           at,
           kind: "phase.changed",
-          text: `${inst.pipelineName} › ${phase.name} ${phase.status === "running" ? "started" : phase.status}${retry}${reason ? `: ${clip(reason, 140)}` : ""}`,
+          text: `${instanceLabel(inst)} › ${phase.name} ${phase.status === "running" ? "started" : phase.status}${retry}${reason ? `: ${clip(reason, 140)}` : ""}`,
           instanceId: inst.id,
           phaseId: phase.id,
-          label: `${inst.pipelineName} › ${phase.name}`,
+          label: `${instanceLabel(inst)} › ${phase.name}`,
           status: phase.status,
           attempt: phase.attempt,
           detail: reason ?? undefined,
@@ -858,9 +877,9 @@ export class Tracker {
           lines.push({
             at,
             kind: "pipeline.resumed",
-            text: `pipeline ${inst.pipelineName} resumed`,
+            text: `pipeline ${instanceLabel(inst)} resumed`,
             instanceId: inst.id,
-            label: inst.pipelineName,
+            label: instanceLabel(inst),
             status: "running",
           });
         else if (isTerminal(inst.status)) lines.push(this.instanceEndedLine(inst, at));
@@ -876,10 +895,10 @@ export class Tracker {
     return {
       at,
       kind: "pipeline.gate",
-      text: `pipeline ${inst.pipelineName} is waiting for approval at "${phase?.name ?? "?"}"${note ? ` — ${clip(note, 140)}` : ""}${hints.text}`,
+      text: `pipeline ${instanceLabel(inst)} is ${waitingFor(phase)}${note ? ` — ${clip(note, 140)}` : ""}${hints.text}`,
       instanceId: inst.id,
       phaseId: phase?.id,
-      label: inst.pipelineName,
+      label: instanceLabel(inst),
       status: "awaiting-approval",
       detail: note ?? undefined,
       reviewUrl: hints.reviewUrl,
@@ -892,9 +911,9 @@ export class Tracker {
     return {
       at: inst.endedAt ?? at,
       kind: "pipeline.ended",
-      text: `${OUTCOME_ICON[inst.status] ?? "■"} pipeline ${inst.pipelineName} ${inst.status}${failedPhaseNote(inst)}`,
+      text: `${OUTCOME_ICON[inst.status] ?? "■"} pipeline ${instanceLabel(inst)} ${inst.status}${failedPhaseNote(inst)}`,
       instanceId: inst.id,
-      label: inst.pipelineName,
+      label: instanceLabel(inst),
       status: inst.status,
     };
   }

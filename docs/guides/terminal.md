@@ -77,7 +77,13 @@ pipe — the default is to follow for 60 seconds and exit, so a call with a
 timeout always returns a complete, self-describing answer; on a real terminal
 the default is to follow until Ctrl-C. `--for` sets it explicitly (`--for 0` is
 a pure snapshot), and `--until-idle` ends it early once nothing is running.
-A gate waiting on you does not keep it open; a retry that is due does.
+A gate waiting on you does not keep it open, and neither does a parent whose
+[spawned children](pipelines.md#spawn-child-instances) all wait at their own
+gates; a retry that is due does. Each child's gate gets its own ⏸ line, and a
+child's lines carry its task key in brackets
+(`Task loop [auth] › Implement started`). A spawn phase that waits for you
+after a task failed says so on its ⏸ line:
+`waiting for you at "Tasks" (1 of 4 tasks did not succeed)`.
 Each run's snapshot catches anything that happened between calls, so "run it
 again" is the whole continuation story.
 

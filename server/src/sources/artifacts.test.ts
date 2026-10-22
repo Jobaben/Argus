@@ -12,7 +12,13 @@ import {
   readPhaseArtifact,
   resolveArtifactPath,
 } from "./artifacts.js";
-import type { PhaseProgress, PipelineDefinition, PipelineInstance } from "./pipelineTypes.js";
+import { writeInstance } from "./instances.js";
+import type {
+  PhaseChildren,
+  PhaseProgress,
+  PipelineDefinition,
+  PipelineInstance,
+} from "./pipelineTypes.js";
 
 async function dir(): Promise<string> {
   return mkdtemp(path.join(tmpdir(), "argus-artifacts-"));
@@ -290,4 +296,114 @@ test("buildPhaseReview reads required paths from the snapshot, not a live edit",
   const byPath = Object.fromEntries(res.review.artifacts.map((a) => [a.path, a.required]));
   assert.equal(byPath["old.md"], true);
   assert.equal(byPath["new.md"], false);
+});
+
+test("buildPhaseReview of a spawn phase shows each task's child as it is now", async () => {
+  // Children are read from the instance store: this file has no per-test home.
+  process.env.ARGUS_CLAUDE_HOME = await dir();
+  /** A child of `parentId`'s task `key` at `index`, with its own phases. */
+  const child = (
+    id: string,
+    parentId: string,
+    index: number,
+    key: string,
+    phases: PhaseProgress[],
+  ) =>
+    writeInstance({
+      ...instance(phases),
+      id,
+      pipelineId: "task",
+      pipelineName: "Task",
+      status: phases.some((p) => p.status === "failed") ? "failed" : "succeeded",
+      trigger: "spawned",
+      parent: { instanceId: parentId, pipelineId: "p1", phaseId: "tasks", index, key },
+    });
+  const children: PhaseChildren = {
+    pipelineId: "task",
+    source: { phaseId: "plan", attempt: 1 },
+    maxParallel: 1,
+    tasks: [
+      { key: "a", title: "First", state: "succeeded", instanceId: "c-a" },
+      { key: "b", state: "failed", instanceId: "c-b", reason: "phase build failed" },
+      { key: "c", dependsOn: [1], state: "blocked" },
+    ],
+  };
+  const spawnPhase = phase({
+    id: "tasks",
+    name: "Tasks",
+    gated: false,
+    steps: [],
+    attempt: 1,
+    pause: "children",
+    payload: null,
+    children,
+  });
+  const parent = {
+    ...instance([phase({ id: "plan", status: "succeeded" }), spawnPhase]),
+    id: "parent",
+  };
+  await child("c-a", "parent", 0, "a", [
+    phase({ id: "build", name: "Build", status: "succeeded" }),
+  ]);
+  await child("c-b", "parent", 1, "b", [
+    phase({ id: "build", name: "Build", status: "failed", attempt: 1 }),
+    phase({ id: "review", name: "Review", status: "pending", attempt: 0 }),
+  ]);
+  // Another parent's child for a task with the same key: never this parent's.
+  await child("c-other", "other", 2, "c", [phase({ id: "build", name: "Build" })]);
+  const before = structuredClone(children);
+
+  const res = await buildPhaseReview(parent, "tasks", undefined);
+  assert.ok(res.ok, "a spawn phase paused at children has a review");
+  const { review } = res;
+  assert.equal(review.canApprove, true, "approving accepts the tasks that succeeded");
+  assert.deepEqual(review.artifacts, [], "a spawn phase has no artifact folder");
+  assert.ok(review.children, "the review carries the children");
+  assert.equal(review.children.pipelineId, "task", "with the phase's own record");
+  assert.deepEqual(review.children.source, { phaseId: "plan", attempt: 1 }, "source kept");
+  assert.deepEqual(
+    review.children.tasks[0],
+    { ...children.tasks[0], child: { status: "succeeded" } },
+    "a child with nothing waiting or failed has no decision phase",
+  );
+  assert.deepEqual(
+    review.children.tasks[1].child,
+    {
+      status: "failed",
+      decisionPhase: { phaseId: "build", phaseName: "Build", attempt: 1, status: "failed" },
+    },
+    "the failed child names the phase a person would revise",
+  );
+  assert.equal(review.children.tasks[1].reason, "phase build failed", "the task's own record");
+  assert.equal(review.children.tasks[2].child, undefined, "a task with no child has none");
+  assert.deepEqual(review.children.notSucceeded, ["b", "c"], "what approving drops");
+  assert.deepEqual(children, before, "reading the review changes nothing on the phase");
+
+  // A task that names a record of another parent is not shown that record.
+  const stray = {
+    ...parent,
+    id: "stray",
+    phases: [
+      parent.phases[0],
+      {
+        ...spawnPhase,
+        children: {
+          ...children,
+          tasks: [{ key: "c", state: "failed" as const, instanceId: "c-other" }],
+        },
+      },
+    ],
+  };
+  const strayReview = await buildPhaseReview(stray, "tasks", undefined);
+  assert.ok(strayReview.ok, "the stray parent has a review");
+  assert.equal(strayReview.review.children?.tasks[0].child, undefined, "not its child");
+
+  // The phase that produced the list is no spawn phase: no `children` key.
+  const plan = await buildPhaseReview(
+    { ...parent, phases: [phase({ id: "plan" }), spawnPhase] },
+    "plan",
+    undefined,
+  );
+  assert.ok(plan.ok, "the plan phase has a review");
+  assert.equal("children" in plan.review, false, "an ordinary phase has no children key");
 });

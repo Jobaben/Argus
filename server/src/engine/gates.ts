@@ -1,6 +1,7 @@
 import { readInstance } from "../sources/instances.js";
 import {
   applyApprove,
+  applyChildRevived,
   applyRevise,
   pausedPhase,
   abortTransition,
@@ -69,11 +70,26 @@ const APPROVE_WHEN_RULE: AutomatedRule = {
   missing: "does not declare approveWhen",
 };
 
+/** A decision Argus carries out for a parent is neither an operator's nor unspecified. */
+function decisionMechanism(options: {
+  source?: OperatorSource;
+  byParent?: { decisionId?: string };
+}): GateDecision["mechanism"] {
+  if (options.byParent) return "parent-decision";
+  return options.source ? "operator" : "unspecified";
+}
+
 /** Gate decisions: approve, revise, abort and automated approval (a Verdict or an approval condition), with their write-ahead record, link and completion. Moved verbatim from `createEngine`. */
 export function createGates(core: EngineCore) {
   const { deps, locks, nowISO, persist, T } = core.ctx;
+  const childDecisionAllowed: EngineFns["childDecisionAllowed"] = (...args) =>
+    core.fns.childDecisionAllowed(...args);
+  const childrenApproveRefusal: EngineFns["childrenApproveRefusal"] = (...args) =>
+    core.fns.childrenApproveRefusal(...args);
   const defFor: EngineFns["defFor"] = (...args) => core.fns.defFor(...args);
   const noteRouting: EngineFns["noteRouting"] = (...args) => core.fns.noteRouting(...args);
+  const queueAbortCascade: EngineFns["queueAbortCascade"] = (...args) =>
+    core.fns.queueAbortCascade(...args);
   const queueReadyPhases: EngineFns["queueReadyPhases"] = (...args) =>
     core.fns.queueReadyPhases(...args);
   const saveInstance: EngineFns["saveInstance"] = (...args) => core.fns.saveInstance(...args);
@@ -221,6 +237,13 @@ export function createGates(core: EngineCore) {
       await probe("revise:killed", inst.id);
       const res = T(applyRevise(inst, nowISO(), phase.id));
       startIdx = res.startPhases;
+      // A spawn phase revised at its `children` pause re-runs every task that
+      // did not succeed: failed children are revived in place, the rest get
+      // fresh ones. In this same save, so the revives are owed from the moment
+      // the revise is (engine/children.ts queues them when the phase starts).
+      if (phase.children) {
+        T(applyChildRevived(inst, phase.id, phase.attempt, op.decisionId, nowISO()));
+      }
     }
     T(applyGateComplete(inst));
     await saveInstance(inst);
@@ -254,6 +277,9 @@ export function createGates(core: EngineCore) {
     T(applyGateComplete(settled.instance));
     await saveInstance(settled.instance);
     await probe("abort:saved", inst.id);
+    // The children stop with their parent: queued, off this lock (a child's
+    // abort takes the child's lock, which is never awaited under a parent's).
+    if (settled.instance.phases.some((p) => p.children)) queueAbortCascade(inst.id, op.decisionId);
     return { instance: settled.instance, startPhases: [] };
   }
 
@@ -400,6 +426,17 @@ export function createGates(core: EngineCore) {
       }
       const stale = attemptMismatch(phase, options.attempt);
       if (stale) return stale;
+      // A spawned child whose parent no longer waits for it (the parent ended,
+      // decided its spawn phase, or started a fresh child for the task) is not
+      // re-run or approved: its outcome would count for nothing. Abort is exempt.
+      if (!options.byParent) {
+        const decided = await childDecisionAllowed(inst);
+        if (decided) return decided;
+      }
+      if (phase.pause === "children") {
+        const refused = await childrenApproveRefusal(phase, answers);
+        if (refused) return refused;
+      }
       const source = options.source ?? UNSPECIFIED;
       const written = await writeDecision({
         instanceId: inst.id,
@@ -432,9 +469,11 @@ export function createGates(core: EngineCore) {
    * and before anything is recorded — extracted from `approveAutomatically`,
    * whose refusals it keeps word for word: the instance (any interrupted gate
    * operation completed first), its definition, the exact attempt waiting at a
-   * known `gate` pause, the rule declared on the phase's own snapshot, and a
-   * gate that commits no knowledge by configuration or by what the attempt
-   * staged. A refusal writes nothing.
+   * known `gate` pause (never a spawn phase's `children` pause), a spawned
+   * child's parent still waiting for it (`409 parent-decided` otherwise), the
+   * rule declared on the phase's own snapshot, and a gate that commits no
+   * knowledge by configuration or by what the attempt staged. A refusal
+   * writes nothing.
    */
   async function readAutomatedTarget(
     target: { instanceId: string; phaseId: string; attempt: number },
@@ -464,9 +503,16 @@ export function createGates(core: EngineCore) {
       return refuse(
         phase.pause === "needs-input"
           ? `phase ${phase.id} is waiting on an answer to an agent's question, which needs a person`
-          : `phase ${phase.id} paused before pause causes were recorded; it needs a person`,
+          : phase.pause === "children"
+            ? `phase ${phase.id} is waiting on its children: approving it drops the tasks that ` +
+              "did not succeed, which needs a person"
+            : `phase ${phase.id} paused before pause causes were recorded; it needs a person`,
       );
     }
+    // A spawned child whose parent no longer waits for it is not decided by a
+    // rule: its outcome would count for nothing.
+    const decided = await childDecisionAllowed(inst);
+    if (decided) return { refusal: decided };
     const phaseDef = def.phases.find((p) => p.id === phase.id);
     if (!phaseDef || !rule.declares(phaseDef)) return refuse(`phase ${phase.id} ${rule.missing}`);
     const reasons = [...knowledgeCommitReasons(phaseDef), ...stagedKnowledgeReasons(phase)];
@@ -778,6 +824,13 @@ export function createGates(core: EngineCore) {
       }
       const stale = attemptMismatch(target, options.attempt);
       if (stale) return stale;
+      // A spawned child whose parent no longer waits for it (the parent ended,
+      // decided its spawn phase, or started a fresh child for the task) is not
+      // re-run or approved: its outcome would count for nothing. Abort is exempt.
+      if (!options.byParent) {
+        const decided = await childDecisionAllowed(inst);
+        if (decided) return decided;
+      }
       const source = options.source ?? UNSPECIFIED;
       // Clipped once, here: the record and the pending operation carry the
       // same text, and so does every prompt that repeats it.
@@ -786,11 +839,12 @@ export function createGates(core: EngineCore) {
         instanceId: inst.id,
         pipelineId: inst.pipelineId,
         decision: "revise",
-        mechanism: options.source ? "operator" : "unspecified",
+        mechanism: decisionMechanism(options),
         channel: source.channel,
         principal: source.principal,
         phases: [phaseRef(target)],
         ...(clipped ? { note: clipped } : {}),
+        ...(options.byParent?.decisionId ? { parentDecisionId: options.byParent.decisionId } : {}),
       });
       if ("refusal" in written) return written.refusal;
       await probe("revise:recorded", inst.id);
@@ -813,7 +867,11 @@ export function createGates(core: EngineCore) {
 
   async function abort(
     instanceId: string,
-    options: { source?: OperatorSource; cause?: AbortCause } = {},
+    options: {
+      source?: OperatorSource;
+      cause?: AbortCause;
+      byParent?: { decisionId?: string };
+    } = {},
   ): Promise<ActionResult> {
     return locks.withLock(instanceId, async () => {
       const read = await readForDecision(instanceId);
@@ -827,13 +885,14 @@ export function createGates(core: EngineCore) {
         instanceId: inst.id,
         pipelineId: inst.pipelineId,
         decision: "abort",
-        mechanism: options.source ? "operator" : "unspecified",
+        mechanism: decisionMechanism(options),
         channel: source.channel,
         principal: source.principal,
         // Every phase the abort stops: the ones still running or waiting.
         phases: inst.phases
           .filter((p) => p.status === "running" || p.status === "awaiting-approval")
           .map(phaseRef),
+        ...(options.byParent?.decisionId ? { parentDecisionId: options.byParent.decisionId } : {}),
       });
       if ("refusal" in written) return written.refusal;
       await probe("abort:recorded", inst.id);

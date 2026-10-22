@@ -145,6 +145,7 @@ test("eligibility: every way an attempt stops being an item names its reason", (
   assert.equal(reason(gateInstance(), noRecords, { ...item, attempt: 1 }), "attempt-moved");
   assert.equal(reason(gateInstance({ phase: { status: "succeeded" } })), "phase-succeeded");
   assert.equal(reason(gateInstance({ phase: { pause: "needs-input" } })), "needs-input");
+  assert.equal(reason(gateInstance({ phase: { pause: "children" } })), "children");
   assert.equal(reason(gateInstance({ phase: { pause: undefined } })), "unknown-pause");
   const pending = gateInstance();
   pending.pendingGateOperation = {

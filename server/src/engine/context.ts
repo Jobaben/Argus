@@ -19,6 +19,7 @@ import type { createSignals } from "./signals.js";
 import type { createGates } from "./gates.js";
 import type { createReconcile } from "./reconcile.js";
 import type { createGatePolls } from "./gatePolls.js";
+import type { createChildren } from "./children.js";
 
 /**
  * The engine's shared state and helpers, built once per engine: the
@@ -133,7 +134,8 @@ export type EngineFns = ReturnType<typeof createStore> &
   ReturnType<typeof createSignals> &
   ReturnType<typeof createGates> &
   ReturnType<typeof createReconcile> &
-  ReturnType<typeof createGatePolls>;
+  ReturnType<typeof createGatePolls> &
+  ReturnType<typeof createChildren>;
 
 /**
  * What each engine module is built from: the shared context, and the other
