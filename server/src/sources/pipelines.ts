@@ -2696,6 +2696,29 @@ export function assertValidAsSpawnTarget(
   }
 }
 
+/**
+ * Everything a save of `raw` would check, without saving it: the definition
+ * itself, its `after` trigger, and its spawn phases against the pipelines that
+ * exist. `id` names the pipeline it would replace (a `PUT`), or null for a new
+ * one. Lets an author — often an agent — iterate on the 400s before anything
+ * lands in the store, and before any edit could reach a running instance.
+ *
+ * Not under the store lock: it writes nothing, so a concurrent save can only
+ * make its answer stale, which the real save then re-checks.
+ */
+export async function checkPipeline(raw: unknown, id: string | null): Promise<PipelineInput> {
+  const input = validatePipelineInput(raw);
+  // A new pipeline has no id yet; one no definition can carry stands in, so
+  // the self-reference checks pass as they would for the id it will be given.
+  const self = id ?? "(new pipeline)";
+  if (input.trigger) await assertAfterTriggerValid(self, input.trigger);
+  const others = (await readPipelines()).filter((d) => d.id !== id);
+  const saved = { id: self, trigger: input.trigger, phases: input.phases };
+  assertSpawnTargetsValid(saved, others);
+  assertValidAsSpawnTarget(saved, others);
+  return input;
+}
+
 export async function createPipeline(
   input: PipelineInput,
   now: Date,

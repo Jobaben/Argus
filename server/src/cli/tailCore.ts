@@ -36,6 +36,12 @@ import type {
   Situation,
 } from "@argus/contracts";
 import { hasWaitingGate, inFlight, isTerminal, resumable } from "../sources/instanceStatus.js";
+import {
+  SKILL_RUNTIMES,
+  parseSkillTarget,
+  type SkillRuntime,
+  type SkillTarget,
+} from "./skillsCore.js";
 
 // ── Options ──────────────────────────────────────────────────────────────────
 
@@ -59,17 +65,7 @@ export interface TailOptions {
   installSkill: SkillTarget | null;
 }
 
-/** The CLIs that read a `skills/<name>/SKILL.md` tree under their home. */
-export const SKILL_RUNTIMES = ["claude", "codex"] as const;
-export type SkillRuntime = (typeof SKILL_RUNTIMES)[number];
-export type SkillTarget = SkillRuntime | "all" | "auto";
-
-export function parseSkillTarget(raw: string | undefined): SkillTarget | null {
-  if (raw === undefined || raw === "") return "auto";
-  const v = raw.trim().toLowerCase();
-  if (v === "all" || v === "auto") return v;
-  return (SKILL_RUNTIMES as readonly string[]).includes(v) ? (v as SkillRuntime) : null;
-}
+export { SKILL_RUNTIMES, parseSkillTarget, type SkillRuntime, type SkillTarget };
 
 export type ParsedArgs =
   { kind: "run"; options: TailOptions } | { kind: "help" } | { kind: "error"; message: string };

@@ -13,13 +13,16 @@ A running Argus server; use the same URL/port and token as that server. Gate act
 1. From the checkout, run `node bin/argus.mjs tail --for 0` for a snapshot. This does not start a server.
 2. Run `node bin/argus.mjs tail --for 60s` for a bounded live feed, or add `--json` for machine-readable output.
 3. Use `node bin/argus.mjs approve --help` or `node bin/argus.mjs revise --help` before acting on a gate. Review its exact instance and evidence first.
-4. The optional installed `argus` command is shorthand for the same launcher; the examples below use that shorthand.
+4. Run `node bin/argus.mjs skills install` to give the Claude Code and Codex agents on this machine this build's `argus-pipeline` and `argus-tail` skills, or to bring older copies up to date.
+5. The optional installed `argus` command is shorthand for the same launcher; the examples below use that shorthand.
 
 **Expected result:** The terminal shows running work, waiting gates and recent outcomes; JSON mode provides one record per line.
 
 ## On this page
 
 - [`argus tail`](#argus-tail)
+- [`argus pipeline`](#argus-pipeline)
+- [`argus skills`](#argus-skills)
 - [`argus release`](#argus-release)
 
 ## `argus tail`
@@ -114,28 +117,109 @@ bad arguments. Approving here is exactly approving in the drawer: what the
 agent produced is what continues, so look first — the tail printed the link.
 
 **For an agent.** `argus tail --install-skill` installs the bundled
-`argus-tail` skill for every agent CLI it finds on PATH. Claude Code and Codex
-discover skills the same way — a `skills/<name>/SKILL.md` tree under the CLI's
-home, `name` and `description` frontmatter, chosen implicitly when a request
-matches the description or by name — so it is one file, written in the
-dialect both accept, landing in `~/.claude/skills/` (honouring
-`ARGUS_CLAUDE_HOME`) and `~/.codex/skills/` (honouring `ARGUS_CODEX_HOME` and
-`CODEX_HOME`). `--install-skill=claude`, `=codex` or `=all` chooses
-explicitly; bare, it installs for what is present and says what it skipped.
-From then on a session of either CLI on that machine answers "what is Argus
-doing?", "has the release pipeline finished?", `/argus-tail` (Claude Code) or
+`argus-tail` skill for every agent CLI it finds on PATH; it is
+`argus skills install argus-tail` (see [`argus skills`](#argus-skills)), and
+`--install-skill=claude`, `=codex` or `=all` chooses explicitly. From then
+on a session of either CLI on that machine answers "what is Argus doing?",
+"has the release pipeline finished?", `/argus-tail` (Claude Code) or
 `$argus-tail` (Codex) by running the command and relaying the lines —
 including a remote session on your phone, which is the case this exists for.
 The skill teaches the icon vocabulary, the bounded-window habit, and to quote
-failure reasons verbatim. Inside the Argus checkout both CLIs find it without
-installing: Claude Code at `.claude/skills/argus-tail/`, Codex at
-`.agents/skills/argus-tail/` — a plain copy of the same file rather than a
-symlink, so a Windows checkout without symlink support has it too, and a test
-fails if the two copies ever differ.
+failure reasons verbatim.
 
 **Where the data comes from:** `GET /api/health`, `/api/runs`,
 `/api/overview`, `/api/agents`, `/api/insight`, `/api/runs/:id/activity` (the
 tailer's retained events for a running step), and `WS /ws`.
+
+## `argus pipeline`
+
+_Author a pipeline from a terminal, or let an agent do it._
+
+**Purpose:** the pipeline form is where a person authors a definition. An
+agent writes one as a JSON file instead, and needs the server's own verdict
+on it before anything is saved. `argus pipeline` is that loop: check a file
+without saving it, save it, replace it, start it.
+
+```sh
+argus pipeline list                          # id, name, trigger, state, phases
+argus pipeline show <id|name> > p.json       # the stored definition, as JSON
+argus pipeline runtimes                      # which CLIs, models and efforts this Argus can run
+argus pipeline validate p.json               # every check a save makes; saves nothing
+argus pipeline validate p.json --as <id>     # ...as a replacement of that pipeline
+argus pipeline create p.json                 # save it; prints the new id
+argus pipeline update <id> p.json            # replace it (--patch merges the file's fields)
+argus pipeline start <id>                    # start an instance now
+```
+
+`validate` runs the same checks a save does — the definition, its graph and
+routes, an `after` trigger, spawn phases against the pipelines that exist —
+and prints the `400` reason when one fails, word for word. `update` is held
+with `409 instances-running` while an instance runs under the pipeline,
+because that instance keeps the definition it started with; `--force` saves
+the edit for the next start anyway. `show` leaves out the webhook token, so
+its output can go back through `update` without carrying a credential
+around. `-` reads the file from stdin.
+
+`list`, `show` and `runtimes` are reads. `validate`, `create`, `update` and
+`start` need an Argus account, the same way `argus approve` does
+(`ARGUS_USER` / `ARGUS_PASSWORD`, or the prompt), and `start` runs the
+pipeline's agents, which invoke their providers. `--json` prints objects
+instead of lines. Exit status: `0` done, `1` refused, invalid or
+unreachable, `2` bad arguments.
+
+**Where the data comes from:** `GET /api/pipelines`, `GET /api/runtimes`,
+`POST /api/pipelines/validate`, `POST /api/pipelines`,
+`PUT`/`PATCH /api/pipelines/:id` and `POST /api/pipelines/:id/start`.
+
+## `argus skills`
+
+_Teach the agents on this machine how this build of Argus works._
+
+**Purpose:** Argus ships agent skills — `argus-pipeline`, which teaches an
+agent to author, validate, start and repair pipelines with
+[`argus pipeline`](#argus-pipeline), and `argus-tail` — and Argus changes
+faster than a copy someone installed months ago. `argus skills install`
+puts this build's skills into the Claude Code and Codex homes, or brings
+the copies there up to date.
+
+```sh
+argus skills                                   # status: missing, up to date, older, edited
+argus skills install                           # install or update every skill, every agent
+argus skills install argus-pipeline --for all  # one skill, both CLIs whether on PATH or not
+```
+
+Claude Code and Codex discover skills the same way — a
+`skills/<name>/SKILL.md` folder under the CLI's home, `name` and
+`description` frontmatter, chosen when a request matches the description or
+by name (`/argus-pipeline` in Claude Code, `$argus-pipeline` in Codex) — so
+each skill is written once and lands in `~/.claude/skills/` (honouring
+`ARGUS_CLAUDE_HOME`) and `~/.codex/skills/` (honouring `ARGUS_CODEX_HOME` and
+`CODEX_HOME`). Without `--for`, it installs for every CLI found on PATH and
+updates every home that already has one of the skills.
+
+**What an update does:**
+
+- An up-to-date skill is left alone.
+- A skill that an earlier `argus skills` installed and nobody has touched
+  since is replaced whole, so a file the new version dropped does not linger.
+- A skill that was edited, or installed some other way (by hand, or an older
+  skill of the same name), is copied to
+  `~/.claude/argus/skill-backups/<claude|codex>/<name>-<time>/` first, then
+  replaced. The line it prints names the copy.
+
+Each installed folder gets a `.argus-skill.json` beside `SKILL.md`: the
+version and build it came from, and a digest of what was written, which is
+how a later run tells "older than this build" from "edited". The
+`argus-pipeline` skill points its reader at the docs of the build that
+installed it, so `argus skills install` after `argus release` points it at
+the new release. The server says at startup when an installed skill is
+older than the build it runs, and changes nothing itself. A new agent
+session picks up the installed skill.
+
+Inside the Argus checkout both CLIs find the skills without installing:
+Claude Code at `.claude/skills/`, Codex at `.agents/skills/` — plain copies
+rather than symlinks, so a Windows checkout without symlink support has them
+too, and a test fails if the two copies ever differ.
 
 ## `argus release`
 

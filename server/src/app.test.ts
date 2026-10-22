@@ -373,6 +373,7 @@ test("pipeline mutations are 401 before an admin account exists", async () => {
     ["/api/pipelines/p1", "DELETE"],
     ["/api/pipelines/p1/start", "POST"],
     ["/api/pipelines/p1/hook-token/rotate", "POST"],
+    ["/api/pipelines/validate", "POST"],
     ["/api/instances/i1/approve", "POST"],
     ["/api/instances/i1/revise", "POST"],
     ["/api/instances/i1/abort", "POST"],
@@ -1803,6 +1804,101 @@ test("editing what a pipeline executes saves freely once nothing is live", async
     }),
   });
   assert.equal(res.status, 200);
+});
+
+// ── Validating without saving ───────────────────────────────────────────────
+
+test("POST /api/pipelines/validate answers like a save would, and saves nothing", async () => {
+  const app = makeApp();
+  const ok = await app.request("/api/pipelines/validate", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ name: "  P ", trigger: null, phases: [dagPhase("plan")] }),
+  });
+  assert.equal(ok.status, 200);
+  const body = (await ok.json()) as { valid: boolean; pipeline: { name: string } };
+  assert.equal(body.valid, true);
+  assert.equal(body.pipeline.name, "P", "the normalised definition a save would store");
+
+  const bad = await app.request("/api/pipelines/validate", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      name: "P",
+      trigger: null,
+      phases: [dagPhase("plan", { needs: ["nowhere"] })],
+    }),
+  });
+  assert.equal(bad.status, 400);
+  assert.match(((await bad.json()) as { error: string }).error, /nowhere/);
+
+  const list = (await (await app.request("/api/pipelines", { headers: loopback })).json()) as {
+    pipelines: unknown[];
+  };
+  assert.equal(list.pipelines.length, 0);
+});
+
+test("POST /api/pipelines/validate checks the cross-pipeline rules a save checks", async () => {
+  const app = makeApp();
+  const target = (await (await postPipeline2(app, null)).json()) as PipelineDefinition;
+  const spawner = (pipelineId: string) => ({
+    name: "Parent",
+    trigger: null,
+    phases: [
+      dagPhase("plan", {
+        result: {
+          artifact: "plan",
+          schema: {
+            type: "object",
+            required: ["tasks"],
+            properties: {
+              tasks: {
+                type: "array",
+                items: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+              },
+            },
+          },
+        },
+      }),
+      {
+        id: "tasks",
+        name: "Tasks",
+        cwd: home,
+        needs: ["plan"],
+        spawn: { pipelineId, items: { phase: "plan", path: ["tasks"] }, key: "id" },
+      },
+    ],
+  });
+  const unknown = await app.request("/api/pipelines/validate", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify(spawner("no-such-pipeline")),
+  });
+  assert.equal(unknown.status, 400);
+  assert.match(((await unknown.json()) as { error: string }).error, /unknown pipeline/);
+
+  const known = await app.request("/api/pipelines/validate", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify(spawner(target.id)),
+  });
+  assert.equal(known.status, 200, await known.clone().text());
+
+  // As a replacement of the target itself: a pipeline cannot spawn itself.
+  const self = await app.request(`/api/pipelines/validate?id=${target.id}`, {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify(spawner(target.id)),
+  });
+  assert.equal(self.status, 400);
+  assert.match(((await self.json()) as { error: string }).error, /cannot spawn itself/);
+
+  const missing = await app.request("/api/pipelines/validate?id=nope", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify(spawner(target.id)),
+  });
+  assert.equal(missing.status, 404);
 });
 
 // ── Reliability ──────────────────────────────────────────────────────────────

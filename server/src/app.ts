@@ -87,6 +87,7 @@ import {
   IssueValidationError,
 } from "./sources/issues.js";
 import {
+  checkPipeline,
   createPipeline,
   deletePipeline,
   readPipelines,
@@ -1216,6 +1217,23 @@ export function createApp(deps: AppDeps): Hono {
         randomUUID(),
       );
       return c.json(created, 201);
+    } catch (e) {
+      return fail(c, e, PipelineValidationError);
+    }
+  });
+
+  // Every check a save makes, and no save. Admin-gated with the rest of
+  // `/api/pipelines/:id`: it reads nothing secret, but it is part of authoring.
+  // `?id=` checks the body as a replacement (`PUT`) of that pipeline.
+  app.post("/api/pipelines/validate", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    const id = c.req.query("id") || null;
+    if (id && !(await readPipelines()).some((d) => d.id === id)) {
+      return c.json({ error: "not found" }, 404);
+    }
+    try {
+      return c.json({ valid: true, pipeline: await checkPipeline(body.value, id) });
     } catch (e) {
       return fail(c, e, PipelineValidationError);
     }

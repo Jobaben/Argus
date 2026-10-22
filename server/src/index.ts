@@ -60,6 +60,7 @@ import { createRunTailer } from "./runTailer.js";
 import { log } from "./log.js";
 import { buildLabel, readBuildInfo } from "./buildInfo.js";
 import { acquireStateLock, probeHolder } from "./stateLock.js";
+import { skillStatuses, staleSkillsNotice } from "./cli/skills.js";
 
 const config = loadConfig();
 
@@ -199,6 +200,14 @@ const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (i
       );
     }
   });
+  // An agent skill installed by an earlier build teaches that build's
+  // pipelines. Say so, rather than rewrite a person's agent homes unasked.
+  void skillStatuses()
+    .then((statuses) => {
+      const notice = staleSkillsNotice(statuses);
+      if (notice) log.warn(notice);
+    })
+    .catch((e: unknown) => log.debug("skill status check failed", { err: e }));
   // Self-setup on boot: auto-install every fixable prerequisite (hook file,
   // Stop/PreToolUse registration, data dirs) so pipelines work out of the box;
   // report anything that still needs a human (missing CLI, corrupt files).

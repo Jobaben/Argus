@@ -21,6 +21,29 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **`argus skills`: install or update the agent skills Argus ships.**
+  Argus now ships an `argus-pipeline` skill, written against this build:
+  how to author a definition, check it with `argus pipeline validate`, save
+  it, run it once and watch it, and the rules that break most pipelines
+  (the outcome marker, results through `ARGUS_RESULT_FILE`, gates, retries,
+  checks, worktrees, secrets), with a field reference, recipes that pass the
+  validator, and a troubleshooting table. `argus skills install` writes it
+  and `argus-tail` into `~/.claude/skills/` and `~/.codex/skills/` — every
+  CLI on PATH plus every home that already has one, or `--for
+claude|codex|all` — and replaces an older copy whole. A copy that was
+  edited, or installed some other way (such as a hand-written
+  `argus-pipeline` skill), is saved under
+  `~/.claude/argus/skill-backups/` first. `argus skills` reports each copy
+  as missing, up to date, older than this build, or edited, using a
+  `.argus-skill.json` manifest written beside each installed skill, and the
+  server warns at startup when an installed skill is older than the build it
+  runs. `argus tail --install-skill` now goes through the same installer.
+- **`argus pipeline`: author pipelines from a terminal.** `list`, `show`
+  (the stored definition as JSON, without its webhook token), `runtimes`,
+  `validate` (every check a save makes, without saving), `create`,
+  `update` (`--patch`, `--force`) and `start`, logging in for the one call
+  as `argus approve` does. Backed by a new admin route,
+  `POST /api/pipelines/validate[?id=<id>]`.
 - **`argus release`: pinned release builds.** `argus release [--ref <ref>]`
   extracts a commit with `git archive` into
   `~/.claude-argus-releases/<version>-<sha7>/`, installs and builds it there,
