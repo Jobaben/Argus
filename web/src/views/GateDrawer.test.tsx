@@ -1247,3 +1247,282 @@ describe("GateDrawer — acceptance criteria", () => {
     expect(screen.queryByTestId("gate-realization")).toBeNull();
   });
 });
+
+describe("GateDrawer — children pause", () => {
+  const abort = vi.fn(() => new Promise<unknown>(() => {}));
+  const onOpen = vi.fn();
+  const onClose = vi.fn();
+  /** The board's card for the task pipeline, which names the children. */
+  const board = [
+    {
+      pipelineId: "child",
+      name: "Task loop",
+      badge: "await" as const,
+      updatedAt: null,
+      phases: [],
+      instanceId: null,
+      gates: [],
+      failure: null,
+      cost: null,
+      model: null,
+      instanceLabel: null,
+      trigger: null,
+    },
+  ];
+  const spawnSelection: GateSelection = {
+    instanceId: "p-1",
+    phaseId: "tasks",
+    pipelineName: "Delivery loop",
+  };
+  const children: NonNullable<PhaseReview["children"]> = {
+    pipelineId: "child",
+    source: { phaseId: "plan", attempt: 0 },
+    maxParallel: 1,
+    tasks: [
+      { key: "a", title: "Add the schema", state: "succeeded", instanceId: "c-a" },
+      {
+        key: "b",
+        title: "Add sign-in",
+        state: "failed",
+        instanceId: "c-b",
+        reason: "tests failed",
+        child: {
+          status: "failed",
+          decisionPhase: { phaseId: "build", phaseName: "Build", attempt: 0, status: "failed" },
+        },
+      },
+      { key: "c", title: "Write the docs", state: "blocked", dependsOn: [1] },
+    ],
+    notSucceeded: ["b", "c"],
+  };
+  const paused = (over: Partial<PhaseReview> = {}) =>
+    review({
+      instanceId: "p-1",
+      phaseId: "tasks",
+      phaseName: "Tasks",
+      pipelineName: "Delivery loop",
+      attempt: 0,
+      payload: {
+        pipelineId: "child",
+        tasks: children.tasks.map(({ key, state }) => ({ key, state })),
+        counts: { succeeded: 1, failed: 1, blocked: 1 },
+        notSucceeded: ["b", "c"],
+      },
+      artifactDir: null,
+      artifacts: [],
+      children,
+      ...over,
+    });
+
+  function openPaused(opts: { withAbort?: boolean } = {}) {
+    return render(
+      <GateDrawer
+        selection={spawnSelection}
+        onClose={onClose}
+        approve={approve}
+        revise={revise}
+        abort={opts.withAbort === false ? undefined : abort}
+        onOpen={onOpen}
+        board={board}
+      />,
+    );
+  }
+
+  beforeEach(() => {
+    abort.mockClear();
+    onOpen.mockClear();
+    onClose.mockClear();
+    mockReview.review = paused();
+  });
+
+  it("leads with what did not succeed and lists the tasks, not the summary's JSON", () => {
+    openPaused();
+    expect(screen.getByRole("heading", { name: "Some tasks did not succeed" })).toBeInTheDocument();
+    expect(screen.getByText("Nothing more starts until you decide.")).toBeInTheDocument();
+    expect(screen.queryByTestId("gate-raw-payload")).toBeNull();
+    expect(screen.queryByText("The agent left no closing note.")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Artifacts" })).toBeNull();
+    const list = screen.getByRole("list", { name: "Tasks of phase Tasks" });
+    expect(
+      within(list)
+        .getAllByTestId("spawn-task")
+        .map((li) => li.dataset.state),
+    ).toEqual(["succeeded", "failed", "blocked"]);
+    expect(screen.getByText("1 of 3 done · 1 failed or stopped · 1 blocked")).toBeInTheDocument();
+  });
+
+  it("accepts the rest by approving the spawn phase, and says what that drops", async () => {
+    approve.mockImplementationOnce(() => Promise.resolve(new Response()));
+    openPaused();
+    expect(screen.getByTestId("spawn-dropped")).toHaveTextContent(
+      "Accepting continues without b and c.",
+    );
+    const accept = screen.getByRole("button", { name: "Accept the rest" });
+    fireEvent.click(accept);
+    expect(approve).toHaveBeenCalledWith("p-1", { phaseId: "tasks" });
+    expect(accept).toBeDisabled();
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Accepted — continuing without the rest",
+    );
+  });
+
+  it("re-runs the rest by revising the spawn phase, with no note needed", () => {
+    openPaused();
+    fireEvent.click(screen.getByRole("button", { name: "Re-run the rest" }));
+    expect(screen.getByText(/Re-runs every task that did not succeed/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Note for the re-run tasks/)).toBeInTheDocument();
+    const send = screen.getByRole("button", { name: /^send$/i });
+    expect(send).not.toBeDisabled();
+    fireEvent.click(send);
+    expect(revise).toHaveBeenCalledWith("p-1", undefined, { phaseId: "tasks" });
+  });
+
+  it("stops only after asking, and Keep waiting changes nothing", () => {
+    openPaused();
+    const stop = screen.getByRole("button", { name: "Stop" });
+    fireEvent.click(stop);
+    expect(stop).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Stop this instance of “Delivery loop”?")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Keep waiting" }));
+    expect(abort).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(stop);
+    fireEvent.click(stop);
+    // Escape answers the question, and leaves the drawer open.
+    fireEvent.keyDown(screen.getByRole("button", { name: "Keep waiting" }), { key: "Escape" });
+    expect(screen.queryByText("Stop this instance of “Delivery loop”?")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    fireEvent.click(stop);
+    fireEvent.click(screen.getByRole("button", { name: "Stop instance" }));
+    expect(abort).toHaveBeenCalledWith("p-1");
+  });
+
+  it("offers no Stop without a way to stop", () => {
+    openPaused({ withAbort: false });
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  });
+
+  it("opens a task's child at the phase to act on, named after the task", () => {
+    openPaused();
+    const b = screen.getAllByTestId("spawn-task")[1];
+    fireEvent.click(within(b).getByRole("button", { name: "Review" }));
+    expect(onOpen).toHaveBeenCalledWith({
+      instanceId: "c-b",
+      phaseId: "build",
+      pipelineName: "Task loop [b]",
+      originY: expect.any(Number),
+    });
+  });
+
+  it("keeps a failed spawn phase's reason and its Revise, with the tasks beside them", () => {
+    mockReview.review = paused({
+      status: "failed",
+      canApprove: false,
+      payload: { reason: "the payload is over 64 KiB", failureClass: "configuration" },
+    });
+    openPaused();
+    expect(screen.getByTestId("gate-reason")).toHaveTextContent("The payload is over 64 KiB");
+    expect(screen.getByRole("heading", { name: "What went wrong" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^revise$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Accept the rest" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(screen.getByRole("list", { name: "Tasks of phase Tasks" })).toBeInTheDocument();
+    // The parent no longer waits for its tasks: b's child is not revised from here.
+    expect(within(screen.getAllByTestId("spawn-task")[1]).queryByRole("button")).toBeNull();
+  });
+
+  const parentDecided = () =>
+    Object.assign(
+      new Error("c-b is a spawned child and its parent moved on; abort it, or start a follow-up"),
+      { code: "parent-decided" },
+    );
+  const openChild = () =>
+    render(
+      <GateDrawer
+        selection={{ instanceId: "c-b", phaseId: "pr", pipelineName: "Task loop [b]" }}
+        onClose={vi.fn()}
+        approve={approve}
+        revise={revise}
+        abort={abort}
+      />,
+    );
+
+  it("says what a refusal means, and offers Stop on a child its parent stopped waiting for", async () => {
+    approve.mockImplementationOnce(() => Promise.reject(parentDecided()));
+    mockReview.review = review({ instanceId: "c-b", phaseId: "pr", pipelineName: "Task loop" });
+    openChild();
+    // An ordinary gate offers no Stop until the refusal says stopping is the answer.
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^approve$/i }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Its parent no longer waits for this task.");
+    expect(alert).toHaveTextContent("abort it, or start a follow-up");
+    const stop = screen.getByRole("button", { name: "Stop" });
+    fireEvent.click(stop);
+    expect(screen.getByText(/Its parent no longer waits for it/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Stop instance" }));
+    expect(abort).toHaveBeenCalledWith("c-b");
+    // Still there while it stops, and the question's answer hands focus back to it.
+    expect(stop).toBeInTheDocument();
+    expect(document.activeElement).toBe(stop);
+  });
+
+  it("keeps Stop on offer when stopping a child fails, so it can be tried again", async () => {
+    approve.mockImplementationOnce(() => Promise.reject(parentDecided()));
+    abort.mockImplementationOnce(() => Promise.reject(new Error("HTTP 500")));
+    mockReview.review = review({ instanceId: "c-b", phaseId: "pr", pipelineName: "Task loop" });
+    openChild();
+    fireEvent.click(screen.getByRole("button", { name: /^approve$/i }));
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop instance" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("HTTP 500");
+    const stop = screen.getByRole("button", { name: "Stop" });
+    expect(stop).not.toBeDisabled();
+    fireEvent.click(stop);
+    fireEvent.click(screen.getByRole("button", { name: "Stop instance" }));
+    expect(abort).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers no Stop on a failed child its parent stopped waiting for: it has ended", async () => {
+    revise.mockImplementationOnce(() => Promise.reject(parentDecided()));
+    mockReview.review = review({
+      instanceId: "c-b",
+      phaseId: "pr",
+      pipelineName: "Task loop",
+      status: "failed",
+      canApprove: false,
+      payload: { reason: "tests failed" },
+    });
+    openChild();
+    fireEvent.click(screen.getByRole("button", { name: /^revise$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      "Its parent no longer waits for this task. Nothing is left to decide here.",
+    );
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  });
+
+  it("says a re-run task is still running when accepting is refused for it", async () => {
+    approve.mockImplementationOnce(() =>
+      Promise.reject(
+        Object.assign(new Error('task "b" is running again in c-b2; wait for it'), {
+          code: "children-running",
+        }),
+      ),
+    );
+    openPaused();
+    fireEvent.click(screen.getByRole("button", { name: "Accept the rest" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("A task you re-ran is running again.");
+    expect(alert).toHaveTextContent('task "b" is running again in c-b2');
+  });
+
+  it("tells an error with no code in the server's words alone", async () => {
+    approve.mockImplementationOnce(() => Promise.reject(new Error("HTTP 500")));
+    openPaused();
+    fireEvent.click(screen.getByRole("button", { name: "Accept the rest" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("HTTP 500");
+  });
+});

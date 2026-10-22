@@ -193,3 +193,33 @@ describe("applyTuningReport", () => {
     expect(out.phases[0].steps[0].model).toBe("haiku");
   });
 });
+
+describe("applyTuningReport: spawn phases", () => {
+  it("leaves a spawn phase untouched: it runs no agent, and refuses step fields", () => {
+    const d = def();
+    const spawnPhase = {
+      id: "tasks",
+      name: "Tasks",
+      cwd: "/repo",
+      gated: false,
+      needs: ["gamma"],
+      steps: [],
+      spawn: { pipelineId: "child", items: { phase: "gamma", path: ["tasks"] }, key: "id" },
+    };
+    const withSpawn = { ...d, phases: [...d.phases, spawnPhase] };
+    const timeout = proposal({
+      phaseId: "tasks",
+      phaseName: "Tasks",
+      scope: "phase",
+      stepName: null,
+      stepIndex: null,
+      field: "timeoutSeconds",
+      proposed: 600,
+    });
+    const report = { ...everything(d), phases: [] as PhaseTuning[] };
+    report.phases = [{ ...everything(d).phases[0], phaseId: "tasks", proposals: [timeout] }];
+    const out = applyTuningReport(withSpawn, report, new Set([proposalKey(timeout)]));
+    expect(out.phases[3]).toBe(spawnPhase);
+    expect(out.phases[3]).not.toHaveProperty("timeoutSeconds");
+  });
+});

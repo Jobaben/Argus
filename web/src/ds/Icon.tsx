@@ -102,6 +102,9 @@ const PATHS = {
   power: "M12 3.5v8 M17.3 7.2a7.5 7.5 0 1 1-10.6 0",
   /** A dial: a score read against a scale (a run's verdict). */
   gauge: "M6.34 18.66a8 8 0 1 1 11.32 0 M12 13l3.25-3.25",
+  /** One node starting three: a spawn phase, one child instance per task. */
+  spawn:
+    "M8.5 12a2.5 2.5 0 1 1-5 0a2.5 2.5 0 0 1 5 0Z M20.5 5.5a2 2 0 1 1-4 0a2 2 0 0 1 4 0Z M20.5 12a2 2 0 1 1-4 0a2 2 0 0 1 4 0Z M20.5 18.5a2 2 0 1 1-4 0a2 2 0 0 1 4 0Z M8.5 12h8 M8.2 10.8c3-.4 4.6-4.9 8.3-5.3 M8.2 13.2c3 .4 4.6 4.9 8.3 5.3",
 } as const;
 
 export type IconName = keyof typeof PATHS;

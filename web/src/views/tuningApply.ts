@@ -64,6 +64,8 @@ export function applyTuningReport(
     chosen.get([phaseId, scope, stepName ?? "", field].join("\u0000"));
 
   const phases: PhaseDef[] = def.phases.map((phase) => {
+    // A spawn phase runs no agent: nothing to tune, and it refuses step fields.
+    if (phase.spawn) return phase;
     const steps: PhaseStep[] = phase.steps.map((step) => {
       const model = pick(phase.id, "step", step.name, "model");
       const effort = pick(phase.id, "step", step.name, "reasoningEffort");

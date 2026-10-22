@@ -9,6 +9,7 @@ import {
   formatElapsed,
   formatMs,
   formatUsd,
+  rowTitle,
   runDsStatus,
   runStatusLabel,
   staggerDelay,
@@ -212,7 +213,7 @@ export function ActivityRail({
               key: runId ?? `${row.instanceId ?? row.pipelineId}:${phase.id}:${i}`,
               runId,
               startedAt: step.startedAt ?? null,
-              label: `${row.name} · ${step.name}`,
+              label: `${rowTitle(row)} · ${step.name}`,
               activity: runId ? (liveActivity.get(runId) ?? null) : null,
             },
           ];

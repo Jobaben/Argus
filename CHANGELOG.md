@@ -119,8 +119,8 @@ All notable changes to Argus are documented here. The format follows
   `409 children-running` while a re-run child is live; these replies carry a
   `code`. Editing a pipeline a live parent still spawns is held like an edit
   under its own live instances (`409 instances-running`, `?force=1`), whose
-  `instances` entries now carry `pipelineId`. The pipelines form cannot save a
-  phase with no steps yet: author spawn phases through the API.
+  `instances` entries now carry `pipelineId`. The pipeline form edits a spawn
+  phase too (see "Spawn phases on the board" below).
 - **Children manifest: a later phase reads its children.** A phase that
   declares `childrenContext: { fromPhase }`, naming a spawn phase it depends
   on, gets a read-only JSON manifest at `ARGUS_CHILDREN_FILE`: every task, its
@@ -133,6 +133,28 @@ All notable changes to Argus are documented here. The format follows
   profile can open it; the invocation record names the file (`childrenFile`)
   and its hash. A saved `env.set` that names `ARGUS_CHILDREN_FILE` is refused
   on its next save.
+- **Spawn phases on the board.** A spawn phase used to show on the Command
+  Center as a phase with no steps, and its `children` pause as a plain gate
+  whose drawer listed no task. Now its node in the phase graph carries a spawn
+  glyph and its tasks' done-of-total, violet while a child waits for you at its
+  own gate. Its focus panel lists every task with its state and where it
+  stands, a **Review** into a waiting or failed child's gate while the phase
+  still waits for its tasks, and a **Show** that scrolls to a working child. A
+  spawned child's section starts with a chip naming its task and parent, and
+  the board names it `Task loop [b]`, as `argus tail` does. At a `children`
+  pause **Needs you** says **Tasks need a decision**, and the review drawer
+  lists the tasks and offers **Accept the rest** (naming what it drops),
+  **Re-run the rest** (the note is optional) and **Stop**, which asks first; a
+  `409 parent-decided` or `409 children-running` refusal says what it means,
+  and a child its parent stopped waiting for can be stopped from the drawer at
+  its gate. The pipeline form switches a phase to **Spawns children**: no
+  steps, a child-pipeline select and the rest of `spawn` as JSON, with the
+  phases it can read from listed. The Pipelines list marks a spawned latest
+  instance and names the pipelines that spawn one; Stop, Delete and a held
+  edit say what they do to spawned children. Only the graph's glyph and count,
+  the focus panel's task-count chip, a child's name and the **Needs you** line
+  load with the board; the rest loads with the drawer or the Pipelines page,
+  or in a chunk of its own, so the first paint stays within its budget.
 
 ### Changed
 

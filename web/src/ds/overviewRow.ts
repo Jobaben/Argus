@@ -16,6 +16,9 @@ import type {
   OverviewEntry,
   PipelineInstance,
   StepCompletion,
+  InstanceParentRef,
+  SpawnTask,
+  SpawnTaskState,
 } from "../types";
 
 export interface StepPill {
@@ -78,6 +81,24 @@ export interface CandidateSummary {
   selected: number | null;
 }
 
+/**
+ * A spawn phase (DL-A2): its tasks as the parent last mirrored them, and the
+ * counts its graph node shows. The tasks are the recorded objects, passed
+ * through untouched; the lazily loaded tile reads the rest from them.
+ */
+export interface SpawnPill {
+  /** The pipeline every child runs. */
+  pipelineId: string;
+  /** Every task, in list order; empty until the phase first starts. */
+  tasks: SpawnTask[];
+  succeeded: number;
+  /** Tasks whose child waits at one of its own gates: the parent is still
+   *  running, and a person is wanted at the child. */
+  waiting: number;
+  /** Tasks that failed or were aborted: nothing new starts until a person decides. */
+  halted: number;
+}
+
 export interface PhasePill {
   id: string;
   name: string;
@@ -117,6 +138,8 @@ export interface PhasePill {
   /** Best-of-N, summarised: how many drafts verified, and which one won. Null
    *  on an ordinary phase. */
   candidates?: CandidateSummary | null;
+  /** A spawn phase's tasks and their counts. Absent or null on any other phase. */
+  spawn?: SpawnPill | null;
 }
 
 /**
@@ -128,6 +151,9 @@ export interface PhasePill {
 export interface OverviewGate {
   phaseId: string;
   canApprove: boolean;
+  /** A spawn phase paused at `children`: a task did not succeed. Approving
+   *  accepts the rest, which the review drawer spells out. */
+  children?: true;
 }
 
 export interface OverviewRow {
@@ -150,6 +176,8 @@ export interface OverviewRow {
   /** How the latest/active instance was fired. Null when there is no instance
    *  yet (the "never run" row). */
   trigger: PipelineInstance["trigger"] | null;
+  /** A spawned child's parent instance and task (`trigger: "spawned"`). */
+  parent?: InstanceParentRef | null;
   /** The pipeline was deleted while this instance was live: abort is all that is left. */
   orphaned?: true;
 }
@@ -327,6 +355,36 @@ function candidateSummary(
   };
 }
 
+function spawnPillOf(
+  progress: PhaseProgress | undefined,
+  def: PhaseDef | undefined,
+): SpawnPill | null {
+  const pipelineId = progress?.children?.pipelineId ?? def?.spawn?.pipelineId;
+  if (!pipelineId) return null;
+  const tasks = progress?.children?.tasks ?? [];
+  const count = (...states: SpawnTaskState[]) =>
+    tasks.filter((t) => states.includes(t.state)).length;
+  return {
+    pipelineId,
+    tasks,
+    succeeded: count("succeeded"),
+    waiting: count("awaiting-approval"),
+    halted: count("failed", "aborted"),
+  };
+}
+
+/**
+ * A row as people name it. A spawned child carries its task's key, as
+ * `argus tail` prints it, so two children of one pipeline read apart — in
+ * "Needs you", the announcer, the activity rail and the drawers' subtitles.
+ */
+export function rowTitle(row: Pick<OverviewRow, "name" | "parent">): string {
+  return row.parent ? `${row.name} [${row.parent.key}]` : row.name;
+}
+
+/** The DOM id of an instance's section on the board: where "Show" lands. */
+export const instanceSectionId = (instanceId: string) => `instance-${instanceId}`;
+
 const INSTANCE_BADGE: Record<InstanceStatus, DsStatus> = {
   running: "working",
   "awaiting-approval": "await",
@@ -353,7 +411,11 @@ function gatesFor(latest: OverviewEntry["latest"]): OverviewGate[] {
   // `running` beside one.
   return latest.phases
     .filter((p) => p.status === "awaiting-approval")
-    .map((p) => ({ phaseId: p.id, canApprove: true }));
+    .map((p) => ({
+      phaseId: p.id,
+      canApprove: true,
+      ...(p.pause === "children" ? { children: true as const } : {}),
+    }));
 }
 
 function extractReason(payload: unknown): string | null {
@@ -422,17 +484,13 @@ function instanceRow(
   const statusById = new Map(instance.phases.map((p) => [p.id, p.status]));
   const edgesFor = (p: PhaseProgress): DependencyEdge[] =>
     defEdges.get(p.id) ?? (p.needs ?? []).map((phase) => ({ phase }));
+  const defOf = (id: string) => definition.phases.find((d) => d.id === id);
   const phases: PhasePill[] = instance.phases.map((p) => ({
     id: p.id,
     name: p.name,
     status: PHASE_STATUS_TO_DS[p.status],
     activeStep: activeStepName(p),
-    steps: stepPills(
-      p,
-      definition.phases.find((d) => d.id === p.id),
-      definition.model ?? null,
-      definition.runtime ?? null,
-    ),
+    steps: stepPills(p, defOf(p.id), definition.model ?? null, definition.runtime ?? null),
     reason: p.status === "failed" ? extractReason(p.payload) : null,
     gated: p.gated,
     needs: p.needs ?? [],
@@ -442,10 +500,8 @@ function instanceRow(
     edges: edgeViews(edgesFor(p)),
     decision: decisions.find((d) => d.sourcePhase === p.id) ?? null,
     skipCause: skipCauseFor(p, edgeViews(edgesFor(p)), decisions, statusById),
-    candidates: candidateSummary(
-      p,
-      definition.phases.find((d) => d.id === p.id),
-    ),
+    candidates: candidateSummary(p, defOf(p.id)),
+    spawn: spawnPillOf(p, defOf(p.id)),
   }));
 
   return {
@@ -462,6 +518,7 @@ function instanceRow(
     model: definition.model ?? null,
     instanceLabel: null,
     trigger: instance.trigger,
+    parent: instance.parent ?? null,
   };
 }
 
@@ -520,6 +577,7 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
         candidates: p.candidates
           ? { total: p.candidates.count, verified: 0, selected: null }
           : null,
+        spawn: spawnPillOf(undefined, p),
       })),
       instanceId: null,
       gates: [],
@@ -528,6 +586,7 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
       model: definition.model ?? null,
       instanceLabel: null,
       trigger: null,
+      parent: null,
     };
   }
 

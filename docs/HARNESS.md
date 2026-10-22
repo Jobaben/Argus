@@ -3418,9 +3418,10 @@ task's work, and its review, happen in its child, at the child's own gates.
 The pure half (the limits, the item check, the order, the payload, the summary)
 is `server/src/sources/children.ts`; the engine half (the starts, the mirror,
 the abort cascade, recovery) is `engine/children.ts`. Every change to the
-parent is a pure transition in `pipelineTransitions.ts` (§18). The pipelines
-form refuses a phase with no steps, so a pipeline with a spawn phase is
-authored and edited through the API. The worked recipe is
+parent is a pure transition in `pipelineTransitions.ts` (§18). The pipeline
+form edits a spawn phase (**What this phase does** → **Spawns children**: a
+child-pipeline select and the rest of `spawn` as JSON); the task list's result
+schema on the source phase is authored through the API. The worked recipe is
 [Spawn child instances](guides/pipelines.md#spawn-child-instances).
 
 ### What a spawn phase is

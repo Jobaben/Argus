@@ -764,3 +764,157 @@ describe("Pipelines tab — Analyze", () => {
     expect(screen.queryByRole("button", { name: /^analyze$/i })).toBeNull();
   });
 });
+
+describe("Pipelines tab — spawn phases", () => {
+  /** A parent whose Tasks phase spawns one instance of Nightly per task. */
+  const delivery: PipelineDefinition = {
+    ...p1,
+    id: "delivery",
+    name: "Delivery loop",
+    trigger: null,
+    phases: [
+      { id: "plan", name: "Plan", cwd: "/", gated: true, steps: [{ name: "s", prompt: "p" }] },
+      {
+        id: "tasks",
+        name: "Tasks",
+        cwd: "/",
+        gated: false,
+        needs: ["plan"],
+        steps: [],
+        spawn: { pipelineId: "p1", items: { phase: "plan", path: ["tasks"] }, key: "id" },
+      },
+    ],
+  };
+  const spawnedChild = (): PipelineInstance => ({
+    ...instance("running"),
+    trigger: "spawned",
+    parent: { instanceId: "d-1", pipelineId: "delivery", phaseId: "tasks", index: 0, key: "a" },
+  });
+
+  it("marks an instance a spawn phase started", async () => {
+    vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: spawnedChild() }]));
+    render(<Pipelines />);
+    const chip = await screen.findByText("spawned");
+    expect(chip.getAttribute("title")).toBe(
+      "The latest instance was started by another pipeline's spawn phase",
+    );
+  });
+
+  it("names the pipelines that spawn this one", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        [
+          { definition: p1, latest: null },
+          { definition: delivery, latest: null },
+        ],
+        [p1, delivery],
+      ),
+    );
+    render(<Pipelines />);
+    const card = (await screen.findByRole("heading", { name: "Nightly" })).closest("article")!;
+    expect(within(card).getByText("spawned by Delivery loop")).toBeInTheDocument();
+    const parentCard = screen.getByRole("heading", { name: "Delivery loop" }).closest("article")!;
+    expect(within(parentCard).queryByText(/spawned by/)).toBeNull();
+  });
+
+  it("says Stop stops the instances a parent spawned, and Delete what it does to parents", async () => {
+    const user = userEvent.setup();
+    const parentRunning = { ...instance("running"), id: "d-1", pipelineId: "delivery" };
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        [
+          { definition: p1, latest: null },
+          { definition: delivery, latest: parentRunning },
+        ],
+        [p1, delivery],
+      ),
+    );
+    render(<Pipelines />);
+    const parentCard = (await screen.findByRole("heading", { name: "Delivery loop" })).closest(
+      "article",
+    )!;
+    await user.click(await within(parentCard).findByRole("button", { name: "Stop" }));
+    expect(
+      within(parentCard).getByText(
+        "In-progress work will be discarded, and the instances they spawned are stopped too.",
+      ),
+    ).toBeInTheDocument();
+    const card = screen.getByRole("heading", { name: "Nightly" }).closest("article")!;
+    await user.click(within(card).getByRole("button", { name: "Delete Nightly" }));
+    expect(
+      within(card).getByText("Pipelines that spawn it stop starting new ones and wait for you."),
+    ).toBeInTheDocument();
+  });
+
+  function fetchRefusedBy(instances: { id: string; status: InstanceStatus; pipelineId: string }[]) {
+    const base = routedFetch([{ definition: p1, latest: null }]);
+    const puts: string[] = [];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method !== "PUT") return base(input, init);
+      puts.push(url);
+      if (url.includes("force=1")) return Promise.resolve(okJson(p1));
+      return Promise.resolve({
+        ok: false,
+        status: 409,
+        json: async () => ({ error: "held", code: "instances-running", instances }),
+      } as Response);
+    });
+    return { fetchMock, puts };
+  }
+
+  it("asks in a parent's words before saving an edit its children would run", async () => {
+    const user = userEvent.setup();
+    const { fetchMock, puts } = fetchRefusedBy([
+      { id: "d-1", status: "running", pipelineId: "delivery" },
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Pipelines />);
+    await user.click(await screen.findByRole("button", { name: /^edit$/i }));
+    await user.click(screen.getByRole("button", { name: /save pipeline/i }));
+    const question = await screen.findByRole("group", {
+      name: "A live instance of another pipeline will start more instances of “Nightly”.",
+    });
+    expect(question).toHaveAccessibleDescription("Those would run this edit.");
+    await user.click(screen.getByRole("button", { name: "Save anyway" }));
+    await waitFor(() => expect(puts).toEqual(["/api/pipelines/p1", "/api/pipelines/p1?force=1"]));
+  });
+
+  it("names both when the pipeline's own instances and a parent hold the edit", async () => {
+    const user = userEvent.setup();
+    const { fetchMock } = fetchRefusedBy([
+      { id: "i1", status: "running", pipelineId: "p1" },
+      { id: "d-1", status: "running", pipelineId: "delivery" },
+      { id: "d-2", status: "awaiting-approval", pipelineId: "delivery" },
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Pipelines />);
+    await user.click(await screen.findByRole("button", { name: /^edit$/i }));
+    await user.click(screen.getByRole("button", { name: /save pipeline/i }));
+    const question = await screen.findByRole("group", {
+      name: "1 instance is running under “Nightly”.",
+    });
+    expect(question).toHaveAccessibleDescription(
+      /next start\. Live instances of another pipeline will also start more of it/,
+    );
+  });
+
+  it("counts several live parents", async () => {
+    const user = userEvent.setup();
+    const { fetchMock } = fetchRefusedBy([
+      { id: "d-1", status: "running", pipelineId: "delivery" },
+      { id: "d-2", status: "running", pipelineId: "delivery" },
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Pipelines />);
+    await user.click(await screen.findByRole("button", { name: /^edit$/i }));
+    await user.click(screen.getByRole("button", { name: /save pipeline/i }));
+    expect(
+      await screen.findByRole("group", {
+        name: "2 live instances of another pipeline will start more instances of “Nightly”.",
+      }),
+    ).toBeInTheDocument();
+  });
+});

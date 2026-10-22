@@ -47,7 +47,11 @@ A failed run names the step and the first line of its reason. A pipeline that ha
 never run still shows its phases, greyed, because that is what it is going to do.
 Above the cards, filter chips count **All**, what **needs approval** (in the
 Command Center's words), what **failed** and what is **paused** — press one to
-narrow the list to those pipelines, press it again to go back.
+narrow the list to those pipelines, press it again to go back. A **spawned**
+chip says the latest instance was started by another pipeline's
+[spawn phase](#spawn-child-instances), and a pipeline that some spawn phase
+starts says **spawned by Delivery loop** under its name, after its trigger
+(**Manual** or **Webhook**, which is not how it usually starts).
 
 When you're **signed out**, the sign-in panel sits above the list (see
 [Users & sign-in](administration.md#users--sign-in)) — viewing is open, but every mutating
@@ -82,11 +86,34 @@ empty state back.
 - Inside the phase, ordered **steps** — each with a name, optional per-step
   **runtime / model / effort overrides**, and its prompt. Reorder or remove
   phases and steps freely; **Save pipeline** stays disabled until every phase has a
-  name, cwd and at least one complete step (the rail marks the incomplete
+  name, cwd and at least one complete step — or, for a spawn phase, a child
+  pipeline and valid task-list settings (the rail marks the incomplete
   ones). Phase features authored via the API — retry policies, published
   artifacts, rubrics, auto-approve, approval conditions — show as badges on the
   panel and are preserved on save. Unchecking **gated** drops auto-approve and
   the approval condition with it: neither means anything without a gate.
+- **What this phase does** switches a phase between **Runs steps** and
+  **Spawns children** (a [spawn phase](#spawn-child-instances)). A spawn
+  phase has no steps, no gate of its own and none of the runtime,
+  result or candidate settings: switching drops them (the server refuses them
+  on a spawn phase), and switching back in the same sitting brings them back;
+  a spawn phase switched to steps and back keeps its policy the same way.
+  Its **Children** part holds a **Child pipeline** select (every other
+  pipeline) and **Task list and options (JSON)**: the rest of `spawn` —
+  `items`, `key` and the optional `dependsOn`, `title`, `maxParallel`,
+  `maxItems`, `base` and `include` — with the phases it can read from listed
+  under it by name and id. Text the form cannot read as those settings stays
+  as you typed it, says why under the field, and holds **Save pipeline** until
+  it can: JSON that does not parse, or that is not an object with `items` (a
+  `phase` and a `path` list) and a non-empty `key`, names a field not listed
+  here (`pipelineId` included: choose it in the select), or gives a field the
+  wrong type (`maxParallel` and `maxItems` are whole numbers of 1 or more).
+  The server checks the rest when you save — the source phase's result schema
+  and the task fields in it, the child pipeline's trigger, the limits — and
+  its `400` says what to change. The
+  task-list schema on the phase that writes the list is set through the API
+  (the result editor shows "schema set via the API" and keeps it). The rail
+  marks a spawn phase **Spawn**.
 
 **What you can do (signed in)** — from the card's footer: the run controls
 first, then **Analyze** and **Edit**, with **Disable**/**Enable** and **Delete**
@@ -97,7 +124,8 @@ the buttons (_Couldn't complete that: …_).
   is allowed).
 - **Stop / Stop all (N)** — abort active instances. It asks first, on a line
   of its own under the buttons: **Stop pipeline** (or **Stop N instances**)
-  goes ahead, **Keep running** leaves them be.
+  goes ahead, **Keep running** leaves them be. On a pipeline with a spawn
+  phase the question adds that the instances they spawned are stopped too.
 - **Enable / Disable**, **Edit**, **Delete**. Delete asks the same way —
   **Delete pipeline** or **Keep** — and the safe answer has focus, so Escape or
   a stray Enter keeps everything. An instance runs
@@ -109,11 +137,14 @@ the buttons (_Couldn't complete that: …_).
   watching; renaming, changing the trigger or overlap policy, and enabling or
   disabling save without asking. Editing a pipeline that a live parent's
   [spawn phase](#spawn-child-instances) still starts children of asks the same
-  way: those children would run your edit.
+  way, in its own words — "A live instance of another pipeline will start more
+  instances of “Task loop”. Those would run this edit." — because, unlike the
+  pipeline's own instances, those children would run your edit.
   **Delete** stops the pipeline's running and waiting instances first (the
   question says how many), then removes it. Pipelines chained `after` it do
   not start from those stops. A spawned child is one of those instances: each
-  parent that spawned one then waits for you at its spawn phase. An instance left live by a pipeline
+  parent that spawned one then waits for you at its spawn phase, which the
+  question says when another pipeline spawns this one. An instance left live by a pipeline
   deleted before this existed still gets a card on the Command Center, marked
   **Pipeline deleted**, with a **Stop** button that asks first (**Stop
   instance** or **Keep running**).
@@ -641,8 +672,9 @@ pipeline per task. One phase writes the task list into its result; a **spawn
 phase** after it starts one _child_ instance of the task pipeline per task, in
 dependency order and one at a time, and succeeds once every child has. Each
 child is an ordinary instance, with its own phases, gates and worktrees. The
-pipelines form cannot save a phase with no steps yet: author both pipelines
-through the API, and edit the parent there too.
+steps below author both pipelines through the API; the pipeline form edits a
+spawn phase too (**In the form**, below), except the task list's result
+schema, which stays API-authored.
 
 **Before you start:** a git repository the agents work in, fetched
 (`git fetch origin`), and a runtime that works for a plain pipeline. Each
@@ -763,8 +795,11 @@ a task list Argus cannot run gets another attempt with the reason.
    gate, review and approve it in the Command Center like any gate (a state
    change: the child succeeds, and the parent starts the next task). Meanwhile the parent's
    Tasks phase stays `running`, and `argus tail --until-idle` returns: only
-   the child waits for you. To have that gate open when the task's pull request
-   merges, give Implement an approval condition
+   the child waits for you. On the board the spawn glyph and task count on
+   the parent's Tasks node (`0/5`) turn violet, while the node itself keeps
+   its working colour, and its panel leads with **A task is waiting for you**
+   and a **Review** that opens the child's gate. To have that gate open when
+   the task's pull request merges, give Implement an approval condition
    ([Open a gate when its pull request merges](#open-a-gate-when-its-pull-request-merges));
    its checks can read the task too
    ([Check work against the task it was started for](#check-work-against-the-task-it-was-started-for)).
@@ -781,30 +816,38 @@ as its payload, and the phases after it start.
 `blocked`, and once no child is running the Tasks phase waits for you
 (`pause: "children"`; the tail says
 `waiting for you at "Tasks" (2 of 5 tasks did not succeed)`). The Command
-Center shows the pause like a gate; its drawer does not list the tasks yet, so
-read them from `GET /api/instances/<parent id>/phases/tasks/review`
-(`children`, with the phase to act on in each child). Each choice alters state:
+Center lists it under **Needs you** as **Tasks need a decision**; its
+**Review** opens the Tasks phase's drawer, which lists every task, with a
+**Review** on each one waiting at its child's gate or failed, into the child
+phase to act on (the same `children` that
+`GET /api/instances/<parent id>/phases/tasks/review` returns). Each choice
+alters state:
 
 - **Re-run one task:** revise the child's failed phase, on the child (its
-  drawer, or `argus revise <child id> --phase <phase> --note "<what to change>"`).
+  **Review** in the Tasks drawer opens it, or
+  `argus revise <child id> --phase <phase> --note "<what to change>"`).
   Its agent runs again and invokes its provider; the Tasks phase resumes, and
   once the child succeeds the tasks it blocked continue.
 - **Re-run every task that did not succeed:** revise the Tasks phase on the
-  parent (`argus revise <parent id> --phase tasks --note "<what to change>"`).
+  parent (**Re-run the rest** in its drawer, where the note is optional, or
+  `argus revise <parent id> --phase tasks --note "<what to change>"`).
   Each failed child is revised in place with your note; an aborted or blocked
   task gets a fresh child when it is ready. Tasks that succeeded stay done, and
   the task list is not rebuilt.
-- **Accept the rest:** approve the Tasks phase (`argus approve <parent id>`).
+- **Accept the rest:** approve the Tasks phase (**Accept the rest** in its
+  drawer, which names the tasks it drops, or `argus approve <parent id>`).
   It succeeds, its summary's `notSucceeded` names the tasks it dropped, and the
   phases after it start. Answers are refused here
   (`400 answers-not-accepted`), and so is an approval while a child you re-ran
   is still running (`409 children-running`).
-- **Abort** the parent: its children are aborted with it, and none of them
-  fires an `after` chain.
+- **Abort** the parent (**Stop** in its drawer, which asks first): its
+  children are aborted with it, and none of them fires an `after` chain.
 
 Approving or revising a child its parent no longer waits for (the parent
 ended, or the Tasks phase moved on) is refused with `409 parent-decided`;
-aborting it always works. A restart never starts a task twice: each child's id
+aborting a live child always works, and the drawer at its gate offers **Stop**
+once it has been told so (a failed child has already ended). A restart never
+starts a task twice: each child's id
 is saved on the parent before the child starts, and Argus picks up from the
 saved parent.
 
@@ -817,6 +860,27 @@ stop is on. `after` chains of the task pipeline fire once per child, and
 Plan, accept the rest and start a follow-up instance. The details are in
 [the harness reference](../HARNESS.md#20-spawn-phases).
 
+**On the board.** The Tasks node in the parent's phase graph carries the spawn
+glyph and its tasks' done-of-total (`2/5`), violet while a child waits for you
+and red once a task failed. With the Tasks phase in focus, the panel lists
+every task with its state and one line on where it stands, a **Review** into a
+waiting or failed child while the Tasks phase still waits for its tasks
+(running, or at its `children` pause; once you accept the rest or stop the
+parent, no task has one), and a **Show** that scrolls to a working child's
+section on the task pipeline's card. Each child's section starts with **Task
+<key> · Delivery**, which takes you back to the parent, and the board names a
+child `Task loop [<key>]`. See [Command Center](monitoring.md#command-center).
+
+**In the form.** Select the Tasks phase on the rail, then **What this phase
+does** → **Spawns children**. Choose **Task loop** as the **Child pipeline**
+and edit the rest of `spawn` in **Task list and options (JSON)**; the line
+under it lists the phases it can read from. Save asks for a child pipeline and
+settings the form can read: an object with `items` and `key`, no field `spawn`
+does not have (nor `pipelineId`, which is the select), each of the right type.
+Otherwise the field says why and Save stays held. The server checks the rest,
+and its `400` appears in the form's **Couldn't save** strip. Saving alters
+state; it invokes no provider. See [The pipeline form](#pipelines).
+
 ### Read the children from a later phase
 
 Once a spawn phase has run its tasks, a later phase can read what every child
@@ -824,8 +888,8 @@ did: its results, its checks, the gate decisions on it with their notes, its
 runs and what they cost, and its files. Declare `childrenContext` on that
 phase, and each of its steps gets a read-only **children manifest**, a JSON
 file at `ARGUS_CHILDREN_FILE`, with this instance's own phases, decisions and
-cost beside the children's. The pipelines form does not show the field:
-author it through the API, as you do the spawn phase.
+cost beside the children's. The pipelines form does not show this field:
+author it through the API, and the form keeps it on later saves.
 
 **Before you start:** a parent pipeline with a spawn phase, as in
 [Spawn child instances](#spawn-child-instances). The reading phase must run

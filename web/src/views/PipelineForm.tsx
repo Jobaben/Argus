@@ -8,6 +8,7 @@ import type {
   PhaseDef,
   PhaseStep,
   PipelineInput,
+  SpawnPolicy,
   WorkspacePolicy,
 } from "../types";
 import {
@@ -19,6 +20,7 @@ import {
   Icon,
   IconButton,
   labelClass,
+  SegmentedControl,
 } from "../ds";
 import { TriggerFields } from "../ds/TriggerFields";
 import { useRuntimes } from "../useRuntimes";
@@ -28,6 +30,15 @@ import { ModelSelect } from "../ds/ModelSelect";
 import { ReasoningEffortSelect } from "../ds/ReasoningEffortSelect";
 import { RuntimeSelect } from "../ds/RuntimeSelect";
 import { useAsk, type Ask } from "../ds/useAsk";
+import { SpawnFields } from "./SpawnFields";
+import {
+  defaultSpawn,
+  parseSpawnOptions,
+  spawnProblem,
+  spawnSources,
+  toSpawnPhase,
+  toStepPhase,
+} from "./spawnAuthoring";
 
 /**
  * The pipeline editor as rail + focus panel.
@@ -430,10 +441,13 @@ function downstreamOf(id: string, phases: PhaseDef[]): Set<string> {
   return out;
 }
 
-/** What stops this phase from being saveable, or null when nothing does. */
-function phaseProblem(p: PhaseDef): string | null {
+/** What stops this phase from being saveable, or null when nothing does.
+ *  `spawnError` is a spawn phase's JSON that does not parse, as typed. */
+function phaseProblem(p: PhaseDef, spawnError?: string): string | null {
   if (!p.name.trim()) return "needs a name";
   if (!p.cwd.trim()) return "needs a working directory";
+  // A spawn phase runs no step: it needs a child pipeline and its settings.
+  if (p.spawn) return spawnProblem(p.spawn, spawnError);
   if (p.steps.length === 0) return "needs at least one step";
   if (p.steps.some((s) => !s.name.trim() || !s.prompt.trim()))
     return "has a step missing a name or prompt";
@@ -448,19 +462,23 @@ function EditorChip({
   phase,
   index,
   needNames,
+  problem,
   selected,
   onSelect,
 }: {
   phase: PhaseDef;
   index: number;
   needNames: string[];
+  /** What stops it from being saveable, or null. */
+  problem: string | null;
   selected: boolean;
   onSelect: () => void;
 }) {
-  const problem = phaseProblem(phase);
   const title = [
     `${index + 1}. ${phase.name.trim() || "unnamed"}`,
-    `${phase.steps.length} step${phase.steps.length === 1 ? "" : "s"}`,
+    phase.spawn
+      ? "spawns one child instance per task"
+      : `${phase.steps.length} step${phase.steps.length === 1 ? "" : "s"}`,
     ...(phase.gated ? ["gated: waits for a human"] : []),
     needNames.length > 0 ? `starts after ${needNames.join(", ")}` : "starts immediately",
     ...(problem ? [`incomplete: ${problem}`] : []),
@@ -493,6 +511,12 @@ function EditorChip({
         {phase.name.trim() || "unnamed"}
       </span>
       {phase.gated && <span className={chipClass("await")}>Gate</span>}
+      {phase.spawn && (
+        <span className={chipClass("neutral")}>
+          <Icon name="spawn" size={11} />
+          Spawn
+        </span>
+      )}
       {phase.steps.length > 1 && (
         <span className="shrink-0 text-micro font-normal text-ink-faint">{phase.steps.length}</span>
       )}
@@ -552,6 +576,47 @@ export function PipelineForm({
 
   const setPhase = (i: number, patch: Partial<PhaseDef>) =>
     setForm((f) => ({ ...f, phases: f.phases.map((p, j) => (j === i ? { ...p, ...patch } : p)) }));
+  // `setPhase` merges, so it cannot drop a key; switching a phase's kind must.
+  const replacePhase = (i: number, next: PhaseDef) =>
+    setForm((f) => ({ ...f, phases: f.phases.map((p, j) => (j === i ? next : p)) }));
+
+  // A spawn phase's JSON as typed, by phase id. Kept here rather than in its
+  // field, so a phase left with text that does not parse still says so (and
+  // still blocks Save) when it is selected again; the policy itself keeps its
+  // last valid value.
+  const [spawnDrafts, setSpawnDrafts] = useState<Record<string, string>>({});
+  // A phase's last form of each kind (its steps, or its policy and JSON as
+  // typed), so switching it back and forth in one sitting loses nothing.
+  const [stashed, setStashed] = useState<Record<string, PhaseDef>>({});
+  const [stashedSpawn, setStashedSpawn] = useState<
+    Record<string, { spawn: SpawnPolicy; draft: string | undefined }>
+  >({});
+  const spawnError = (id: string): string | undefined => {
+    const draft = spawnDrafts[id];
+    const parsed = draft === undefined ? null : parseSpawnOptions(draft);
+    return parsed && !parsed.ok ? parsed.error : undefined;
+  };
+  /** Steps or children. Everything a spawn phase may not declare is dropped
+   *  (the server refuses it), and comes back if the phase is switched back. */
+  const switchKind = (i: number, kind: "steps" | "spawn") => {
+    const p = form.phases[i];
+    if ((kind === "spawn") === !!p.spawn) return;
+    let draft: string | undefined;
+    if (p.spawn) {
+      const spawn = p.spawn;
+      setStashedSpawn((s) => ({ ...s, [p.id]: { spawn, draft: spawnDrafts[p.id] } }));
+      replacePhase(i, toStepPhase(p, stashed[p.id], newStep));
+    } else {
+      setStashed((s) => ({ ...s, [p.id]: p }));
+      const back = stashedSpawn[p.id];
+      const sources = spawnSources(form.phases, p.id, effectiveNeedIds(form.phases));
+      replacePhase(i, toSpawnPhase(p, back?.spawn ?? defaultSpawn(sources)));
+      draft = back?.draft;
+    }
+    setSpawnDrafts(({ [p.id]: _gone, ...rest }) =>
+      draft === undefined ? rest : { ...rest, [p.id]: draft },
+    );
+  };
 
   const setStep = (pi: number, si: number, patch: Partial<PhaseStep>) =>
     setForm((f) => ({
@@ -633,7 +698,7 @@ export function PipelineForm({
     }
   };
 
-  const problems = form.phases.map(phaseProblem);
+  const problems = form.phases.map((p) => phaseProblem(p, spawnError(p.id)));
   const canSave = form.name.trim() !== "" && form.phases.length > 0 && problems.every((p) => !p);
   // Why Save is greyed, in words beside it. It used to be a tooltip on a
   // disabled button — which most browsers never show, because a disabled
@@ -838,6 +903,7 @@ export function PipelineForm({
                             phase={n.def}
                             index={indexOf.get(n.id) ?? 0}
                             needNames={(effIds.get(n.id) ?? []).map((d) => nameOf.get(d) ?? d)}
+                            problem={problems[indexOf.get(n.id) ?? 0]}
                             selected={n.id === selectedId}
                             onSelect={() => setSelectedId(n.id)}
                           />
@@ -937,182 +1003,226 @@ export function PipelineForm({
               </Field>
             </div>
 
-            {/* The product's defining idea gets a control that looks like one:
+            <Field label="What this phase does" plain>
+              <SegmentedControl
+                label={`What phase ${pi + 1} does`}
+                segments={[
+                  { value: "steps", label: "Runs steps" },
+                  { value: "spawn", label: "Spawns children" },
+                ]}
+                value={phase.spawn ? "spawn" : "steps"}
+                onChange={(kind) => switchKind(pi, kind)}
+              />
+            </Field>
+
+            {phase.spawn ? (
+              <>
+                <p className="text-small text-ink-dim">
+                  A spawn phase has no gate of its own: it waits for you only when a task does not
+                  succeed.
+                </p>
+                <PanelPart
+                  title="Children"
+                  hint="One instance of another pipeline per task in an earlier phase's result, started in dependency order and joined before the phases after this one."
+                >
+                  <SpawnFields
+                    spawn={phase.spawn}
+                    index={pi}
+                    pipelines={pipelines.filter((p) => p.id !== pipelineId)}
+                    sources={spawnSources(form.phases, phase.id, effIds)}
+                    fieldClass={fieldClass}
+                    draft={spawnDrafts[phase.id]}
+                    onDraft={(text) => setSpawnDrafts((d) => ({ ...d, [phase.id]: text }))}
+                    onChange={(spawn) => setPhase(pi, { spawn })}
+                  />
+                </PanelPart>
+              </>
+            ) : (
+              <>
+                {/* The product's defining idea gets a control that looks like one:
                 a gate is where a human decides, and it lights in the colour the
                 board uses for "waiting on you". */}
-            <label
-              // A tone block like the steps below it; only a gate that is on
-              // gets an edge, in the colour that means "waiting on you".
-              className={`flex cursor-pointer items-start gap-3 rounded-tile border px-3 py-3 transition-[border-color,background-color] duration-(--duration-quick) sm:px-4 sm:py-3.5 ${
-                phase.gated
-                  ? "border-await/45 bg-await/[0.08]"
-                  : "border-transparent bg-surface hover:bg-surface-2"
-              }`}
-            >
-              <input
-                type="checkbox"
-                className="mt-1 h-4 w-4 shrink-0 accent-await"
-                checked={phase.gated}
-                onChange={(e) => setPhase(pi, { gated: e.target.checked })}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="flex items-start gap-2 text-heading font-semibold text-ink">
-                  <Icon
-                    name="approve"
-                    size={17}
-                    className={`mt-px ${phase.gated ? "text-await" : "text-ink-faint"}`}
+                <label
+                  // A tone block like the steps below it; only a gate that is on
+                  // gets an edge, in the colour that means "waiting on you".
+                  className={`flex cursor-pointer items-start gap-3 rounded-tile border px-3 py-3 transition-[border-color,background-color] duration-(--duration-quick) sm:px-4 sm:py-3.5 ${
+                    phase.gated
+                      ? "border-await/45 bg-await/[0.08]"
+                      : "border-transparent bg-surface hover:bg-surface-2"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4 shrink-0 accent-await"
+                    checked={phase.gated}
+                    onChange={(e) => setPhase(pi, { gated: e.target.checked })}
                   />
-                  <span className="min-w-0">Requires human approval (gated)</span>
-                </span>
-                <span className="mt-1 block text-small text-ink-dim">
-                  The pipeline stops after this phase until someone approves what it produced, or
-                  sends it back with a note.
-                </span>
-                {(phase.rubric || phase.autoApprove || phase.approveWhen) && (
-                  <span className="mt-2 flex flex-wrap gap-1.5">
-                    {phase.rubric && (
-                      <span
-                        className={chipClass()}
-                        title="Carries a quality rubric (set via the API; preserved on save)"
-                      >
-                        rubric
-                      </span>
-                    )}
-                    {phase.autoApprove && (
-                      <span
-                        className={chipClass()}
-                        title="The gate opens itself when the verdict clears the bar (set via the API; preserved on save)"
-                      >
-                        auto-approve
-                      </span>
-                    )}
-                    {phase.approveWhen && (
-                      <span
-                        className={chipClass()}
-                        title="The gate opens itself when a command says so (set via the API; preserved on save)"
-                      >
-                        approval condition
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-start gap-2 text-heading font-semibold text-ink">
+                      <Icon
+                        name="approve"
+                        size={17}
+                        className={`mt-px ${phase.gated ? "text-await" : "text-ink-faint"}`}
+                      />
+                      <span className="min-w-0">Requires human approval (gated)</span>
+                    </span>
+                    <span className="mt-1 block text-small text-ink-dim">
+                      The pipeline stops after this phase until someone approves what it produced,
+                      or sends it back with a note.
+                    </span>
+                    {(phase.rubric || phase.autoApprove || phase.approveWhen) && (
+                      <span className="mt-2 flex flex-wrap gap-1.5">
+                        {phase.rubric && (
+                          <span
+                            className={chipClass()}
+                            title="Carries a quality rubric (set via the API; preserved on save)"
+                          >
+                            rubric
+                          </span>
+                        )}
+                        {phase.autoApprove && (
+                          <span
+                            className={chipClass()}
+                            title="The gate opens itself when the verdict clears the bar (set via the API; preserved on save)"
+                          >
+                            auto-approve
+                          </span>
+                        )}
+                        {phase.approveWhen && (
+                          <span
+                            className={chipClass()}
+                            title="The gate opens itself when a command says so (set via the API; preserved on save)"
+                          >
+                            approval condition
+                          </span>
+                        )}
                       </span>
                     )}
                   </span>
-                )}
-              </span>
-            </label>
+                </label>
 
-            <PanelPart
-              title="Steps"
-              hint="Each step is one headless agent run with its own prompt; a phase's steps run in order."
-            >
-              <ol className="space-y-3">
-                {phase.steps.map((step, si) => {
-                  const runtime = effective(phase, step);
-                  const efforts = effortsFor(runtime);
-                  return (
-                    <li key={si} className="min-w-0 rounded-tile bg-surface p-2.5 sm:p-4">
-                      <div className="flex items-center gap-2">
-                        <span className="eyebrow">Step {si + 1}</span>
-                        <div className="ml-auto flex items-center gap-0.5">
-                          <IconButton
-                            icon="arrow-up"
-                            label="Move step up"
-                            size="sm"
-                            disabled={si === 0}
-                            onClick={() => setPhase(pi, { steps: move(phase.steps, si, si - 1) })}
-                          />
-                          <IconButton
-                            icon="arrow-down"
-                            label="Move step down"
-                            size="sm"
-                            disabled={si === phase.steps.length - 1}
-                            onClick={() => setPhase(pi, { steps: move(phase.steps, si, si + 1) })}
-                          />
-                          <IconButton
-                            icon="trash"
-                            label="Remove step"
-                            size="sm"
-                            variant="quiet-danger"
-                            onClick={() =>
-                              setPhase(pi, { steps: phase.steps.filter((_, k) => k !== si) })
-                            }
-                          />
-                        </div>
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-3">
-                        <Field label="Name" className="min-w-[12rem] flex-[2]">
-                          <input
-                            className={FIELD}
-                            aria-label={`Phase ${pi + 1} step ${si + 1} name`}
-                            placeholder="Step name"
-                            value={step.name}
-                            onChange={(e) => setStep(pi, si, { name: e.target.value })}
-                          />
-                        </Field>
-                        <div className="min-w-[10rem] flex-1">
-                          <RuntimeSelect
-                            caption="Runtime"
-                            fieldClass={PICKER}
-                            label="Use phase runtime"
-                            ariaLabel={`Runtime (phase ${pi + 1} step ${si + 1})`}
-                            value={step.runtime}
-                            runtimes={runtimes}
-                            onChange={(r) =>
-                              setStep(pi, si, {
-                                runtime: r,
-                                model: undefined,
-                                reasoningEffort: undefined,
-                              })
-                            }
-                          />
-                        </div>
-                        {efforts.length > 0 && (
-                          <div className="min-w-[9rem] flex-1">
-                            <ReasoningEffortSelect
-                              key={`step-effort:${pi}:${si}:${runtime}`}
-                              caption="Effort"
-                              fieldClass={PICKER}
-                              label="Use pipeline effort"
-                              ariaLabel={`Use pipeline effort (phase ${pi + 1} step ${si + 1})`}
-                              value={step.reasoningEffort}
-                              efforts={efforts}
-                              onChange={(reasoningEffort) => setStep(pi, si, { reasoningEffort })}
-                            />
+                <PanelPart
+                  title="Steps"
+                  hint="Each step is one headless agent run with its own prompt; a phase's steps run in order."
+                >
+                  <ol className="space-y-3">
+                    {phase.steps.map((step, si) => {
+                      const runtime = effective(phase, step);
+                      const efforts = effortsFor(runtime);
+                      return (
+                        <li key={si} className="min-w-0 rounded-tile bg-surface p-2.5 sm:p-4">
+                          <div className="flex items-center gap-2">
+                            <span className="eyebrow">Step {si + 1}</span>
+                            <div className="ml-auto flex items-center gap-0.5">
+                              <IconButton
+                                icon="arrow-up"
+                                label="Move step up"
+                                size="sm"
+                                disabled={si === 0}
+                                onClick={() =>
+                                  setPhase(pi, { steps: move(phase.steps, si, si - 1) })
+                                }
+                              />
+                              <IconButton
+                                icon="arrow-down"
+                                label="Move step down"
+                                size="sm"
+                                disabled={si === phase.steps.length - 1}
+                                onClick={() =>
+                                  setPhase(pi, { steps: move(phase.steps, si, si + 1) })
+                                }
+                              />
+                              <IconButton
+                                icon="trash"
+                                label="Remove step"
+                                size="sm"
+                                variant="quiet-danger"
+                                onClick={() =>
+                                  setPhase(pi, { steps: phase.steps.filter((_, k) => k !== si) })
+                                }
+                              />
+                            </div>
                           </div>
-                        )}
-                        <div className="min-w-[10rem] flex-1">
-                          <ModelSelect
-                            key={`step:${pi}:${si}:${runtime}`}
-                            caption="Model"
-                            fieldClass={PICKER}
-                            label="Use pipeline default"
-                            ariaLabel={`Use pipeline default (phase ${pi + 1} step ${si + 1})`}
-                            value={step.model}
-                            {...(aliasesFor(runtime) ? { aliases: aliasesFor(runtime) } : {})}
-                            onChange={(m) => setStep(pi, si, { model: m })}
-                          />
-                        </div>
-                      </div>
-                      <Field label="Prompt" className="mt-3">
-                        <textarea
-                          className={PROMPT_FIELD}
-                          aria-label={`Phase ${pi + 1} step ${si + 1} prompt`}
-                          placeholder="Step prompt"
-                          value={step.prompt}
-                          onChange={(e) => setStep(pi, si, { prompt: e.target.value })}
-                        />
-                      </Field>
-                    </li>
-                  );
-                })}
-              </ol>
-              <Button
-                size="sm"
-                icon="plus"
-                className="mt-3"
-                onClick={() => setPhase(pi, { steps: [...phase.steps, newStep()] })}
-              >
-                Add step
-              </Button>
-            </PanelPart>
+                          <div className="mt-2 flex flex-wrap gap-3">
+                            <Field label="Name" className="min-w-[12rem] flex-[2]">
+                              <input
+                                className={FIELD}
+                                aria-label={`Phase ${pi + 1} step ${si + 1} name`}
+                                placeholder="Step name"
+                                value={step.name}
+                                onChange={(e) => setStep(pi, si, { name: e.target.value })}
+                              />
+                            </Field>
+                            <div className="min-w-[10rem] flex-1">
+                              <RuntimeSelect
+                                caption="Runtime"
+                                fieldClass={PICKER}
+                                label="Use phase runtime"
+                                ariaLabel={`Runtime (phase ${pi + 1} step ${si + 1})`}
+                                value={step.runtime}
+                                runtimes={runtimes}
+                                onChange={(r) =>
+                                  setStep(pi, si, {
+                                    runtime: r,
+                                    model: undefined,
+                                    reasoningEffort: undefined,
+                                  })
+                                }
+                              />
+                            </div>
+                            {efforts.length > 0 && (
+                              <div className="min-w-[9rem] flex-1">
+                                <ReasoningEffortSelect
+                                  key={`step-effort:${pi}:${si}:${runtime}`}
+                                  caption="Effort"
+                                  fieldClass={PICKER}
+                                  label="Use pipeline effort"
+                                  ariaLabel={`Use pipeline effort (phase ${pi + 1} step ${si + 1})`}
+                                  value={step.reasoningEffort}
+                                  efforts={efforts}
+                                  onChange={(reasoningEffort) =>
+                                    setStep(pi, si, { reasoningEffort })
+                                  }
+                                />
+                              </div>
+                            )}
+                            <div className="min-w-[10rem] flex-1">
+                              <ModelSelect
+                                key={`step:${pi}:${si}:${runtime}`}
+                                caption="Model"
+                                fieldClass={PICKER}
+                                label="Use pipeline default"
+                                ariaLabel={`Use pipeline default (phase ${pi + 1} step ${si + 1})`}
+                                value={step.model}
+                                {...(aliasesFor(runtime) ? { aliases: aliasesFor(runtime) } : {})}
+                                onChange={(m) => setStep(pi, si, { model: m })}
+                              />
+                            </div>
+                          </div>
+                          <Field label="Prompt" className="mt-3">
+                            <textarea
+                              className={PROMPT_FIELD}
+                              aria-label={`Phase ${pi + 1} step ${si + 1} prompt`}
+                              placeholder="Step prompt"
+                              value={step.prompt}
+                              onChange={(e) => setStep(pi, si, { prompt: e.target.value })}
+                            />
+                          </Field>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                  <Button
+                    size="sm"
+                    icon="plus"
+                    className="mt-3"
+                    onClick={() => setPhase(pi, { steps: [...phase.steps, newStep()] })}
+                  >
+                    Add step
+                  </Button>
+                </PanelPart>
+              </>
+            )}
 
             {form.phases.length > 1 && (
               <PanelPart
@@ -1167,95 +1277,104 @@ export function PipelineForm({
               </PanelPart>
             )}
 
-            <PanelPart
-              title="Result"
-              hint="A small structured answer other phases can route on, written by the agent rather than read from its prose."
-            >
-              <ResultEditor
-                phase={phase}
-                index={pi}
-                fieldClass={`${fieldClass} h-8`}
-                onChange={(patch) => setPhase(pi, patch)}
-              />
-            </PanelPart>
+            {/* A spawn phase declares none of these: the server refuses them. */}
+            {!phase.spawn && (
+              <>
+                <PanelPart
+                  title="Result"
+                  hint="A small structured answer other phases can route on, written by the agent rather than read from its prose."
+                >
+                  <ResultEditor
+                    phase={phase}
+                    index={pi}
+                    fieldClass={`${fieldClass} h-8`}
+                    onChange={(patch) => setPhase(pi, patch)}
+                  />
+                </PanelPart>
 
-            <PanelPart
-              title="Runtime and limits"
-              hint="Overrides for this phase. A step that runs too long, or goes quiet, is stopped."
-            >
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,12rem),1fr))] gap-4">
-                <RuntimeSelect
-                  caption="Runtime"
-                  fieldClass={PICKER}
-                  label="Use pipeline runtime"
-                  ariaLabel={`Runtime (phase ${pi + 1})`}
-                  value={phase.runtime}
-                  runtimes={runtimes}
-                  onChange={(r) => setPhase(pi, { runtime: r })}
-                />
-                <Field label="Isolation" plain>
-                  <IsolationSelect
-                    fieldClass={FIELD}
-                    ariaLabel={`Isolation (phase ${pi + 1})`}
-                    inheritLabel="Use pipeline isolation"
-                    value={phase.workspace}
-                    onChange={(scope) =>
-                      setForm((f) => ({
-                        ...f,
-                        phases: f.phases.map((p, j) => (j === pi ? withWorkspace(p, scope) : p)),
-                      }))
-                    }
-                  />
-                </Field>
-                <Field label="Timeout (s)" hint="Blank: no limit">
-                  <input
-                    type="number"
-                    min={1}
-                    max={86400}
-                    className={FIELD}
-                    aria-label={`Timeout in seconds (phase ${pi + 1})`}
-                    title="Kill a step's process if it runs longer than this. Blank = no limit."
-                    value={phase.timeoutSeconds ?? ""}
-                    onChange={(e) =>
-                      setPhase(pi, {
-                        timeoutSeconds: e.target.value === "" ? undefined : Number(e.target.value),
-                      })
-                    }
-                  />
-                </Field>
-                <Field label="Stall limit (s)" hint="Blank: off · at least 30">
-                  <input
-                    type="number"
-                    min={30}
-                    max={86400}
-                    className={FIELD}
-                    aria-label={`Stall limit in seconds (phase ${pi + 1})`}
-                    title="Kill a step if its transcript goes this many seconds without new activity, even though it is still alive. Blank = off. Minimum 30."
-                    value={phase.stallSeconds ?? ""}
-                    onChange={(e) =>
-                      setPhase(pi, {
-                        stallSeconds: e.target.value === "" ? undefined : Number(e.target.value),
-                      })
-                    }
-                  />
-                </Field>
-              </div>
-            </PanelPart>
+                <PanelPart
+                  title="Runtime and limits"
+                  hint="Overrides for this phase. A step that runs too long, or goes quiet, is stopped."
+                >
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,12rem),1fr))] gap-4">
+                    <RuntimeSelect
+                      caption="Runtime"
+                      fieldClass={PICKER}
+                      label="Use pipeline runtime"
+                      ariaLabel={`Runtime (phase ${pi + 1})`}
+                      value={phase.runtime}
+                      runtimes={runtimes}
+                      onChange={(r) => setPhase(pi, { runtime: r })}
+                    />
+                    <Field label="Isolation" plain>
+                      <IsolationSelect
+                        fieldClass={FIELD}
+                        ariaLabel={`Isolation (phase ${pi + 1})`}
+                        inheritLabel="Use pipeline isolation"
+                        value={phase.workspace}
+                        onChange={(scope) =>
+                          setForm((f) => ({
+                            ...f,
+                            phases: f.phases.map((p, j) =>
+                              j === pi ? withWorkspace(p, scope) : p,
+                            ),
+                          }))
+                        }
+                      />
+                    </Field>
+                    <Field label="Timeout (s)" hint="Blank: no limit">
+                      <input
+                        type="number"
+                        min={1}
+                        max={86400}
+                        className={FIELD}
+                        aria-label={`Timeout in seconds (phase ${pi + 1})`}
+                        title="Kill a step's process if it runs longer than this. Blank = no limit."
+                        value={phase.timeoutSeconds ?? ""}
+                        onChange={(e) =>
+                          setPhase(pi, {
+                            timeoutSeconds:
+                              e.target.value === "" ? undefined : Number(e.target.value),
+                          })
+                        }
+                      />
+                    </Field>
+                    <Field label="Stall limit (s)" hint="Blank: off · at least 30">
+                      <input
+                        type="number"
+                        min={30}
+                        max={86400}
+                        className={FIELD}
+                        aria-label={`Stall limit in seconds (phase ${pi + 1})`}
+                        title="Kill a step if its transcript goes this many seconds without new activity, even though it is still alive. Blank = off. Minimum 30."
+                        value={phase.stallSeconds ?? ""}
+                        onChange={(e) =>
+                          setPhase(pi, {
+                            stallSeconds:
+                              e.target.value === "" ? undefined : Number(e.target.value),
+                          })
+                        }
+                      />
+                    </Field>
+                  </div>
+                </PanelPart>
 
-            <PanelPart
-              title="Candidates"
-              hint="Run the step several times at once and let the phase's checks pick the winner."
-            >
-              <CandidateFields
-                phase={phase}
-                index={pi}
-                pipelineWorkspace={form.workspace}
-                runtimes={runtimes}
-                aliasesFor={aliasesFor}
-                effective={effective}
-                onChange={(patch) => setPhase(pi, patch)}
-              />
-            </PanelPart>
+                <PanelPart
+                  title="Candidates"
+                  hint="Run the step several times at once and let the phase's checks pick the winner."
+                >
+                  <CandidateFields
+                    phase={phase}
+                    index={pi}
+                    pipelineWorkspace={form.workspace}
+                    runtimes={runtimes}
+                    aliasesFor={aliasesFor}
+                    effective={effective}
+                    onChange={(patch) => setPhase(pi, patch)}
+                  />
+                </PanelPart>
+              </>
+            )}
           </div>
         )}
       </FormSection>

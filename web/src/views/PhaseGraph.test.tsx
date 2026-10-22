@@ -1,6 +1,7 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { PhasePill, StepPill } from "../ds";
+import type { SpawnTaskState } from "../types";
 import { PhaseGraph } from "./PhaseGraph";
 import { BOARD_GAP_PX, boardArrangement, FOCUS_MIN_PX, STACK_BELOW_PX } from "./useLaneLayout";
 import { attentionPhase } from "./phaseAttention";
@@ -501,5 +502,63 @@ describe("PhaseGraph: candidates", () => {
       <Graph phases={[pill("build", "working", { steps: [step("done"), step("working")] })]} />,
     );
     expect(screen.queryByTestId("candidate-summary")).toBeNull();
+  });
+});
+
+describe("PhaseGraph: spawn phases", () => {
+  const tasks = (...states: SpawnTaskState[]) =>
+    states.map((state, i) => ({ key: `t${i}`, state }));
+  const spawnPill = (list: ReturnType<typeof tasks>, over: Partial<PhasePill["spawn"]> = {}) =>
+    pill("tasks", "working", {
+      steps: [],
+      spawn: {
+        pipelineId: "child",
+        tasks: list,
+        succeeded: list.filter((t) => t.state === "succeeded").length,
+        waiting: 0,
+        halted: 0,
+        ...over,
+      },
+    });
+
+  it("draws the spawn glyph and how many tasks are done", () => {
+    const list = tasks("succeeded", "succeeded", "running", "pending", "pending");
+    render(<Graph phases={[spawnPill(list)]} />);
+    const summary = screen.getByTestId("spawn-summary");
+    expect(summary.textContent).toBe("2/5");
+    expect(summary.querySelector("svg")).not.toBeNull();
+    expect(summary.className).toContain("text-ink-faint");
+    const node = screen.getByRole("button", { name: /tasks/ });
+    expect(node.getAttribute("title")).toContain("2/5 tasks done");
+  });
+
+  it("turns violet while a child waits for you, red while a task failed", () => {
+    const { unmount } = render(
+      <Graph
+        phases={[
+          spawnPill(tasks("succeeded", "awaiting-approval", "failed"), { waiting: 1, halted: 1 }),
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("spawn-summary").className).toContain("text-await");
+    const title = screen.getByRole("button", { name: /tasks/ }).getAttribute("title");
+    expect(title).toContain("1 waiting for you");
+    expect(title).toContain("1 failed or stopped");
+    unmount();
+    render(<Graph phases={[spawnPill(tasks("failed", "blocked"), { halted: 1 })]} />);
+    expect(screen.getByTestId("spawn-summary").className).toContain("text-fail");
+  });
+
+  it("draws the glyph alone before the task list is built", () => {
+    render(<Graph phases={[spawnPill([])]} />);
+    expect(screen.getByTestId("spawn-summary").textContent).toBe("");
+    expect(screen.getByRole("button", { name: /tasks/ }).getAttribute("title")).toContain(
+      "spawns one child instance per task",
+    );
+  });
+
+  it("draws no glyph on an ordinary phase", () => {
+    render(<Graph phases={[pill("build", "working")]} />);
+    expect(screen.queryByTestId("spawn-summary")).toBeNull();
   });
 });

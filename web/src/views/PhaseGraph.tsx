@@ -1,6 +1,6 @@
 import { useLayoutEffect, useState, type HTMLAttributes } from "react";
 import type { DsStatus, PhasePill } from "../ds";
-import { Button, DURATION, STATUS, useSyncedDelay } from "../ds";
+import { Button, DURATION, Icon, STATUS, useSyncedDelay } from "../ds";
 import { fadeEdges, overflows, runwayFor } from "./graphFocus";
 import {
   LANE_GEOMETRY,
@@ -82,6 +82,15 @@ function candidateNote(c: NonNullable<PhasePill["candidates"]>): string {
   return c.selected == null ? verified : `${verified} · c${c.selected + 1} selected`;
 }
 
+/** A spawn phase in a title's words: how far its tasks got, and who is waited on. */
+function spawnNote(s: NonNullable<PhasePill["spawn"]>): string {
+  if (s.tasks.length === 0) return "spawns one child instance per task";
+  const bits = [`${s.succeeded}/${s.tasks.length} tasks done`];
+  if (s.waiting > 0) bits.push(`${s.waiting} waiting for you`);
+  if (s.halted > 0) bits.push(`${s.halted} failed or stopped`);
+  return bits.join(" · ");
+}
+
 function chipTitle(pill: PhasePill, index: number, needNames: string[]): string {
   // A skipped phase says so in words. The DS token behind it is the quiet one,
   // which is right for the colour and wrong for the word: "idle" would promise
@@ -92,6 +101,7 @@ function chipTitle(pill: PhasePill, index: number, needNames: string[]): string 
   if ((pill.attempt ?? 0) > 0) bits.push(`attempt ${pill.attempt + 1}`);
   if (pill.retryAt && pill.status === "failed") bits.push("retry queued");
   if (pill.candidates) bits.push(candidateNote(pill.candidates));
+  if (pill.spawn) bits.push(spawnNote(pill.spawn));
   // Without the "failed:" the scheduler stores it with: the line already says so.
   if (pill.reason) bits.push(reasonText(pill.reason.split("\n")[0]));
   if (pill.skipCause) bits.push(`not selected — ${pill.skipCause.source}: ${pill.skipCause.label}`);
@@ -209,6 +219,24 @@ function PhaseNode({
           className="shrink-0 whitespace-nowrap text-micro text-ink-faint"
         >
           {candidateNote(pill.candidates)}
+        </span>
+      )}
+      {/* A spawn phase: the glyph, and how many of its tasks are done. Violet
+          while a child waits for you — the parent is still running, so the
+          node's own colour cannot say it. */}
+      {pill.spawn && (
+        <span
+          data-testid="spawn-summary"
+          className={`flex shrink-0 items-center gap-0.5 whitespace-nowrap text-micro ${
+            pill.spawn.waiting > 0
+              ? "font-semibold text-await"
+              : pill.spawn.halted > 0
+                ? "text-fail"
+                : "text-ink-faint"
+          }`}
+        >
+          <Icon name="spawn" size={12} />
+          {pill.spawn.tasks.length > 0 && `${pill.spawn.succeeded}/${pill.spawn.tasks.length}`}
         </span>
       )}
       {/* Step progress without step tiles: one dot per step, or a count once

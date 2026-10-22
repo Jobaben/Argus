@@ -11,8 +11,19 @@ import {
   isMarkdown,
   labelClass,
   type DsStatus,
+  type OverviewRow,
 } from "../ds";
 import { Markdown } from "../ds/Markdown";
+import { useConfirm } from "../ds/useConfirm";
+import { SpawnTaskList } from "./SpawnBoard";
+import {
+  childPipelineName,
+  childSelection,
+  countsLine,
+  keyList,
+  reviewTaskRows,
+  taskCounts,
+} from "./spawnTasks";
 import { useArtifactContent, useGateReview } from "../useGateReview";
 import { splitOutcome } from "./outcome";
 import { reasonText, tellOnce } from "./failureReason";
@@ -27,6 +38,7 @@ import type {
   ChangeProposalWarning,
   ChangeRuleState,
   EvidenceSource,
+  GateActionRefusal,
   KnowledgeDeltaPreview,
   KnowledgeDeltaWarning,
   PhaseArtifact,
@@ -219,7 +231,16 @@ function payloadParts(value: unknown): PayloadParts {
  * in the waiting colour, a failure in the failing one, and the reason the
  * agent gave sits inside that panel rather than below a heading of its own.
  */
-function Lead({ status, reason }: { status: PhaseReview["status"]; reason: string | null }) {
+function Lead({
+  status,
+  reason,
+  spawn = false,
+}: {
+  status: PhaseReview["status"];
+  reason: string | null;
+  /** A spawn phase: waiting means its `children` pause, where tasks did not succeed. */
+  spawn?: boolean;
+}) {
   const gated = status === "awaiting-approval";
   // Spelled out rather than "not waiting, so failed": a state this drawer does
   // not know about must not be announced as a failure.
@@ -242,13 +263,19 @@ function Lead({ status, reason }: { status: PhaseReview["status"]; reason: strin
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
             <h3 className="text-title font-semibold text-ink">
-              {gated ? "Waiting on you" : "What went wrong"}
+              {gated
+                ? spawn
+                  ? "Some tasks did not succeed"
+                  : "Waiting on you"
+                : "What went wrong"}
             </h3>
             <StatusPill status={pill} />
           </div>
           {gated && (
             <p className="mt-0.5 text-small text-ink-dim">
-              The pipeline is paused here until you decide.
+              {spawn
+                ? "Nothing more starts until you decide."
+                : "The pipeline is paused here until you decide."}
             </p>
           )}
           {reason && (
@@ -1491,6 +1518,21 @@ function ArtifactViewer({
 interface GateActions {
   approve: (instanceId: string, opts?: GateActionOptions) => Promise<unknown>;
   revise: (instanceId: string, note?: string, opts?: GateActionOptions) => Promise<unknown>;
+  /** Stop the instance. Offered only at a spawn phase's `children` pause, and
+   *  at a child's gate its parent no longer waits for (`parent-decided`). */
+  abort?: (instanceId: string) => Promise<unknown>;
+}
+
+/** What the refusals a client acts on mean here, ahead of the server's own words. */
+const REFUSAL: Record<GateActionRefusal, string> = {
+  "parent-decided": "Its parent no longer waits for this task.",
+  "answers-not-accepted": "This pause takes no answers.",
+  "children-running": "A task you re-ran is running again.",
+};
+
+function refusalOf(e: unknown): GateActionRefusal | null {
+  const code = (e as { code?: unknown } | null)?.code;
+  return typeof code === "string" && code in REFUSAL ? (code as GateActionRefusal) : null;
 }
 
 export function GateDrawer({
@@ -1498,9 +1540,16 @@ export function GateDrawer({
   onClose,
   approve,
   revise,
+  abort,
+  onOpen,
+  board = [],
 }: GateActions & {
   selection: GateSelection | null;
   onClose: () => void;
+  /** Open another gate in this drawer: a task's child, from a spawn phase's review. */
+  onOpen?: (selection: GateSelection) => void;
+  /** The board's rows, to name a spawn phase's child pipeline and find its children. */
+  board?: OverviewRow[];
 }) {
   const { review, loading, error } = useGateReview(
     selection?.instanceId ?? null,
@@ -1528,6 +1577,9 @@ export function GateDrawer({
       onClose={onClose}
       approve={approve}
       revise={revise}
+      abort={abort}
+      onOpen={onOpen}
+      board={board}
     />
   );
 }
@@ -1565,19 +1617,30 @@ function GatePanel({
   onClose,
   approve,
   revise,
+  abort,
+  onOpen,
+  board,
 }: GateActions & {
   selection: GateSelection;
   review: PhaseReview | null;
   loading: boolean;
   error: string | null;
   onClose: () => void;
+  onOpen?: (selection: GateSelection) => void;
+  board: OverviewRow[];
 }) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  // Which refusal the last action met, when it was one a client acts on.
+  const [refusal, setRefusal] = useState<GateActionRefusal | null>(null);
+  // A decision here was refused because the parent moved on. Kept past the
+  // next action, so a Stop that fails stays on offer to try again.
+  const [parentDecided, setParentDecided] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
+  const confirm = useConfirm();
   // The same gate on a new attempt (it was revised and stopped here again)
   // starts clean. Reset during render, so no frame shows the last attempt's
   // note or its "Revision sent" line under the new attempt's files.
@@ -1590,6 +1653,8 @@ function GatePanel({
       setNoteOpen(false);
       setNote("");
       setErr(null);
+      setRefusal(null);
+      setParentDecided(false);
       setSent(null);
     }
   }
@@ -1618,10 +1683,14 @@ function GatePanel({
   const run = (action: () => Promise<unknown>, sentLabel: string) => {
     setBusy(true);
     setErr(null);
+    setRefusal(null);
     void action()
       .then(() => setSent(sentLabel))
       .catch((e: unknown) => {
+        const code = refusalOf(e);
         setErr(e instanceof Error ? e.message : String(e));
+        setRefusal(code);
+        if (code === "parent-decided") setParentDecided(true);
         setBusy(false);
       });
   };
@@ -1629,16 +1698,32 @@ function GatePanel({
   const gated = review?.status === "awaiting-approval";
   const failed = review?.status === "failed";
   const retry = failed && (review?.payload as { kind?: string } | null)?.kind === "restarted";
-  const reviseLabel = retry ? "Retry" : "Revise";
-  const noteRequired = gated;
+  const spawn = review?.children;
+  // A spawn phase is never gated, so waiting with children means its
+  // `children` pause: a task did not succeed, and you decide what follows.
+  const childrenPause = gated && spawn !== undefined;
+  const reviseLabel = childrenPause ? "Re-run the rest" : retry ? "Retry" : "Revise";
+  // Re-running the tasks that did not succeed needs no note: the usual reason
+  // is a transient failure. One given reaches every re-run child.
+  const noteRequired = gated && !childrenPause;
+  // Stop is offered where stopping is one of the answers: at a `children`
+  // pause, and at the gate of a child its parent has stopped waiting for. A
+  // failed child has already ended, so there is nothing left to stop.
+  const stoppable = abort && (childrenPause || (parentDecided && gated)) ? abort : null;
   const target: GateActionOptions = { phaseId: selection.phaseId };
   const canSend = !busy && !(noteRequired && note.trim() === "");
   const send = () =>
     run(
       () => revise(selection.instanceId, note.trim() || undefined, target),
-      retry ? "Retry sent — phase restarting" : "Revision sent — phase restarting",
+      childrenPause
+        ? "Re-run sent — tasks restarting"
+        : retry
+          ? "Retry sent — phase restarting"
+          : "Revision sent — phase restarting",
     );
-  const parts = payloadParts(review?.payload ?? null);
+  // At a `children` pause the payload is the children summary, which the Tasks
+  // block tells better; a failed spawn phase keeps its reason.
+  const parts = payloadParts(childrenPause ? null : (review?.payload ?? null));
   const checks = review?.verification?.checks ?? [];
 
   return (
@@ -1655,13 +1740,15 @@ function GatePanel({
             {noteOpen && (
               <div className="flex flex-col gap-2 border-b border-line pb-3">
                 <label htmlFor={noteId} className={labelClass}>
-                  Revision note
+                  {childrenPause ? "Note for the re-run tasks" : "Revision note"}
                   {!noteRequired && <span className="font-normal text-ink-faint"> (optional)</span>}
                 </label>
                 <p className="text-caption text-ink-faint">
-                  {retry
-                    ? "Runs the phase again. A note is optional."
-                    : "Sends it back to the agent with your note; this attempt's files are discarded and the phase runs again."}
+                  {childrenPause
+                    ? "Re-runs every task that did not succeed: a failed child runs its failed phase again with your note, and an aborted or unstarted task gets a new child. Tasks that succeeded are kept."
+                    : retry
+                      ? "Runs the phase again. A note is optional."
+                      : "Sends it back to the agent with your note; this attempt's files are discarded and the phase runs again."}
                 </p>
                 <textarea
                   id={noteId}
@@ -1708,17 +1795,22 @@ function GatePanel({
                   disabled={busy}
                   className="flex-1 sm:flex-none"
                   onClick={() =>
-                    run(() => approve(selection.instanceId, target), "Approved — pipeline resuming")
+                    run(
+                      () => approve(selection.instanceId, target),
+                      childrenPause
+                        ? "Accepted — continuing without the rest"
+                        : "Approved — pipeline resuming",
+                    )
                   }
                 >
-                  Approve
+                  {childrenPause ? "Accept the rest" : "Approve"}
                 </Button>
               )}
               <Button
                 // With no Approve on offer, sending it back is the next step.
                 variant={!review.canApprove && !noteOpen ? "primary" : "secondary"}
                 size="lg"
-                icon={retry ? "retry" : "edit"}
+                icon={retry || childrenPause ? "retry" : "edit"}
                 disabled={busy}
                 aria-expanded={noteOpen}
                 className="flex-1 aria-expanded:border-ink-faint/45 aria-expanded:bg-surface-3 sm:flex-none"
@@ -1726,10 +1818,37 @@ function GatePanel({
               >
                 {reviseLabel}
               </Button>
+              {stoppable && (
+                <Button
+                  variant="danger"
+                  size="lg"
+                  icon="stop"
+                  disabled={busy}
+                  aria-expanded={confirm.armed === "stop"}
+                  className="flex-1 sm:flex-none"
+                  onClick={confirm.toggle("stop")}
+                >
+                  Stop
+                </Button>
+              )}
               <span className="ml-auto flex min-w-0 items-center">
                 <ChecksSummary checks={checks} />
               </span>
             </div>
+            {stoppable &&
+              confirm.armed === "stop" &&
+              confirm.question(
+                {
+                  title: `Stop this instance of “${review.pipelineName}”?`,
+                  detail: childrenPause
+                    ? "Nothing more starts and no later phase runs. Tasks that finished stay as they are."
+                    : "Its parent no longer waits for it, so nothing it does from here counts.",
+                  confirm: "Stop instance",
+                  cancel: "Keep waiting",
+                  icon: "stop",
+                },
+                () => run(() => stoppable(selection.instanceId), "Stopped"),
+              )}
             {sent && !err ? (
               <p role="status" className="flex items-center gap-2 text-small font-semibold text-ok">
                 <Icon name="check-circle" size={16} />
@@ -1738,16 +1857,31 @@ function GatePanel({
             ) : (
               review.canApprove &&
               !noteOpen &&
-              !err && (
+              !err &&
+              (childrenPause ? (
+                // What accepting drops, said beside the button rather than
+                // asked about: approving states what it continues with too.
+                <p data-testid="spawn-dropped" className="text-caption text-ink-faint">
+                  {`Accepting continues without ${keyList(spawn.notSucceeded)}.`}
+                </p>
+              ) : (
                 <p className="text-caption text-ink-faint">
                   Approve continues the pipeline with exactly what is shown here.
                 </p>
-              )
+              ))
             )}
             {err && (
               <p role="alert" className="flex items-start gap-2 text-small text-fail">
                 <Icon name="alert" size={16} className="mt-px" />
-                <span className="min-w-0 break-words">{err}</span>
+                <span className="min-w-0 break-words">
+                  {refusal && (
+                    <span className="font-semibold">
+                      {`${REFUSAL[refusal]} `}
+                      {refusal === "parent-decided" && failed && "Nothing is left to decide here. "}
+                    </span>
+                  )}
+                  {err}
+                </span>
               </p>
             )}
           </div>
@@ -1776,15 +1910,38 @@ function GatePanel({
       ) : review ? (
         <div className="flex flex-col gap-8">
           <div className="flex flex-col gap-3">
-            <Lead status={review.status} reason={parts.reason} />
+            <Lead status={review.status} reason={parts.reason} spawn={spawn !== undefined} />
             {parts.notes.map((n, i) => (
               <ClosingNote key={i} note={n} />
             ))}
-            {review.payload == null && (
+            {/* A spawn phase runs no agent, so there is no note to miss. */}
+            {review.payload == null && !spawn && (
               <p className="text-small text-ink-faint">The agent left no closing note.</p>
             )}
             <PayloadDetails parts={parts} />
           </div>
+
+          {spawn && (
+            <Block title="Tasks" aside={countsLine(taskCounts(spawn.tasks))}>
+              <SpawnTaskList
+                rows={reviewTaskRows(spawn, board, childrenPause)}
+                label={`Tasks of phase ${review.phaseName}`}
+                onReview={
+                  onOpen &&
+                  ((row, originY) =>
+                    row.gate &&
+                    onOpen(
+                      childSelection(
+                        row.gate,
+                        row.key,
+                        childPipelineName(spawn.pipelineId, board),
+                        originY,
+                      ),
+                    ))
+                }
+              />
+            </Block>
+          )}
 
           {review.verification && (
             <Block title="Checks" aside={checksAside(review.verification.checks)}>
@@ -1846,38 +2003,40 @@ function GatePanel({
             </Block>
           )}
 
-          <Block
-            title="Artifacts"
-            aside={artifacts.length > 0 ? plural(artifacts.length, "file") : undefined}
-          >
-            {artifacts.length === 0 ? (
-              <p data-testid="gate-no-artifacts" className="text-small text-ink-faint">
-                This phase left no files.
-                {review.canApprove ? " Approving continues with the summary above." : ""}
-              </p>
-            ) : (
-              <Fragment>
-                {review.truncated && (
-                  <p className="text-caption text-ink-faint">
-                    Showing the first {artifacts.length} files; more exist on disk.
-                  </p>
-                )}
-                <ArtifactList
-                  artifacts={artifacts}
-                  selected={shownPath}
-                  onSelect={setSelectedPath}
-                />
-                {shownPath && (
-                  <ArtifactViewer
-                    key={`${shownPath}@${review.attempt}`}
-                    selection={selection}
-                    path={shownPath}
-                    single={artifacts.length === 1}
+          {!(spawn && artifacts.length === 0) && (
+            <Block
+              title="Artifacts"
+              aside={artifacts.length > 0 ? plural(artifacts.length, "file") : undefined}
+            >
+              {artifacts.length === 0 ? (
+                <p data-testid="gate-no-artifacts" className="text-small text-ink-faint">
+                  This phase left no files.
+                  {review.canApprove ? " Approving continues with the summary above." : ""}
+                </p>
+              ) : (
+                <Fragment>
+                  {review.truncated && (
+                    <p className="text-caption text-ink-faint">
+                      Showing the first {artifacts.length} files; more exist on disk.
+                    </p>
+                  )}
+                  <ArtifactList
+                    artifacts={artifacts}
+                    selected={shownPath}
+                    onSelect={setSelectedPath}
                   />
-                )}
-              </Fragment>
-            )}
-          </Block>
+                  {shownPath && (
+                    <ArtifactViewer
+                      key={`${shownPath}@${review.attempt}`}
+                      selection={selection}
+                      path={shownPath}
+                      single={artifacts.length === 1}
+                    />
+                  )}
+                </Fragment>
+              )}
+            </Block>
+          )}
         </div>
       ) : null}
     </Drawer>
