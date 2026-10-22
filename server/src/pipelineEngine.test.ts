@@ -1759,6 +1759,12 @@ test("approve and revise act on the named phase, and refuse one that is not paus
 // received wins over reconcile, and a sibling's gate does not drop a signal.
 
 const TIMED_OUT = Symbol("timed out");
+/** How long a call may take before it counts as waiting behind something it
+ *  must not wait for. A call that is blocked never returns before the thing it
+ *  waits on is released, so this bound only tells "answered" from "blocked";
+ *  it is generous because a loaded Windows CI runner can take seconds to
+ *  answer a call that is not blocked at all. */
+const BLOCKED_MS = 15_000;
 function within<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
   return Promise.race([
     p,
@@ -1859,7 +1865,7 @@ test("a completion signal is answered while a later wave waits for a slot", asyn
   // answered now: its process holds its slot until the answer arrives.
   const answered = await within(
     e.onSignal(inst!.id, completedSignal(inst!.id, "s1", rec.calls[1].runId)),
-    1000,
+    BLOCKED_MS,
   );
   rec.dones[1].resolve({ code: 0 });
   await waitFor(() => rec.calls.length >= 4);
@@ -1947,7 +1953,7 @@ test("a run waiting for a slot does not block reconcile and is not stubbed as ne
   });
   const [waiting] = await instances.readInstances({ pipelineId: "p1" });
 
-  const ticked = await within(e.reconcile(), 1000);
+  const ticked = await within(e.reconcile(), BLOCKED_MS);
   const mid = await instances.readInstance(waiting.id);
   const queuedRunId = mid.phases[0].steps[0].runId;
   const recordMid = await runsMod.readRun(queuedRunId);
@@ -2011,7 +2017,7 @@ test("a signal received while reconcile waits for the lock wins over healing", a
   });
   const reconciling = e.reconcile();
   assert.notEqual(
-    await within(queued.promise, 2000),
+    await within(queued.promise, BLOCKED_MS),
     TIMED_OUT,
     "reconcile queued on the instance lock",
   );
