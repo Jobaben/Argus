@@ -115,6 +115,12 @@ empty state back.
   (the result editor shows "schema set via the API" and keeps it). The rail
   marks a spawn phase **Spawn**.
 
+**Agent skills:** while the `argus-pipeline` or `argus-tail` skill is
+missing from, or behind this build in, the Claude Code or Codex home on this
+machine, an **Agent skills** strip above the list says which. **Install
+skills** (signed in) installs or updates them, saving any edited copy first;
+see [`argus skills`](terminal.md#argus-skills). It never runs on its own.
+
 **What you can do (signed in)** — from the card's footer: the run controls
 first, then **Analyze** and **Edit**, with **Disable**/**Enable** and **Delete**
 at the far end. An action the server refuses says why on its own line under

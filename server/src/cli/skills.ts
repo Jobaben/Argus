@@ -18,6 +18,7 @@
 import { cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import type { AgentSkillsResponse } from "@argus/contracts";
 import { RUNTIMES } from "../runtimes/index.js";
 import { probeCommand } from "../setup/prereqs.js";
 import { VERSION } from "../version.js";
@@ -283,6 +284,23 @@ export async function installSkills(
     }
   }
   return results;
+}
+
+/**
+ * For the dashboard: every bundled skill in each home an install would write
+ * to — CLIs on PATH, plus homes that already hold one — so "up to date" is
+ * something one press of Install can make true, never a home it would skip.
+ */
+export async function agentSkills(
+  probe: (runtime: SkillRuntime) => boolean,
+  root = argusRoot(),
+): Promise<AgentSkillsResponse> {
+  const all = await skillStatuses(BUNDLED_SKILLS, root);
+  const targets = resolveSkillTargets("auto", probe, (rt) =>
+    all.some((s) => s.runtime === rt && s.state !== "missing"),
+  );
+  const skills = all.filter((s) => targets.includes(s.runtime));
+  return { skills, upToDate: skills.every((s) => s.state === "current") };
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────────

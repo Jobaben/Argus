@@ -1,6 +1,6 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createApp } from "./app.js";
@@ -11,6 +11,7 @@ import { createUserStore } from "./userStore.js";
 import { writeInstance } from "./sources/instances.js";
 import type { PipelineDefinition, PipelineInstance } from "./sources/pipelineTypes.js";
 import type { AnalysisRunner } from "./sources/analysis.js";
+import type { AgentSkillsInstallResponse, AgentSkillsResponse } from "@argus/contracts";
 
 let home: string;
 beforeEach(() => {
@@ -374,6 +375,7 @@ test("pipeline mutations are 401 before an admin account exists", async () => {
     ["/api/pipelines/p1/start", "POST"],
     ["/api/pipelines/p1/hook-token/rotate", "POST"],
     ["/api/pipelines/validate", "POST"],
+    ["/api/skills/install", "POST"],
     ["/api/instances/i1/approve", "POST"],
     ["/api/instances/i1/revise", "POST"],
     ["/api/instances/i1/abort", "POST"],
@@ -1804,6 +1806,29 @@ test("editing what a pipeline executes saves freely once nothing is live", async
     }),
   });
   assert.equal(res.status, 200);
+});
+
+// ── Agent skills ────────────────────────────────────────────────────────────
+
+test("GET /api/skills reports, and POST /api/skills/install installs only when asked", async () => {
+  const app = makeApp();
+  const before = await app.request("/api/skills", { headers: loopback });
+  assert.equal(before.status, 200);
+  const status = (await before.json()) as AgentSkillsResponse;
+  assert.equal(status.upToDate, false, "a fresh home has none of the skills");
+  assert.ok(status.skills.length > 0);
+  assert.ok(status.skills.every((s) => s.state === "missing"));
+  assert.ok(status.skills.some((s) => s.skill === "argus-pipeline"));
+  // Reading wrote nothing.
+  assert.equal(existsSync(path.join(home, "skills")), false);
+
+  const res = await app.request("/api/skills/install", { method: "POST", headers: sameOrigin });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as AgentSkillsInstallResponse;
+  assert.equal(body.ok, true);
+  assert.equal(body.upToDate, true);
+  assert.ok(body.results.some((r) => r.skill === "argus-pipeline" && r.action === "installed"));
+  assert.equal(existsSync(path.join(home, "skills", "argus-pipeline", "SKILL.md")), true);
 });
 
 // ── Validating without saving ───────────────────────────────────────────────

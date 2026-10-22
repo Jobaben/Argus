@@ -216,6 +216,14 @@ the new release. The server says at startup when an installed skill is
 older than the build it runs, and changes nothing itself. A new agent
 session picks up the installed skill.
 
+**In the dashboard.** The Pipelines page shows an **Agent skills** strip
+while a skill is missing or does not match this build, in the homes an
+install would write to (CLIs on PATH, plus homes that already have one). A
+signed-in account presses **Install skills**, which does exactly what
+`argus skills install` does, backups included, and says where any replaced
+copy was saved; signed out, the strip names the command instead. Nothing
+installs until someone presses it.
+
 Inside the Argus checkout both CLIs find the skills without installing:
 Claude Code at `.claude/skills/`, Codex at `.agents/skills/` — plain copies
 rather than symlinks, so a Windows checkout without symlink support has them

@@ -35,6 +35,7 @@ import { reasonText } from "./failureReason";
 import { TuningDrawer } from "./TuningDrawer";
 import { toInput } from "./tuningApply";
 import { ReliabilityCard } from "./ReliabilityCard";
+import AgentSkillsStrip from "./AgentSkillsStrip";
 import { InfoTip } from "../ds/InfoTip";
 import type { Question } from "../ds/ConfirmPanel";
 import { useConfirm } from "../ds/useConfirm";
@@ -880,6 +881,8 @@ export default function Pipelines() {
           />
         </div>
       )}
+
+      <AgentSkillsStrip isAdmin={isAdmin} />
 
       {mode.kind === "new" && (
         <div className="mb-6">

@@ -188,6 +188,15 @@ export type {
 } from "./catalog.js";
 
 export type {
+  AgentSkillInstallResult,
+  AgentSkillRuntime,
+  AgentSkillState,
+  AgentSkillStatus,
+  AgentSkillsInstallResponse,
+  AgentSkillsResponse,
+} from "./skills.js";
+
+export type {
   AuthStatus,
   BuildInfo,
   HealthResponse,

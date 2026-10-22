@@ -38,6 +38,10 @@ claude|codex|all` — and replaces an older copy whole. A copy that was
   `.argus-skill.json` manifest written beside each installed skill, and the
   server warns at startup when an installed skill is older than the build it
   runs. `argus tail --install-skill` now goes through the same installer.
+  The Pipelines page shows an **Agent skills** strip while a skill is
+  missing or behind, with an **Install skills** button for a signed-in
+  account (`GET /api/skills`, admin `POST /api/skills/install`); nothing is
+  installed until someone presses it.
 - **`argus pipeline`: author pipelines from a terminal.** `list`, `show`
   (the stored definition as JSON, without its webhook token), `runtimes`,
   `validate` (every check a save makes, without saving), `create`,
