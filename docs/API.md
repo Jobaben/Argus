@@ -1590,8 +1590,8 @@ instance reads it is **not** admin-gated.
       "instanceId": "…",
       "pipelineId": "…",
       "decision": "approve", // approve | revise | abort
-      "mechanism": "operator", // operator | verdict-auto-approve | unspecified
-      "channel": "http", // http | omnibar | verdict-watcher | in-process
+      "mechanism": "operator", // operator | verdict-auto-approve | approval-condition | unspecified
+      "channel": "http", // http | omnibar | verdict-watcher | approval-poll | in-process
       "principal": { "kind": "session", "username": "ana", "role": "admin" },
       "phases": [
         { "phaseId": "plan", "attempt": 0, "status": "awaiting-approval", "runIds": ["…"] },
@@ -1607,13 +1607,14 @@ instance reads it is **not** admin-gated.
 ```
 
 `principal` is `{ kind: "session", username, role }`,
-`{ kind: "system", component: "verdict-watcher" }` or `{ kind: "unknown" }`. An
-automated approval additionally carries `verdicts`: the exact basis it rested
+`{ kind: "system", component: "verdict-watcher" }`,
+`{ kind: "system", component: "approval-poll" }` or `{ kind: "unknown" }`. A
+Verdict auto-approval additionally carries `verdicts`: the exact basis it rested
 on, one entry per verdict — `runId`, `stepName`, `verdictId`, `at`, `score`,
 `bar`, `runtime`, `requestedModel`, `reportedModel`, `promptVersion` and
 `rubricDigest`.
 
-When the phase's rubric declares a trajectory, the automated approval also
+When the phase's rubric declares a trajectory, a Verdict auto-approval also
 carries `trajectoryVerdicts`: the trajectory judgment each relevant run was
 approved on, one entry per run, apart from `verdicts` — `runId`, `stepName`,
 `verdictId`, `at`, `score`, `bar` (both `null` when the rubric declares only a
@@ -1621,6 +1622,12 @@ check), `held` (always empty: an approval is never recorded over a held signal),
 `signalsVersion`, `runtime`, `requestedModel`, `reportedModel`, `promptVersion`
 and `rubricDigest` (the trajectory digest). The field is absent when the rubric
 declares no trajectory. See [Auto-approving gates](#auto-approving-gates).
+
+An approval by an [approval condition](#approval-conditions)
+(`mechanism: "approval-condition"`) carries `condition` instead: what the poll
+observed — `{ kind: "command", label, exitCode, output, startedAt, durationMs }`,
+where `exitCode` is always `0` and `output` is at most the last 500 characters
+of the command's combined stdout and stderr.
 
 `effect` has four values:
 
@@ -1641,6 +1648,79 @@ Records live in `~/.claude/argus/gate-decisions.jsonl`. It is append-only; each
 record is written and fsynced **before** the transition it describes, and it is
 never pruned. The order every decision follows is under
 [Execution semantics](#execution-semantics).
+
+### Approval conditions
+
+A gated phase may declare `approveWhen`, a command Argus polls while the phase
+waits at its gate (HARNESS.md
+[§ Approval conditions](HARNESS.md#approval-conditions)):
+
+```jsonc
+"approveWhen": {
+  "kind": "command",
+  "run": "node /home/you/argus-checks/pr-merged.mjs",
+  "label": "pull request merged", // optional; default "command: " and the first 71 characters of run
+  "everySeconds": 300,
+  "timeoutSeconds": 60, // optional, default 60
+  "failOnExit": 3, // optional
+}
+```
+
+Saving a pipeline (`POST`, `PUT` or `PATCH`) validates it, and every error is a
+`400` (`phase <i>` is the phase's index):
+
+- `phase <i>: approveWhen must be an object`;
+- `phase <i>: approveWhen has unknown key "<key>"`;
+- `phase <i>: approveWhen.kind must be command`;
+- `phase <i>: approveWhen.run must be a non-empty string up to 4000 chars`;
+- `phase <i>: approveWhen.cwd must be a non-empty string`;
+- `phase <i>: approveWhen.label must be a non-empty string up to 120 chars`;
+- `phase <i>: approveWhen.everySeconds must be an integer 30-86400` (required);
+- `phase <i>: approveWhen.timeoutSeconds must be an integer 1-600`;
+- `phase <i>: approveWhen.failOnExit must be an integer 1-255`;
+- `phase <i>: approveWhen only means something on a gated phase`;
+- on a phase that commits knowledge by configuration (the reasons listed under
+  [Declaring a rubric](#declaring-a-rubric)):
+
+  ```
+  phase <i> ("<id>"): approveWhen cannot open a gate that commits knowledge (<reasons>). A person must approve this gate. Remove approveWhen from this phase.
+  ```
+
+Defaults are never stored: the definition reads back exactly as it was sent.
+Editing `approveWhen` on a pipeline with live instances is the usual
+`409 instances-running` without `?force=1`, and an instance keeps polling the
+condition its own definition snapshot declares.
+
+While the phase waits at a `gate` pause, the scheduler tick runs the command in
+the phase's worktree (its `cwd` without one), under the phase's environment
+policy and with the inputs a command check gets, the trigger payload file
+included. At most one poll per phase attempt runs at a time, no sooner than
+`everySeconds` after the previous one started.
+
+- **Exit 0** approves the gate, recorded as a [gate decision](#gate-decisions)
+  with mechanism `approval-condition`, channel `approval-poll` and its
+  `condition` basis, and the next phases start.
+- **An exit equal to `failOnExit`** fails the phase with
+  `failureClass: "approval-condition"` and a `reason` of the form
+  `approval condition "<label>" exited <code>: <last line printed>`. It is never
+  retried, and no gate decision is recorded; a person can revise it.
+- **Anything else** — another exit code, a timeout, a kill, a command that could
+  not start — keeps the gate waiting.
+
+The command runs in the tree the phase's agent has just edited, so keep the
+script, and every program it starts, outside that tree, and name the script by
+absolute path (on Windows the interpreter too): an agent that can edit the
+script can open its own gate (HARNESS.md
+[§ Approval conditions](HARNESS.md#approval-conditions)).
+
+A person's approve, revise and abort are unaffected and may come first. The
+engine decides a poll's result again under the instance lock, and a result for a
+phase that has moved since is refused. There is no route for it: a refusal is
+logged and written to the journal (`phase.approval-condition`), never returned
+to anyone. A gate whose attempt staged knowledge, a `needs-input` pause, a pause
+of unknown cause and an instance whose pipeline was deleted are not polled.
+`approveWhen` may sit beside `autoApprove`; whichever qualifies first opens the
+gate.
 
 ### Decision experiments (H2)
 
@@ -1684,8 +1764,9 @@ read.
   - the statement that agreement with operator behaviour is not correctness;
   - the definitions and configs;
   - gate exclusions;
-  - a census and pending counts per population (`manual`,
-    `auto-approve-declared`);
+  - a census and pending counts per population (`manual`, and
+    `auto-approve-declared`: gates whose phase declares `autoApprove` or
+    `approveWhen`);
   - deterministic and Verdict baseline rows — the Verdict baseline is
     `auto-approval-qualification`, with one row set per version recorded
     (v1, or v2 which adds the trajectory requirement, with signals from a complete
@@ -1846,6 +1927,7 @@ flags, and a complete worked pipeline: [docs/HARNESS.md](HARNESS.md).
 | `claudeConfigDir`  | pipeline              | string                                                                                                       | The Claude config folder every Claude Code step loads instead of the operator's `~/.claude` (`CLAUDE_CONFIG_DIR`); other runtimes record that it does not apply. An absolute path to an existing directory that a permission rule can name (no comma or newline, not a UNC share), stored resolved. Refused when it is or contains the operator's Claude home, when it contains Argus's work root, when a phase `cwd` or an `additionalDirectories` entry is inside it, and when any level sets `capabilities.env.set.CLAUDE_CONFIG_DIR`. `null` in a `PATCH` clears it. See HARNESS.md §3b.                                                                                                                                                                                                                      |
 | `timeoutSeconds`   | phase, step           | integer                                                                                                      | 1–86400. A step's own value overrides its phase's; absent on both = no limit.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `checks`           | phase                 | `PhaseCheck[]`                                                                                               | Up to 50 entries. Run once every step of the phase has reported success; a failing check fails the phase under the `verification` class.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `approveWhen`      | phase                 | `ApprovalCondition`                                                                                          | Gated phases only; refused on a phase that commits knowledge. `kind: "command"`; `run` 1–4000 chars; `cwd?`; `label?` ≤120 chars (default `command: ` and the first 71 characters of `run`); `everySeconds` 30–86400; `timeoutSeconds?` 1–600 (default 60); `failOnExit?` 1–255. See [Approval conditions](#approval-conditions).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `ruleVerification` | phase                 | `{ kinds?: ClaimKind[]; holds?: "agent-evidence" \| "deterministic-check"; note?: string }`                  | Turns the phase into a **business-rule verification phase** (KNOWLEDGE-LEDGER.md §15). The rules it answers for are exactly the ones its `knowledgeContext` supplied — there is no second selection mechanism. `kinds` defaults to `["business-rule"]`; `holds` defaults to `"agent-evidence"` and `"deterministic-check"` additionally requires a `holds` outcome to cite a check of this phase that passed. Its steps get the verification instructions and a required `ARGUS_RULE_VERIFICATION_FILE` channel; every supplied rule must receive exactly one outcome or the step fails under `rule-verification`.                                                                                                                                                                                                |
 | `knowledgeDelta`   | phase                 | `"optional" \| "required"`                                                                                   | Default `"optional"`. `"required"` makes the KnowledgeDelta channel (`ARGUS_KNOWLEDGE_DELTA_FILE`) a launch precondition: a runtime that cannot make it writable is refused under strict enforcement. Emitting a delta stays optional either way. See HARNESS.md §3a.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `knowledgeContext` | phase, step           | `{ claims?: Selector[]; fromPhases?: PhaseProducedSelector[] }`                                              | At least one of the two. `claims`: 1–64 selectors, each `"ID"` (active revision), `"ID:vN"` (exact) or `{ id, revision: N \| "active" }`; normalized to the object form, each claim id at most once. `fromPhases`: 1–8 entries, each `"phaseId"` or `{ phaseId, kinds?: ClaimKind[] }`, resolving to the claims that phase of _this instance_ committed through its accepted KnowledgeDelta; the phase must exist and be a transitive `needs` dependency (checked at save). `claims` is resolved first and wins on a claim-id collision; the total is capped at 64. A step's spec replaces its phase's. Resolution happens at launch, and an unknown claim, an unresolvable revision or a `fromPhases` phase that is not `succeeded`/`skipped` is a `configuration` failure. See KNOWLEDGE-LEDGER.md §13, §14.10. |
@@ -1947,9 +2029,12 @@ A failed phase's `payload` (free-form otherwise) carries a `failureClass` —
 how the failure was classed for the retry policy. It is one of `"spawn"`,
 `"exit-code"`, `"signal"`, `"timeout"`, `"verification"`, `"knowledge-delta"`,
 `"knowledge-context-integrity"`, `"rule-verification"`, `"change-proposal"`,
-`"change-context-integrity"`, `"acceptance-verification"`, `"unverified"` or
-`"configuration"`. `"configuration"` is never retried; every other class is
-retried only when named in the phase's `retry.retryOn`, whose default is
+`"change-context-integrity"`, `"acceptance-verification"`, `"unverified"`,
+`"configuration"` or `"approval-condition"`. `"configuration"` and
+`"approval-condition"` (a gate's `approveWhen` command exited with its
+`failOnExit` code — see [Approval conditions](#approval-conditions)) are never
+retried, and `retryOn` cannot name them; every other class is retried only when
+named in the phase's `retry.retryOn`, whose default is
 `["spawn", "exit-code", "unverified"]`. `"unverified"` is a completion Argus
 could not accept on the agent's own word (no `ARGUS_OUTCOME` marker under a
 `required` completion policy, conflicting markers, or a stop-hook reading that
@@ -2181,7 +2266,14 @@ fail. `404` when the id is invalid or neither the instance nor a log exists.
       "phaseId": "repair",
       "detail": "not selected by an upstream route"
     },
-    { "at": "…", "kind": "route.failure", "phaseId": "evaluate", "detail": "…" }
+    { "at": "…", "kind": "route.failure", "phaseId": "evaluate", "detail": "…" },
+    {
+      "at": "…",
+      "kind": "phase.approval-condition",
+      "phaseId": "review",
+      "attempt": 0,
+      "detail": "pull request merged: waiting: exit 1"
+    }
   ]
 }
 ```
@@ -2205,7 +2297,16 @@ whose process was still alive after a restart and was delivered again;
 `step.orphan-stopped` marks a still-alive run whose step was already decided,
 stopped on recovery (HARNESS §18); `phase.verifying` /
 `phase.verified` bracket Argus's own checks running over a phase's work, once
-every step is in.
+every step is in; `phase.approval-condition` marks a new result of a gate's
+[approval condition](#approval-conditions), its detail starting with the
+condition's label and a colon (`<label>: `): the first wait (`waiting: exit 1`,
+`waiting: timed out after 60s`), an approval (`approved the gate`), a failure
+(`exit 3: failed the phase`, beside the phase's own `phase.failed` entry) or a
+refused result (`exit 0, not applied: <reason>`). It is written only when the
+result changes, so once per change per server process. A gate whose attempt
+staged knowledge is not polled; it gets one entry per attempt and server
+process, without the label:
+`not polled: this gate commits knowledge (<reasons>) and needs a person`.
 
 ## Sentinel
 
@@ -2411,7 +2512,8 @@ phase <i> ("<id>"): autoApprove cannot open a gate that commits knowledge (<reas
 
 `<reasons>` are drawn from `discovery`, `rule-verification`, `change-intent`,
 `acceptance-verification`, `implementation` and `knowledge-delta-required`.
-There is no opt-in bypass.
+There is no opt-in bypass. The same rule refuses `approveWhen`, a gate a polled
+command opens, on those phases ([Approval conditions](#approval-conditions)).
 
 ### `GET /api/runs/:id/verdict`
 
@@ -3148,19 +3250,19 @@ log retains the delivery failure instead of silently hiding it.
 Argus surfaces missing prerequisites (including this hook) via `GET /api/setup`;
 the web UI's setup banner installs the fixable ones with `POST /api/setup/apply`.
 
-| Env var                        | Meaning                                                                                                                                          |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ARGUS_STEP_NAME`              | label of the running step, injected into the run's environment                                                                                   |
-| `ARGUS_RESULT_FILE`            | where a result-producing step writes its decision JSON                                                                                           |
-| `ARGUS_KNOWLEDGE_DELTA_FILE`   | where a step may write a KnowledgeDelta (see KNOWLEDGE-LEDGER.md §12)                                                                            |
-| `ARGUS_RULE_VERIFICATION_FILE` | where a `ruleVerification` phase's step writes its conformance report (KNOWLEDGE-LEDGER.md §15)                                                  |
-| `ARGUS_CHANGE_REQUEST_FILE`    | the requested change and the current conformance of the rules a `changeIntent` phase's step must classify; read-only (KNOWLEDGE-LEDGER.md §16.4) |
-| `ARGUS_CHANGE_PROPOSAL_FILE`   | where a `changeIntent` phase's step writes its ChangeProposal (KNOWLEDGE-LEDGER.md §16.5)                                                        |
-| `ARGUS_CHANGE_CONTEXT_FILE`    | the accepted ChangeProposal a `changeContext` phase's step implements, as exact canonical refs; read-only (KNOWLEDGE-LEDGER.md §16.11)           |
-| `ARGUS_REVISION_NOTES_FILE`    | every revise note of the step's phase in full, oldest first; set only when they did not all fit the prompt; read-only (HARNESS.md §13)           |
-| `ARGUS_PHASE_ATTEMPT`          | the 0-based attempt of the phase, on every step and every `command` check (HARNESS.md §6)                                                        |
-| `ARGUS_TRIGGER_PAYLOAD_FILE`   | a JSON copy of the instance's `triggerPayload`, for `command` checks only; unset when it has none; restored per verification run (HARNESS.md §6) |
-| `ARGUS_MAX_CONCURRENT_RUNS`    | cap on concurrent `claude -p` processes (default 4)                                                                                              |
+| Env var                        | Meaning                                                                                                                                                                                                                     |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ARGUS_STEP_NAME`              | label of the running step, injected into the run's environment                                                                                                                                                              |
+| `ARGUS_RESULT_FILE`            | where a result-producing step writes its decision JSON                                                                                                                                                                      |
+| `ARGUS_KNOWLEDGE_DELTA_FILE`   | where a step may write a KnowledgeDelta (see KNOWLEDGE-LEDGER.md §12)                                                                                                                                                       |
+| `ARGUS_RULE_VERIFICATION_FILE` | where a `ruleVerification` phase's step writes its conformance report (KNOWLEDGE-LEDGER.md §15)                                                                                                                             |
+| `ARGUS_CHANGE_REQUEST_FILE`    | the requested change and the current conformance of the rules a `changeIntent` phase's step must classify; read-only (KNOWLEDGE-LEDGER.md §16.4)                                                                            |
+| `ARGUS_CHANGE_PROPOSAL_FILE`   | where a `changeIntent` phase's step writes its ChangeProposal (KNOWLEDGE-LEDGER.md §16.5)                                                                                                                                   |
+| `ARGUS_CHANGE_CONTEXT_FILE`    | the accepted ChangeProposal a `changeContext` phase's step implements, as exact canonical refs; read-only (KNOWLEDGE-LEDGER.md §16.11)                                                                                      |
+| `ARGUS_REVISION_NOTES_FILE`    | every revise note of the step's phase in full, oldest first; set only when they did not all fit the prompt; read-only (HARNESS.md §13)                                                                                      |
+| `ARGUS_PHASE_ATTEMPT`          | the 0-based attempt of the phase, on every step, `command` check and [approval poll](#approval-conditions) (HARNESS.md §6)                                                                                                  |
+| `ARGUS_TRIGGER_PAYLOAD_FILE`   | a JSON copy of the instance's `triggerPayload`, for `command` checks and [approval polls](#approval-conditions), never steps; unset when it has none; restored before every verification run and every poll (HARNESS.md §6) |
+| `ARGUS_MAX_CONCURRENT_RUNS`    | cap on concurrent `claude -p` processes (default 4)                                                                                                                                                                         |
 
 ## Knowledge Ledger
 

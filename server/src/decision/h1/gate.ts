@@ -41,14 +41,16 @@ export type Eligibility =
   | { ok: true; relevantRuns: string[]; population: "manual" | "auto-approve-declared" }
   | { ok: false; reason: string };
 
-/** Whether the definition the instance runs on declares `autoApprove` on this phase. */
+/** Whether the definition the instance runs on declares `autoApprove` or
+ *  `approveWhen` on this phase. */
 export function populationOf(
   def: PipelineDefinition | undefined,
   phaseId: string,
 ): "manual" | "auto-approve-declared" {
-  return def?.phases.find((p) => p.id === phaseId)?.autoApprove
-    ? "auto-approve-declared"
-    : "manual";
+  const phase = def?.phases.find((p) => p.id === phaseId);
+  // Either rule may open the gate before a person sees it, so the people's
+  // sample is biased the same way (RFC §Q.2): its own population.
+  return phase?.autoApprove || phase?.approveWhen ? "auto-approve-declared" : "manual";
 }
 
 /**
@@ -142,8 +144,9 @@ const digestOrNull = (v: unknown): string | null => {
 /**
  * What the operator did at an item whose attempt is no longer eligible. Only
  * an `applied` record with `mechanism: "operator"` becomes a reference;
- * automated, unattributed, incomplete, unapplied, conflicting and unknown
- * records never do, and a missing action is never a negative.
+ * automated (a Verdict or an approval condition), unattributed, incomplete,
+ * unapplied, conflicting and unknown records never do, and a missing action
+ * is never a negative.
  */
 export function settle(
   item: GateItem,
@@ -164,7 +167,7 @@ export function settle(
   if (applied.length > 1)
     return { kind: "unlabeled", reason: "conflicting-records", decisionIds: ids };
   const { d } = applied[0];
-  if (d.mechanism === "verdict-auto-approve") {
+  if (d.mechanism === "verdict-auto-approve" || d.mechanism === "approval-condition") {
     return { kind: "unlabeled", reason: "automated-approval", decisionIds: ids };
   }
   if (d.mechanism !== "operator")

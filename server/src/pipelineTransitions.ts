@@ -1282,6 +1282,40 @@ export function applyUnlaunchable(
   ]);
 }
 
+/**
+ * Fail a phase waiting at its gate because its approval condition said so
+ * (`approveWhen.failOnExit`, DL-A3). Classed `approval-condition`, which no
+ * `retryOn` can name, so it is never retried; a person can still revise it.
+ * Only the exact attempt still waiting at a `gate` pause is taken — anything
+ * else (a revise, an approval or an abort got there first) is left alone.
+ */
+export function applyConditionFailed(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phaseId: string,
+  attempt: number,
+  reason: string,
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (
+    !phase ||
+    phase.status !== "awaiting-approval" ||
+    phase.pause !== "gate" ||
+    phase.attempt !== attempt
+  ) {
+    return { instance: inst, startPhases: [] };
+  }
+  // `pause` stays "gate" (it means "is, or last was"); a revise clears it.
+  phase.status = "failed";
+  phase.payload = withFailureClass(withReason(phase.payload, reason), "approval-condition");
+  // A gate pause has none left; kept so the invariant never depends on it.
+  failLeftoverSteps(phase);
+  return withEvents(settle(def, inst, nowISO), [
+    transitionEvent("condition-failed", { phaseId, attempt, detail: reason }),
+  ]);
+}
+
 /** The phase a human action targets: the named one, else the single paused one. */
 export function pausedPhase(inst: PipelineInstance, phaseId?: string): PhaseProgress | undefined {
   if (phaseId) return inst.phases.find((p) => p.id === phaseId);

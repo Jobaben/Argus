@@ -60,3 +60,7 @@ wrote as if it were empty: the Knowledge Ledger, for one, shows no claims and
 refuses to write a ledger version it does not know. Nothing is deleted, and
 pinning the newer release again shows it. `--use` warns when the target is
 older than the pinned release.
+
+Rolling back can also **drop** a field the older build does not know. A build
+from before approval conditions ignores a phase's `approveWhen`, so its gates
+wait for a person, and saving the pipeline from that build removes the field.

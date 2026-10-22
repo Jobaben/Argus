@@ -396,6 +396,23 @@ test("retry.retryOn still rejects an unknown class", async () => {
   assert.throws(() => m.validatePipelineInput(bad), /retry\.retryOn must be a list of/);
 });
 
+test("retry.retryOn cannot name approval-condition: an approval condition's failure is never retried", async () => {
+  const m = await fresh();
+  const bad = goodInput({
+    phases: [
+      {
+        id: "x",
+        name: "X",
+        cwd: home,
+        gated: true,
+        retry: { attempts: 2, retryOn: ["approval-condition"] },
+        steps: [{ name: "s", prompt: "p" }],
+      },
+    ],
+  });
+  assert.throws(() => m.validatePipelineInput(bad), /retry\.retryOn must be a list of/);
+});
+
 // ── validateChecks ───────────────────────────────────────────────────────────
 
 const goodChecks = () => [
@@ -488,6 +505,108 @@ test("validation wires checks onto a phase and omits them when absent", async ()
 
   const withoutChecks = m.validatePipelineInput(goodInput());
   assert.ok(!("checks" in withoutChecks.phases[0]));
+});
+
+// ── approveWhen: a gate a polled command opens (DL-A3) ───────────────────────
+
+const gatedWith = (approveWhen: unknown) =>
+  goodInput({
+    phases: [
+      {
+        id: "pr",
+        name: "PR",
+        cwd: home,
+        gated: true,
+        approveWhen,
+        steps: [{ name: "s", prompt: "p" }],
+      },
+    ],
+  });
+
+test("approveWhen round-trips exactly as authored, with no defaults stored", async () => {
+  const m = await fresh();
+  const full = {
+    kind: "command",
+    run: "node pr-merged.mjs",
+    cwd: "scripts",
+    label: "pull request merged",
+    everySeconds: 300,
+    timeoutSeconds: 60,
+    failOnExit: 3,
+  };
+  assert.deepEqual(m.validatePipelineInput(gatedWith(full)).phases[0].approveWhen, full);
+  const minimal = { kind: "command", run: "exit 1", everySeconds: 30 };
+  assert.deepEqual(
+    m.validatePipelineInput(gatedWith(minimal)).phases[0].approveWhen,
+    minimal,
+    "no timeoutSeconds or label is filled in",
+  );
+  assert.deepEqual(
+    m.validatePipelineInput(gatedWith({ ...minimal, everySeconds: 86400, timeoutSeconds: 600 }))
+      .phases[0].approveWhen,
+    { ...minimal, everySeconds: 86400, timeoutSeconds: 600 },
+    "the upper bounds",
+  );
+  assert.equal(
+    m.validatePipelineInput(gatedWith(null)).phases[0].approveWhen,
+    undefined,
+    "null is absent",
+  );
+});
+
+test("approveWhen rejects every malformed shape with a message that names the field", async () => {
+  const m = await fresh();
+  const ok = { kind: "command", run: "exit 1", everySeconds: 60 };
+  const cases: Array<[string, unknown, RegExp]> = [
+    ["not an object", "exit 0", /approveWhen must be an object/],
+    ["a list", [ok], /approveWhen must be an object/],
+    ["an unknown key", { ...ok, every: 60 }, /approveWhen has unknown key "every"/],
+    ["kind missing", { run: "exit 1", everySeconds: 60 }, /approveWhen\.kind must be command/],
+    ["kind http", { ...ok, kind: "http" }, /approveWhen\.kind must be command/],
+    ["run empty", { ...ok, run: "  " }, /approveWhen\.run must be a non-empty string up to 4000/],
+    [
+      "run too long",
+      { ...ok, run: "x".repeat(4001) },
+      /approveWhen\.run must be a non-empty string up to 4000/,
+    ],
+    ["cwd empty", { ...ok, cwd: "" }, /approveWhen\.cwd must be a non-empty string/],
+    [
+      "label too long",
+      { ...ok, label: "l".repeat(121) },
+      /approveWhen\.label must be a non-empty string up to 120 chars/,
+    ],
+    [
+      "everySeconds missing",
+      { kind: "command", run: "exit 1" },
+      /approveWhen\.everySeconds must be an integer 30-86400/,
+    ],
+    ["everySeconds 29", { ...ok, everySeconds: 29 }, /everySeconds must be an integer 30-86400/],
+    [
+      "everySeconds 86401",
+      { ...ok, everySeconds: 86401 },
+      /everySeconds must be an integer 30-86400/,
+    ],
+    [
+      "everySeconds 30.5",
+      { ...ok, everySeconds: 30.5 },
+      /everySeconds must be an integer 30-86400/,
+    ],
+    ["timeoutSeconds 0", { ...ok, timeoutSeconds: 0 }, /timeoutSeconds must be an integer 1-600/],
+    [
+      "timeoutSeconds 601",
+      { ...ok, timeoutSeconds: 601 },
+      /approveWhen\.timeoutSeconds must be an integer 1-600/,
+    ],
+    ["failOnExit 0", { ...ok, failOnExit: 0 }, /approveWhen\.failOnExit must be an integer 1-255/],
+    [
+      "failOnExit 256",
+      { ...ok, failOnExit: 256 },
+      /approveWhen\.failOnExit must be an integer 1-255/,
+    ],
+  ];
+  for (const [label, approveWhen, message] of cases) {
+    assert.throws(() => m.validatePipelineInput(gatedWith(approveWhen)), message, label);
+  }
 });
 
 // ── pipeline-level capabilities persistence ─────────────────────────────────

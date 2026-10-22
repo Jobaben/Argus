@@ -6,6 +6,7 @@ import { mintHookToken, validateTrigger } from "./schedules.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
 import type { Dependency, PhaseDef, PhaseStep, PipelineDefinition } from "./pipelineTypes.js";
 import type {
+  ApprovalCondition,
   CandidatePolicy,
   CandidateVariant,
   CapabilityProfile,
@@ -62,7 +63,7 @@ import {
 import { CLAIM_KINDS, REALIZATION_MAX_ATTEMPTS, validArtifactPath } from "../knowledge/kernel.js";
 import { ChangeProposalError, validateChangeRequest } from "../knowledge/changeIntent.js";
 import { resolveNeeds } from "./dag.js";
-import { autoApproveRefusal, knowledgeCommitReasons } from "./gatePolicy.js";
+import { approveWhenRefusal, autoApproveRefusal, knowledgeCommitReasons } from "./gatePolicy.js";
 
 // The crash-safe, mutex-serialized single-file store (shared with schedules).
 const store = createJsonArrayStore<PipelineDefinition>({
@@ -1071,6 +1072,96 @@ export function validateChecks(raw: unknown, ctx: string): PhaseCheck[] | undefi
   return raw.map((r, i) => validateCheck(r, ctx, i));
 }
 
+const APPROVE_WHEN_KEYS = [
+  "kind",
+  "run",
+  "cwd",
+  "label",
+  "everySeconds",
+  "timeoutSeconds",
+  "failOnExit",
+];
+
+/** An optional integer field of `approveWhen`, inside its bounds. Undefined/null = absent. */
+function approveWhenInteger(
+  raw: unknown,
+  ctx: string,
+  field: string,
+  min: number,
+  max: number,
+): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < min || n > max) {
+    throw new PipelineValidationError(
+      `${ctx}: approveWhen.${field} must be an integer ${min}-${max}`,
+    );
+  }
+  return n;
+}
+
+/**
+ * A gated phase's approval condition (DL-A3, `ApprovalCondition` in
+ * `@argus/contracts`). Shape only; whether the phase is gated and commits no
+ * knowledge is decided in `validatePhase`. Defaults (`timeoutSeconds` 60, the
+ * label) are applied at run time, never stored, so a definition round-trips
+ * byte for byte.
+ */
+function validateApproveWhen(raw: unknown, ctx: string): ApprovalCondition | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: approveWhen must be an object`);
+  }
+  const v = raw as Record<string, unknown>;
+  for (const key of Object.keys(v)) {
+    if (!APPROVE_WHEN_KEYS.includes(key)) {
+      throw new PipelineValidationError(`${ctx}: approveWhen has unknown key "${key}"`);
+    }
+  }
+  if (v.kind !== "command") {
+    throw new PipelineValidationError(`${ctx}: approveWhen.kind must be command`);
+  }
+  const run = v.run;
+  if (typeof run !== "string" || !run.trim() || run.length > 4000) {
+    throw new PipelineValidationError(
+      `${ctx}: approveWhen.run must be a non-empty string up to 4000 chars`,
+    );
+  }
+  let cwd: string | undefined;
+  if (v.cwd !== undefined && v.cwd !== null) {
+    if (typeof v.cwd !== "string" || !v.cwd.trim()) {
+      throw new PipelineValidationError(`${ctx}: approveWhen.cwd must be a non-empty string`);
+    }
+    cwd = v.cwd;
+  }
+  let label: string | undefined;
+  if (v.label !== undefined && v.label !== null) {
+    if (typeof v.label !== "string" || !v.label.trim() || v.label.length > 120) {
+      throw new PipelineValidationError(
+        `${ctx}: approveWhen.label must be a non-empty string up to 120 chars`,
+      );
+    }
+    label = v.label;
+  }
+  const everySeconds = approveWhenInteger(v.everySeconds, ctx, "everySeconds", 30, 86400);
+  if (everySeconds === undefined) {
+    throw new PipelineValidationError(
+      `${ctx}: approveWhen.everySeconds must be an integer 30-86400`,
+    );
+  }
+  const timeoutSeconds = approveWhenInteger(v.timeoutSeconds, ctx, "timeoutSeconds", 1, 600);
+  const failOnExit = approveWhenInteger(v.failOnExit, ctx, "failOnExit", 1, 255);
+  return {
+    kind: "command",
+    run,
+    ...(cwd !== undefined ? { cwd } : {}),
+    ...(label !== undefined ? { label } : {}),
+    everySeconds,
+    ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+    ...(failOnExit !== undefined ? { failOnExit } : {}),
+  };
+}
+
 function validateStep(raw: unknown, ctx: string): PhaseStep {
   if (!raw || typeof raw !== "object")
     throw new PipelineValidationError(`${ctx}: step must be an object`);
@@ -1204,6 +1295,12 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
       `phase ${i}: autoApprove only means something on a gated phase`,
     );
   }
+  const approveWhen = validateApproveWhen(p.approveWhen, `phase ${i}`);
+  if (approveWhen && !gated) {
+    throw new PipelineValidationError(
+      `phase ${i}: approveWhen only means something on a gated phase`,
+    );
+  }
 
   // Dependency edges. `needs: []` is meaningful (an explicit root), so the
   // key's *presence* is what switches the whole graph from linear-implicit to
@@ -1273,6 +1370,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(produces ? { produces } : {}),
     ...(rubric ? { rubric } : {}),
     ...(autoApprove ? { autoApprove } : {}),
+    ...(approveWhen ? { approveWhen } : {}),
     ...(runtime ? { runtime } : {}),
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
     ...(stallSeconds !== undefined ? { stallSeconds } : {}),
@@ -1299,6 +1397,14 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     const reasons = knowledgeCommitReasons(out);
     if (reasons.length > 0) {
       throw new PipelineValidationError(autoApproveRefusal(`phase ${i} ("${id}")`, reasons));
+    }
+  }
+  // The same rule for a gate a polled command opens: a command's exit code
+  // must never be what makes knowledge canonical either.
+  if (out.approveWhen) {
+    const reasons = knowledgeCommitReasons(out);
+    if (reasons.length > 0) {
+      throw new PipelineValidationError(approveWhenRefusal(`phase ${i} ("${id}")`, reasons));
     }
   }
   return out;

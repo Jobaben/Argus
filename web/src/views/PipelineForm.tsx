@@ -612,14 +612,15 @@ export function PipelineForm({
     setBusy(true);
     setErr(null);
     try {
-      // autoApprove without a gate is a validation error server-side; dropping
-      // it here is what un-checking "gated" means for it.
+      // autoApprove and approveWhen without a gate are validation errors
+      // server-side; dropping them here is what un-checking "gated" means for
+      // them.
       await onSubmit(
         {
           ...form,
           phases: form.phases.map((p) => {
-            if (p.gated || p.autoApprove === undefined) return p;
-            const { autoApprove: _dropped, ...rest } = p;
+            if (p.gated || (p.autoApprove === undefined && p.approveWhen === undefined)) return p;
+            const { autoApprove: _auto, approveWhen: _when, ...rest } = p;
             return rest;
           }),
         },
@@ -967,7 +968,7 @@ export function PipelineForm({
                   The pipeline stops after this phase until someone approves what it produced, or
                   sends it back with a note.
                 </span>
-                {(phase.rubric || phase.autoApprove) && (
+                {(phase.rubric || phase.autoApprove || phase.approveWhen) && (
                   <span className="mt-2 flex flex-wrap gap-1.5">
                     {phase.rubric && (
                       <span
@@ -983,6 +984,14 @@ export function PipelineForm({
                         title="The gate opens itself when the verdict clears the bar (set via the API; preserved on save)"
                       >
                         auto-approve
+                      </span>
+                    )}
+                    {phase.approveWhen && (
+                      <span
+                        className={chipClass()}
+                        title="The gate opens itself when a command says so (set via the API; preserved on save)"
+                      >
+                        approval condition
                       </span>
                     )}
                   </span>

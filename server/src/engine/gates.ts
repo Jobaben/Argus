@@ -6,6 +6,7 @@ import {
   abortTransition,
   applyGateComplete,
   applyGateLink,
+  applyConditionFailed,
 } from "../pipelineTransitions.js";
 import { journal } from "../sources/journal.js";
 import { appendGateDecision } from "../sources/gateDecisions.js";
@@ -28,6 +29,7 @@ import type {
   PendingGateOperation,
 } from "@argus/contracts";
 import type {
+  PhaseDef,
   PhaseProgress,
   PipelineDefinition,
   PipelineInstance,
@@ -39,6 +41,8 @@ import { REVISE_NOTE_MAX } from "./constants.js";
 import type {
   ActionResult,
   AutomatedApproval,
+  ConditionApproval,
+  ConditionFailure,
   Continued,
   GateEffectPoint,
   GateTarget,
@@ -46,7 +50,26 @@ import type {
 } from "./types.js";
 import type { EngineCore, EngineFns } from "./context.js";
 
-/** Gate decisions: approve, revise, abort and automated approval, with their write-ahead record, link and completion. Moved verbatim from `createEngine`. */
+/** An automated rule's own question: does the phase's definition snapshot declare it? */
+interface AutomatedRule {
+  declares: (phaseDef: PhaseDef) => boolean;
+  /** Completes "phase <id> …" when it does not. */
+  missing: string;
+}
+
+/** A Verdict auto-approval: a bar to clear, and a rubric to score against. */
+const AUTO_APPROVE_RULE: AutomatedRule = {
+  declares: (p) => p.autoApprove?.verdict !== undefined && !!p.rubric,
+  missing: "does not declare autoApprove with a rubric",
+};
+
+/** An approval condition (DL-A3): a command polled while the gate waits. */
+const APPROVE_WHEN_RULE: AutomatedRule = {
+  declares: (p) => !!p.approveWhen,
+  missing: "does not declare approveWhen",
+};
+
+/** Gate decisions: approve, revise, abort and automated approval (a Verdict or an approval condition), with their write-ahead record, link and completion. Moved verbatim from `createEngine`. */
 export function createGates(core: EngineCore) {
   const { deps, locks, nowISO, persist, T } = core.ctx;
   const defFor: EngineFns["defFor"] = (...args) => core.fns.defFor(...args);
@@ -405,6 +428,58 @@ export function createGates(core: EngineCore) {
   }
 
   /**
+   * What every automated gate decision checks first, under the instance lock
+   * and before anything is recorded — extracted from `approveAutomatically`,
+   * whose refusals it keeps word for word: the instance (any interrupted gate
+   * operation completed first), its definition, the exact attempt waiting at a
+   * known `gate` pause, the rule declared on the phase's own snapshot, and a
+   * gate that commits no knowledge by configuration or by what the attempt
+   * staged. A refusal writes nothing.
+   */
+  async function readAutomatedTarget(
+    target: { instanceId: string; phaseId: string; attempt: number },
+    source: TransitionSource,
+    rule: AutomatedRule,
+  ): Promise<
+    | { inst: PipelineInstance; def: PipelineDefinition; phase: PhaseProgress; phaseDef: PhaseDef }
+    | { refusal: ActionResult }
+  > {
+    const refuse = (error: string, code = 409) => ({ refusal: { ok: false, code, error } });
+    const read = await readForDecision(target.instanceId, source);
+    if ("refusal" in read) return read;
+    const inst = read.inst;
+    const def = await defFor(inst);
+    if (!def) return refuse("pipeline not found", 404);
+    const phase = inst.phases.find((p) => p.id === target.phaseId);
+    if (!phase || phase.status !== "awaiting-approval") {
+      return refuse(`phase ${target.phaseId} is not awaiting approval`);
+    }
+    const stale = attemptMismatch(phase, target.attempt);
+    if (stale) return { refusal: stale };
+    // A question an agent put to a person (`needs-input`) paused the phase
+    // before its result, checks and staging ran — and a pause recorded
+    // before the cause was recorded cannot be told apart from one. Only a
+    // known gate pause is a rule's to open.
+    if (phase.pause !== "gate") {
+      return refuse(
+        phase.pause === "needs-input"
+          ? `phase ${phase.id} is waiting on an answer to an agent's question, which needs a person`
+          : `phase ${phase.id} paused before pause causes were recorded; it needs a person`,
+      );
+    }
+    const phaseDef = def.phases.find((p) => p.id === phase.id);
+    if (!phaseDef || !rule.declares(phaseDef)) return refuse(`phase ${phase.id} ${rule.missing}`);
+    const reasons = [...knowledgeCommitReasons(phaseDef), ...stagedKnowledgeReasons(phase)];
+    if (reasons.length > 0) {
+      return refuse(
+        `phase ${phase.id} commits knowledge (${reasons.join(", ")}); ` +
+          "its gate needs a person, and automated approval is refused",
+      );
+    }
+    return { inst, def, phase, phaseDef };
+  }
+
+  /**
    * The automated approval boundary.
    *
    * **What the request may say.** Only which verdict it proposes for each
@@ -429,39 +504,14 @@ export function createGates(core: EngineCore) {
   async function approveAutomatically(request: AutomatedApproval): Promise<ActionResult> {
     return locks.withLock(request.instanceId, async () => {
       const refuse = (error: string, code = 409): ActionResult => ({ ok: false, code, error });
-      const read = await readForDecision(request.instanceId, "verdict-watcher");
-      if ("refusal" in read) return read.refusal;
-      const inst = read.inst;
-      const def = await defFor(inst);
-      if (!def) return refuse("pipeline not found", 404);
-      const phase = inst.phases.find((p) => p.id === request.phaseId);
-      if (!phase || phase.status !== "awaiting-approval") {
-        return refuse(`phase ${request.phaseId} is not awaiting approval`);
-      }
-      const stale = attemptMismatch(phase, request.attempt);
-      if (stale) return stale;
-      // A question an agent put to a person (`needs-input`) paused the phase
-      // before its result, checks and staging ran — and a pause recorded
-      // before the cause was recorded cannot be told apart from one. Only a
-      // known gate pause is a rule's to open.
-      if (phase.pause !== "gate") {
-        return refuse(
-          phase.pause === "needs-input"
-            ? `phase ${phase.id} is waiting on an answer to an agent's question, which needs a person`
-            : `phase ${phase.id} paused before pause causes were recorded; it needs a person`,
-        );
-      }
-      const phaseDef = def.phases.find((p) => p.id === phase.id);
-      const bar = phaseDef?.autoApprove?.verdict;
-      if (!phaseDef || bar === undefined || !phaseDef.rubric) {
+      const target = await readAutomatedTarget(request, "verdict-watcher", AUTO_APPROVE_RULE);
+      if ("refusal" in target) return target.refusal;
+      const { inst, def, phase, phaseDef } = target;
+      const bar = phaseDef.autoApprove?.verdict;
+      const rubric = phaseDef.rubric;
+      // Declared, by AUTO_APPROVE_RULE; narrowed here for the types.
+      if (bar === undefined || !rubric) {
         return refuse(`phase ${phase.id} does not declare autoApprove with a rubric`);
-      }
-      const reasons = [...knowledgeCommitReasons(phaseDef), ...stagedKnowledgeReasons(phase)];
-      if (reasons.length > 0) {
-        return refuse(
-          `phase ${phase.id} commits knowledge (${reasons.join(", ")}); ` +
-            "its gate needs a person, and automated approval is refused",
-        );
       }
       const relevant = gateRelevantSteps(phase);
       const attemptRuns = relevant.map((s) => s.runId).filter((id): id is string => !!id);
@@ -489,7 +539,6 @@ export function createGates(core: EngineCore) {
       // The trajectory basis, validated the same way and kept apart: a phase
       // whose rubric declares a trajectory needs one current, usable
       // trajectory judgment per relevant run; any other phase takes none.
-      const rubric = phaseDef.rubric;
       const wantsTrajectory = hasTrajectory(rubric);
       const proposedTrajectory = new Map<string, string | null>();
       if (!wantsTrajectory && (request.trajectoryVerdicts?.length ?? 0) > 0) {
@@ -614,6 +663,102 @@ export function createGates(core: EngineCore) {
     });
   }
 
+  /**
+   * The approval-condition boundary (DL-A3): the gate's `approveWhen` command
+   * exited 0. The same write-ahead, link, completion and recovery as a
+   * person's approval (a crash after the link is finished by `readLive` as any
+   * approval is); the record says a rule opened the gate, and keeps what the
+   * poll observed as its basis. Decided again here, under the lock, because
+   * the poll ran outside it and a person may have decided since.
+   */
+  async function approveOnCondition(request: ConditionApproval): Promise<ActionResult> {
+    return locks.withLock(request.instanceId, async () => {
+      const target = await readAutomatedTarget(request, "approval-poll", APPROVE_WHEN_RULE);
+      if ("refusal" in target) return target.refusal;
+      const { inst, def, phase } = target;
+      if (request.basis.exitCode !== 0) {
+        return {
+          ok: false,
+          code: 409,
+          error: `the condition exited ${request.basis.exitCode}, not 0`,
+        };
+      }
+      await probe("approve:validated", inst.id);
+      const written = await writeDecision({
+        instanceId: inst.id,
+        pipelineId: inst.pipelineId,
+        decision: "approve",
+        mechanism: "approval-condition",
+        channel: "approval-poll",
+        principal: { kind: "system", component: "approval-poll" },
+        phases: [phaseRef(phase)],
+        condition: request.basis,
+      });
+      if ("refusal" in written) return written.refusal;
+      await probe("approve:recorded", inst.id);
+      const unlinked = await linkDecision(inst, written.record, {
+        phaseId: phase.id,
+        attempt: phase.attempt,
+        stopRunIds: [],
+      });
+      if (unlinked) return unlinked;
+      const done = await continueApproval(def, inst, inst.pendingGateOperation!);
+      await startPhases(def, done.instance, done.startPhases);
+      deps.onChange?.();
+      return { ok: true, code: 200 };
+    });
+  }
+
+  /**
+   * The gate's `approveWhen` command exited with its `failOnExit` code: the
+   * phase fails under `approval-condition` (`applyConditionFailed`), never
+   * retried; a person can revise it. Not a gate decision — there is no kind
+   * for it, and an older build would finish an unknown kind as an approval —
+   * so it is one ordinary transition save, refused on exactly the terms a
+   * condition approval is.
+   */
+  async function failOnCondition(request: ConditionFailure): Promise<ActionResult> {
+    return locks.withLock(request.instanceId, async () => {
+      const target = await readAutomatedTarget(request, "approval-poll", APPROVE_WHEN_RULE);
+      if ("refusal" in target) return target.refusal;
+      const { inst, def, phase, phaseDef } = target;
+      if (phaseDef.approveWhen?.failOnExit !== request.exitCode) {
+        return {
+          ok: false,
+          code: 409,
+          error: `exit ${request.exitCode} is not phase ${phase.id}'s failOnExit`,
+        };
+      }
+      const res = T(
+        applyConditionFailed(def, inst, phase.id, phase.attempt, request.reason, nowISO()),
+      );
+      const failed = res.instance.phases.find((p) => p.id === phase.id);
+      if (failed?.status !== "failed") {
+        return { ok: false, code: 409, error: `phase ${phase.id} is not awaiting approval` };
+      }
+      void journal(inst.id, {
+        at: nowISO(),
+        kind: "phase.failed",
+        phaseId: phase.id,
+        attempt: failed.attempt,
+        detail: `approval-condition: ${request.reason}`,
+      });
+      noteRouting(def, res.instance, res.routing);
+      await saveInstance(res.instance);
+      if (res.instance.status === "succeeded" || res.instance.status === "failed") {
+        void journal(inst.id, {
+          at: nowISO(),
+          kind: "instance.ended",
+          detail: res.instance.status,
+        });
+      }
+      queueReadyPhases(inst.id, def, res.instance, res.startPhases);
+      if (res.instance.status === "failed") deps.onFailure?.(res.instance);
+      deps.onChange?.();
+      return { ok: true, code: 200 };
+    });
+  }
+
   async function revise(
     instanceId: string,
     note?: string,
@@ -723,6 +868,8 @@ export function createGates(core: EngineCore) {
     attemptMismatch,
     approve,
     approveAutomatically,
+    approveOnCondition,
+    failOnCondition,
     revise,
     abort,
   };

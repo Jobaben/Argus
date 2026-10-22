@@ -21,6 +21,7 @@ export type {
   EnvPolicy,
   McpServerSpec,
   PhaseCheck,
+  ApprovalCondition,
   PhaseFailureClass,
   VerificationReport,
   Dependency,

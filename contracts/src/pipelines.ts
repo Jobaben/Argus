@@ -144,8 +144,11 @@ export type RetryableClass =
  * may name in `retry.retryOn`; `configuration` (an invocation Argus could not
  * construct as declared — e.g. a capability the runtime cannot enforce under
  * strict enforcement) is never retried, because running it again cannot help.
+ * Neither is `approval-condition`: the gate's `approveWhen` command exited
+ * with its `failOnExit` code (DL-A3). It said this work cannot pass the gate,
+ * and running the agent again cannot change that; a person revises or aborts.
  */
-export type PhaseFailureClass = RetryableClass | "configuration";
+export type PhaseFailureClass = RetryableClass | "configuration" | "approval-condition";
 
 export interface RetryPolicy {
   /** Total attempts including the first. 1 means no retry. */
@@ -492,6 +495,39 @@ export type PhaseCheck =
       requireTranscript?: boolean;
     };
 
+/**
+ * A condition Argus polls while a gated phase waits at its gate (DL-A3): a
+ * command Argus runs itself, on the scheduler tick, in the phase's worktree
+ * (its `cwd` when it has none), with the phase's environment policy and the
+ * attempt's inputs (`ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`,
+ * `ARGUS_PHASE_ATTEMPT`, `ARGUS_ARTIFACT_DIR`, `ARGUS_WORKSPACE`,
+ * `ARGUS_TRIGGER_PAYLOAD_FILE`). Nothing in it is interpolated.
+ *
+ * Exit 0 approves the gate, recorded as a gate decision with mechanism
+ * `approval-condition`. An exit equal to `failOnExit` fails the phase under
+ * the `approval-condition` class, which is never retried. Anything else — a
+ * timeout included — keeps the gate waiting. Allowed on gated phases only,
+ * and refused on a phase whose gate commits knowledge. A person can approve,
+ * revise or abort at any time. The command must be read-only: a shutdown cuts
+ * it, and a restart runs it again.
+ */
+export interface ApprovalCondition {
+  kind: "command";
+  /** Run through the platform shell. Up to 4,000 characters. */
+  run: string;
+  /** Resolved against the phase's worktree (or `cwd`); an absolute path stands. */
+  cwd?: string;
+  /** How the journal and the gate decision name it. Default: `command: ` and
+   *  the first 71 characters of `run`, as a command check's label. */
+  label?: string;
+  /** Seconds from one poll's start to the next's, 30–86400. Resolution: one scheduler tick. */
+  everySeconds: number;
+  /** Wall-clock limit for one poll, 1–600. Absent = 60. */
+  timeoutSeconds?: number;
+  /** An exit code, 1–255, that fails the phase instead of waiting. */
+  failOnExit?: number;
+}
+
 export interface CheckResult {
   kind: PhaseCheck["kind"];
   label: string;
@@ -707,6 +743,10 @@ export interface PhaseDef {
   /** On a gated phase: let the gate open itself when the verdict clears the
    *  bar. Requires `rubric`; without one there is nothing to clear. */
   autoApprove?: AutoApprove;
+  /** On a gated phase: a command Argus polls while the gate waits, which
+   *  approves it on exit 0 or fails the phase on `failOnExit`. May sit beside
+   *  `autoApprove`; whichever qualifies first opens the gate. */
+  approveWhen?: ApprovalCondition;
   /** Overrides the pipeline's runtime for every step in this phase. */
   runtime?: AgentRuntimeId;
   /** Wall-clock limit for each step's process. Absent = no limit. */

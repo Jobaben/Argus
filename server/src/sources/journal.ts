@@ -59,6 +59,12 @@ export type JournalKind =
   | "phase.approved"
   /** A gate declares autoApprove but commits knowledge, so it waits for a person. */
   | "phase.auto-approval-withheld"
+  /** A gate's approval condition (`approveWhen`) observed something new: it
+   *  started waiting on a result, approved the gate, failed the phase, was
+   *  refused, or was not polled because the gate commits knowledge. Written
+   *  only when the result changes, so a condition that waits for days leaves
+   *  one entry per server process. */
+  | "phase.approval-condition"
   /** An interrupted approve / revise / abort was carried through on recovery. */
   | "gate.operation-completed"
   | "route.selection"

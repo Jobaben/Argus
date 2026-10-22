@@ -72,6 +72,27 @@ All notable changes to Argus are documented here. The format follows
   interpolated. Both new names are reserved: a saved `env.set` that names
   `ARGUS_PHASE_ATTEMPT` or `ARGUS_TRIGGER_PAYLOAD_FILE` is refused on its next
   save; until then, its saved value still wins.
+- **`approveWhen`: a gate a polled command can open.** Only a person or a
+  Verdict score could open a gate, and nothing could fail a phase waiting at
+  one. A gated phase can now declare
+  `approveWhen: { kind: "command", run, cwd?, label?, everySeconds, timeoutSeconds?, failOnExit? }`.
+  While the phase waits at its gate, Argus runs the command in the phase's
+  worktree on the scheduler tick, with the phase's environment policy and the
+  attempt's `ARGUS_*` inputs, one poll at a time per attempt and no more often
+  than `everySeconds` (30–86400). Exit 0 approves the gate as a person's approval
+  would, recorded as a gate decision with mechanism `approval-condition`,
+  channel and principal `approval-poll`, and the exit code, the last 500
+  characters of output and the timing as its basis. An exit equal to
+  `failOnExit` fails the phase under the new class `approval-condition`, which
+  is never retried; a person can still revise it. Anything else, a timeout
+  included, keeps the gate waiting. The journal records
+  `phase.approval-condition` when the result changes. Refused on ungated
+  phases and on phases that commit knowledge. The command runs where the
+  agent worked, so keep its script outside that tree and name it by absolute
+  path: an agent that can edit the script can open its own gate. A person can
+  approve, revise or abort at any time, and `autoApprove` may sit beside it.
+  The H1 experiment counts these gates with the `autoApprove` ones, and never
+  takes their approvals as an operator's label.
 
 ### Changed
 

@@ -5,9 +5,10 @@
  * `engine/` — persistence (`store`, `persistence`), process lifecycle
  * (`process`), failure and retry (`failure`), verification, knowledge
  * (`knowledgeIntake`, `knowledgeCommit`), realization, candidates, launch,
- * gates, signals and reconciliation — each a factory over one shared context
- * (`engine/context.ts`). This file keeps every symbol it always exported, and
- * `createEngine` does nothing but build the modules and hand back the Engine.
+ * gates, approval polls (`gatePolls`), signals and reconciliation — each a
+ * factory over one shared context (`engine/context.ts`). This file keeps every
+ * symbol it always exported, and `createEngine` does nothing but build the
+ * modules and hand back the Engine.
  */
 import type { Engine, EngineDeps } from "./engine/types.js";
 import { createEngineContext, type EngineCore, type EngineFns } from "./engine/context.js";
@@ -23,6 +24,7 @@ import { createCandidates } from "./engine/candidates.js";
 import { createSignals } from "./engine/signals.js";
 import { createGates } from "./engine/gates.js";
 import { createReconcile } from "./engine/reconcile.js";
+import { createGatePolls } from "./engine/gatePolls.js";
 
 export { PreflightError, Semaphore, defaultPipelineSpawn } from "./engine/spawn.js";
 export {
@@ -74,6 +76,7 @@ export function createEngine(deps: EngineDeps): Engine {
   Object.assign(fns, createSignals(core));
   Object.assign(fns, createGates(core));
   Object.assign(fns, createReconcile(core));
+  Object.assign(fns, createGatePolls(core));
 
   const {
     start,
@@ -84,6 +87,8 @@ export function createEngine(deps: EngineDeps): Engine {
     revise,
     abort,
     reconcile,
+    pollGates,
+    stopPolls,
     adopt,
   } = fns;
   return {
@@ -95,6 +100,8 @@ export function createEngine(deps: EngineDeps): Engine {
     revise,
     abort,
     reconcile,
+    pollGates,
+    stopPolls,
     adopt,
     drain: ctx.drain,
   };

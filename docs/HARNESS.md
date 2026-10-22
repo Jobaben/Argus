@@ -21,7 +21,8 @@ The pieces this document covers live in `server/src/harness/`:
 - `invocation.ts` — resolves capabilities, asks the runtime to map them onto
   flags/config, applies the environment policy, and writes down what it did.
 - `childEnv.ts` — the one place a child process's environment is assembled.
-- `verification.ts` — Argus's own deterministic checks over a phase's work.
+- `verification.ts` — Argus's own deterministic checks over a phase's work,
+  and the command runner approval polls reuse (§2, Approval conditions).
 - `workspace.ts` — the git worktree a phase's steps run in, when one is
   declared (§11), and one per candidate when a phase runs best-of-N (§12).
 - `memory.ts` — a pipeline's durable, cross-instance notes (§13).
@@ -167,7 +168,8 @@ declared result schema validated (if `result`) missing/unparseable/schema-invali
 deterministic checks run (if `checks`)         a failing CheckResult → "verification"
         │
         ▼
-gate opens (if `gated`) or auto-approves
+gate opens (if `gated`): a person,            the approveWhen command exits with
+auto-approval, or an approval condition       its failOnExit code → "approval-condition"
         │
         ▼
 staged KnowledgeDeltas, rule                 a refused commit → "knowledge-delta",
@@ -264,10 +266,11 @@ not tampering — the file is untouched and integrity passes (KNOWLEDGE-LEDGER.m
 | `change-context-integrity`    | An Argus-owned **read-only input** the run was given — its ChangeContext, its ImplementationScope, its RemediationContext — no longer hashes to what Argus recorded at launch. The exact counterpart of `knowledge-context-integrity`, and it asks the same question: _did the bytes supplied to this invocation change?_, never _is this still the newest proposal?_. The completion is refused and nothing the run proposed becomes durable (KNOWLEDGE-LEDGER.md §17.8).                                                                                                                                                                      | No — opt in                                             |
 | `acceptance-verification`     | The run emitted an acceptance-verification proposal Argus refused — malformed, a criterion the accepted proposal does not declare, a required criterion left without an outcome (or no file written at all), an outcome with no evidence, an `unverifiable` with no reason, a `check` label the phase does not declare, a report written against a different accepted change, source evidence that is not a real file inside the repository — or the phase commit was refused (a cited check absent from the report; a `satisfied` citing a check Argus observed failing) (KNOWLEDGE-LEDGER.md §17.7).                                          | No — opt in                                             |
 | `configuration`               | The declared capability profile could not be enforced under strict enforcement, or a change realization's preconditions do not hold (the accepted intent's target revisions are no longer active; the attempt budget is spent) — the step never launched.                                                                                                                                                                                                                                                                                                                                                                                       | **Never** — the definition is what's wrong, not the run |
+| `approval-condition`          | The phase waited at its gate and its `approveWhen` command exited with its `failOnExit` code (for example: the pull request was abandoned). See [Approval conditions](#approval-conditions).                                                                                                                                                                                                                                                                                                                                                                                                                                                    | **Never** — a person revises or aborts                  |
 
 The class is written onto the phase's payload (`withFailureClass`) whenever a
 phase fails, whether or not that failure ends up scheduling a retry — a
-terminal failure with no attempts left still names which of the thirteen classes
+terminal failure with no attempts left still names which of the fourteen classes
 it was, never just "failed".
 
 **A completion signal is authoritative over the exit code that follows it.**
@@ -294,7 +297,8 @@ extending it, so it must now add `"unverified"` to keep retrying a missing
 marker — previously, on the run-record path, an explicit `["exit-code"]` was
 enough. `retryOn` accepts every class the contract's `RetryableClass` names
 (including `unverified`, `change-proposal`, `change-context-integrity` and
-`acceptance-verification`); everything but `configuration` may be named.
+`acceptance-verification`); everything but `configuration` and
+`approval-condition` may be named.
 
 A retried attempt is told why the previous one failed: `retryNote()` appends a
 bounded, class-specific note to the prompt for **every** retryable class, not
@@ -526,6 +530,105 @@ or process access. Argus does not deliver the token through a file: environment
 delivery is kept because globally installed hooks (Codex, Qwen) may be the older
 version, which reads only `ARGUS_SIGNAL_TOKEN`, and a file alongside an
 environment variable would not reduce exposure.
+
+### Approval conditions
+
+A gated phase can declare a command that Argus polls while the phase waits at
+its gate, so a gate can open when something outside Argus says it may — a
+pull request merged, a deployment went green — without a person watching for
+it (`PhaseDef.approveWhen`, `ApprovalCondition` in `@argus/contracts`;
+`engine/gatePolls.ts`):
+
+```jsonc
+"approveWhen": {
+  "kind": "command",
+  "run": "node /home/you/argus-checks/pr-merged.mjs", // 1–4,000 characters, through the shell
+  "label": "pull request merged",      // optional, ≤120; default: "command: " and the first 71 characters of run
+  "everySeconds": 300,                 // 30–86400, from one poll's start to the next
+  "timeoutSeconds": 60,                // optional, 1–600; default 60
+  "failOnExit": 3                      // optional, 1–255
+}
+```
+
+- **Where it is allowed.** On a gated phase only, and never on a phase whose
+  gate commits knowledge: the same rule that refuses `autoApprove` there
+  (`knowledgeCommitReasons` in `sources/gatePolicy.ts`) refuses `approveWhen`
+  when the definition is saved. The defaults are applied when a poll runs,
+  never stored, so a definition round-trips exactly as it was written.
+- **Where and how it runs.** In the phase's worktree (§11), or its `cwd` when
+  it has none, exactly where its checks run; an optional `approveWhen.cwd` is
+  resolved against that, and an absolute one stands. It runs through the
+  platform shell under the phase's own environment policy, with the inputs a
+  command check gets: `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`,
+  `ARGUS_PHASE_ATTEMPT`, `ARGUS_ARTIFACT_DIR`, `ARGUS_WORKSPACE` and
+  `ARGUS_TRIGGER_PAYLOAD_FILE` (§6, "What a command check is told"; the
+  payload file is written before every poll). Nothing in `approveWhen` is
+  interpolated. The runner is the command checks' own (`runCommand` in
+  `harness/verification.ts`), so a timeout or a shutdown ends the command's
+  whole process tree (§17).
+- **Out of the agent's reach.** A poll runs in the tree the phase's agent has
+  just edited, and its exit 0 opens the gate. Keep the script, and every
+  program it starts, outside that tree, and name the script by absolute path
+  as the example does: a `scripts/pr-merged.mjs` committed to the repository
+  is the agent's to edit, and an edit that makes it exit 0 opens the gate with
+  no person approving and nothing merged. On Windows a program named without
+  a path is looked for in the current directory before `PATH`, whether the
+  shell or the script starts it, so name the interpreter by absolute path too;
+  otherwise a `node.cmd` the agent left in its worktree runs in its place. A
+  worktree is not a jail (§11): an agent that can write outside it can still
+  edit the script itself.
+- **What a result means.** Only a command that exited on its own speaks
+  (`conditionOutcome` in `sources/gatePolicy.ts`):
+  - **exit 0** approves the gate, through the same write-ahead record, link,
+    completion and recovery as a person's approval; the next phases start;
+  - **an exit equal to `failOnExit`** fails the phase under the
+    `approval-condition` class (`applyConditionFailed` in
+    `pipelineTransitions.ts`), which no `retryOn` can name, so it is never
+    retried. A person can still revise it. It is not a gate decision: there
+    is no decision kind for it, and an older build would complete an unknown
+    kind as an approval;
+  - **anything else** keeps the gate waiting: any other exit code, a timeout,
+    a kill, a command that could not start. A timed-out command that traps
+    SIGTERM and exits with the `failOnExit` code still only waits.
+- **What an approval records.** A gate decision with mechanism
+  `approval-condition`, channel `approval-poll` and principal
+  `{ kind: "system", component: "approval-poll" }`, and as its basis
+  (`condition`) the label, the exit code, the last 500 characters of the
+  command's combined output, when it started and how long it ran. The record
+  is never pruned: print one short line that explains the result, never a
+  secret.
+- **Cadence.** Polls are queued on the scheduler tick, right after
+  `reconcile` and never inside it; the tick does not wait for them. At most one
+  poll runs per phase attempt, and the next starts no sooner than
+  `everySeconds` after the previous one started (to within a second), so the
+  resolution is one tick (`ARGUS_SCHED_TICK_MS`, 30 s by default). The first
+  scheduler tick after a restart polls again: nothing about a poll is stored
+  on the instance.
+- **The journal.** `phase.approval-condition`, only when the result changes:
+  the first wait, an approval, a failure, a refusal. A condition that waits for
+  days leaves one entry per server process. Expired credentials for the tool a
+  condition calls make it wait forever, journalled once; look there when a gate
+  that should have opened has not.
+- **What is never polled.** A phase paused for an agent's question
+  (`needs-input`), a pause recorded before pause causes were, a gate whose
+  attempt staged knowledge (journalled once per attempt as "not polled"), an
+  instance whose pipeline was deleted, and an instance whose gate decision is
+  still being completed.
+- **A person first, and `autoApprove` beside it.** A person can approve,
+  revise or abort at any time; a poll that finishes after the phase moved is
+  refused under the instance lock (`approveOnCondition` and `failOnCondition`
+  in `engine/gates.ts` decide again, on exactly the terms a Verdict
+  auto-approval does) and journalled as "not applied". `approveWhen` may sit
+  beside `autoApprove`; whichever qualifies first opens the gate.
+- **Read-only and repeatable.** A shutdown cuts a poll in flight and discards
+  its result, and the next server runs it again, so a condition must only
+  read. It never holds a shell open between polls.
+- **Rollback.** A build from before approval conditions ignores `approveWhen`
+  — those gates wait for a person — and drops the field the next time it
+  saves the pipeline.
+
+The [pipelines guide](guides/pipelines.md#open-a-gate-when-its-pull-request-merges)
+has a worked recipe that opens a gate when its pull request merges.
 
 ## 3. Capability profiles
 
@@ -1222,19 +1325,20 @@ exactly like its steps.
   `~/.claude/argus/invocations/<instanceId>/trigger-payload.json`, beside the
   instance's working-tree baselines and outside the worktree and the artifact
   folder (`ensureTriggerPayloadFile` in `sources/instances.ts`). It is written
-  before each verification run (a candidate's checks are a run of their own),
-  and only when its bytes differ from the payload's, so a copy that was edited
-  or deleted is put back before the next run — after a restart too, because
-  the checks of an interrupted verification run again. Nothing puts it back
-  during a run: a check that runs repository code, such as `npm test`, gets the
-  variable and can change the copy for the checks listed after it, and for any
-  other phase or candidate of the instance verifying at the same time, since
+  before each verification run of a phase that declares a `command` check (a
+  candidate's checks are a run of their own) and before every approval poll
+  (§2), whether or not the polled phase declares one, and only when its bytes
+  differ from the payload's, so a copy that was edited or deleted is put back
+  before the next run or poll — after a restart too, because the checks of an
+  interrupted verification run again. Nothing puts it back during a run: a
+  check that runs repository code, such as `npm test`, gets the variable and
+  can change the copy for the checks listed after it, and for any other phase
+  or candidate of the instance verifying or polling at the same time, since
   they share the one copy. List a check that judges the work against the
   payload before any check that runs repository code. The copy is pruned with
-  the instance (§5). It is written only for a phase that declares a `command`
-  check. A payload is set by a webhook start (the request body) and by a
-  chained start (`{ sourceInstanceId, sourcePipelineId, status }`); a manual or
-  scheduled start has none.
+  the instance (§5). A payload is set by a webhook start (the request body)
+  and by a chained start (`{ sourceInstanceId, sourcePipelineId, status }`); a
+  manual or scheduled start has none.
 - **A file, not a variable.** A webhook body can be 64 KiB, and a Windows
   environment value is capped at 32,767 characters. A copy, never the instance
   record: the record also holds the definition snapshot and its `hookToken`.
@@ -1263,6 +1367,9 @@ exactly like its steps.
 
 The [pipelines guide](guides/pipelines.md#check-work-against-the-task-it-was-started-for)
 has a worked task-scope check.
+
+An approval poll ([Approval conditions](#approval-conditions), §2) runs through
+the same command runner and is told the same six variables.
 
 ## 7. Timeouts
 
@@ -2617,6 +2724,8 @@ cleared on dispose.
 It is used by:
 
 - **Verification command checks** (§6).
+- **Approval polls** (§2, Approval conditions): a timeout or a shutdown ends
+  the tree the same way.
 - **The AnalysisRunner's spawn** (`spawnAnalysisProcess` in
   `sources/analysis.ts`). A timeout, the output cap (overflow), and an error
   from a still-running process now all end the tree, and `done` always
@@ -2840,6 +2949,13 @@ and it is at-least-once. "Exactly once" is not claimed for effects in general.
     stops healing there, and the siblings are healed after the decision.
   - Every recovered effect acts only on phases that are themselves `running`.
     Recovery never touches, approves or resumes the paused phase.
+- **Approval polls are gate decisions, not recovery.** Reconcile never polls;
+  the scheduler tick queues polls after it ([Approval conditions](#approval-conditions)).
+  An approval a poll made is an ordinary approval: interrupted after its link,
+  it is completed by gate recovery like any other. A poll in flight at a crash
+  or a shutdown is lost and runs again on the new process's first tick;
+  nothing about a poll is stored on the instance. A condition failure is one
+  transition save, so there is nothing to recover.
 
 The tests for all of this simulate recovery — they discard an engine and build a
 fresh one over the same files — and do not establish power-loss durability.

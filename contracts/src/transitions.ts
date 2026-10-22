@@ -50,6 +50,7 @@ export type TransitionSource =
   | "retry"
   | "operator"
   | "verdict-watcher"
+  | "approval-poll"
   | "gate-recovery"
   | "engine";
 
@@ -86,6 +87,7 @@ export type TransitionEventKind =
   | "retry-started"
   | "remediation"
   | "unlaunchable"
+  | "condition-failed"
   | "approve"
   | "revise"
   | "abort"

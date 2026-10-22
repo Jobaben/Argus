@@ -84,8 +84,9 @@ empty state back.
   phases and steps freely; **Save pipeline** stays disabled until every phase has a
   name, cwd and at least one complete step (the rail marks the incomplete
   ones). Phase features authored via the API — retry policies, published
-  artifacts, rubrics, auto-approve — show as badges on the panel and are
-  preserved on save.
+  artifacts, rubrics, auto-approve, approval conditions — show as badges on the
+  panel and are preserved on save. Unchecking **gated** drops auto-approve and
+  the approval condition with it: neither means anything without a gate.
 
 **What you can do (signed in)** — from the card's footer: the run controls
 first, then **Analyze** and **Edit**, with **Disable**/**Enable** and **Delete**
@@ -326,6 +327,11 @@ mean _unknown_, not _parallel_.
   you gave it, oldest first, not only the latest, so a short second note
   never erases a long first one. Notes are clipped to 2,000 characters each.
   See [HARNESS.md § Revision notes](../HARNESS.md#revision-notes).
+- **A gate a command can open.** A gated phase can declare `approveWhen`, a
+  command Argus runs every few minutes while the gate waits: exit 0 opens the
+  gate, its `failOnExit` code fails the phase, anything else keeps waiting. A
+  person can still decide first. See
+  [Open a gate when its pull request merges](#open-a-gate-when-its-pull-request-merges).
 
 **Retries.** A phase may declare `attempts`, a `backoffSeconds` that doubles
 each time (capped at an hour), and which failures are worth retrying:
@@ -492,6 +498,139 @@ refuse a value that starts with `-`. The check also gets `ARGUS_INSTANCE_ID`,
 `ARGUS_WORKSPACE`; a candidate's checks get its own folder and tree. The details are in
 [the harness reference](../HARNESS.md#what-a-command-check-is-told).
 
+### Open a gate when its pull request merges
+
+A phase whose agent pushes its branch and opens a pull request can wait at its
+gate until that pull request merges, and then carry on by itself. Argus polls a
+command you write (`approveWhen`); the command asks your Git provider about the
+pull request and answers with its exit code. The form does not show
+`approveWhen`; author it through the API, and the form keeps it on later saves,
+with an **approval condition** badge on the phase.
+
+**Before you start:** a gated phase that works in a worktree
+(`workspace: { "scope": "instance" }` or `"attempt"`), whose prompt tells the
+agent to commit, push its branch and open a pull request; Node.js and your
+provider's CLI on the server's `PATH`. The example uses the Azure DevOps CLI
+(`az repos`); with GitHub's `gh`, list
+`gh pr list --head <branch> --state all --json number,state,headRefOid`
+instead, where `MERGED` is completed, `CLOSED` abandoned and `headRefOid` the
+merged commit. The phase must not commit
+knowledge: `approveWhen` is refused on such a phase, because a person must
+approve it.
+
+1. Sign the CLI in as the user Argus runs as (`az login`, and
+   `az devops configure --defaults organization=<url> project=<name>` if the
+   remote does not say). The CLI keeps that sign-in under the user's home,
+   which a poll can read even under `inherit: "minimal"`. If the CLI needs a
+   variable beyond the minimal set, such as a non-default `AZURE_CONFIG_DIR`,
+   name it in the phase's `capabilities.env.allow`. Never put a token in
+   `env.set`: it becomes part of the definition, which `GET /api/pipelines`
+   returns to every caller of the API, signed in or not
+   ([API security](../API.md#security)). **Expected:** `az repos pr list` run
+   in a clone of the repository lists its pull requests.
+2. Save this script outside the repository, for example as
+   `~/argus-checks/pr-merged.mjs`, so the agent's commits cannot change what
+   opens its gate. It finds the pull request by the branch the worktree is on
+   and binds it to the commit the worktree holds, so neither an id the agent
+   wrote down nor a commit pushed to the pull request later can open the gate:
+
+   ```js
+   // pr-merged.mjs: exit 0 once this worktree's pull request merged exactly
+   // this HEAD; 3 when it never will; 1 while it may; 2 when asking failed.
+   import { execFileSync } from "node:child_process";
+
+   const cwd = process.env.ARGUS_WORKSPACE || process.cwd();
+   const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+   const branch = git("rev-parse", "--abbrev-ref", "HEAD");
+   const head = git("rev-parse", "HEAD");
+   // On Windows `az` is az.cmd, which Node runs only through the shell, so the
+   // branch name must be one the shell reads as plain text.
+   if (!/^[\w./-]+$/.test(branch)) {
+     console.log(`will not ask about branch "${branch}"`);
+     process.exit(2);
+   }
+   let prs;
+   try {
+     const out = execFileSync(
+       "az",
+       ["repos", "pr", "list", "--source-branch", branch, "--status", "all", "-o", "json"],
+       { cwd, encoding: "utf8", shell: process.platform === "win32" },
+     );
+     prs = JSON.parse(out);
+   } catch {
+     console.log(`could not ask about ${branch}`);
+     process.exit(2);
+   }
+   const pr = prs.sort((a, b) => b.pullRequestId - a.pullRequestId)[0];
+   if (!pr) {
+     console.log(`no pull request from ${branch} yet`);
+     process.exit(1);
+   }
+   const merged = pr.lastMergeSourceCommit?.commitId;
+   if (pr.status === "completed" && merged === head) {
+     console.log(`PR ${pr.pullRequestId} merged ${head.slice(0, 12)}`);
+     process.exit(0);
+   }
+   if (pr.status === "completed") {
+     console.log(`PR ${pr.pullRequestId} merged ${merged?.slice(0, 12)}, not ${head.slice(0, 12)}`);
+     process.exit(3);
+   }
+   if (pr.status === "abandoned") {
+     console.log(`PR ${pr.pullRequestId} was abandoned`);
+     process.exit(3);
+   }
+   console.log(`PR ${pr.pullRequestId} is ${pr.status}`);
+   process.exit(1);
+   ```
+
+   It only reads: a shutdown can cut it, and a restart runs it again. It prints
+   one short line, because the last 500 characters of its output are kept in a
+   gate decision that is never pruned.
+
+3. Add the condition to the gated phase, with the script's absolute path:
+
+   ```jsonc
+   "approveWhen": {
+     "kind": "command",
+     "run": "node /home/you/argus-checks/pr-merged.mjs",
+     "label": "pull request merged",
+     "everySeconds": 300,
+     "timeoutSeconds": 60,
+     "failOnExit": 3
+   }
+   ```
+
+   The poll runs in the agent's worktree. On Windows a program named without a
+   path is looked for there before `PATH`, so name `node.exe` by its absolute
+   path too; the [harness reference](../HARNESS.md#approval-conditions) says
+   what else to keep out of the agent's reach.
+
+   **Expected:** the save succeeds. A `400` saying approveWhen "only means
+   something on a gated phase" or "cannot open a gate that commits knowledge"
+   names what to change.
+
+4. Start an instance. Starting it runs the phase's agent, which invokes its
+   provider; the poll itself invokes no model, but it alters state: it opens
+   the gate, or fails the phase.
+
+**Expected result:** when the agent finishes, the phase waits at its gate and
+its journal shows `pull request merged: waiting: exit 1` once. Within one poll
+of the pull request merging (here up to five minutes, plus one scheduler tick),
+the gate opens: the next phases start, and the instance's gate decisions show an
+approval with mechanism `approval-condition` and the line the script printed.
+If the pull request is abandoned, or merged a different commit, the phase fails
+under `approval-condition` with that line as its reason; it is never retried,
+and **Revise** starts a new attempt.
+
+**If it fails:** `waiting: exit 2` in the journal means the CLI could not be
+asked: it is not signed in as the user Argus runs as, its credentials expired,
+or the network is down. The gate keeps waiting, and the journal records it once
+per server process, so check the sign-in when a gate that should have opened
+has not. `not polled: this gate commits knowledge` means the attempt staged a
+knowledge delta; a person must approve it. A person can approve, revise or abort
+at any time; a poll that finishes afterwards changes nothing. The details are in
+[the harness reference](../HARNESS.md#approval-conditions).
+
 ## Advanced feature recipes
 
 The form preserves API-authored settings that it does not expose as editable controls. Use the protocol examples in the harness reference for these options:
@@ -508,5 +647,6 @@ The form preserves API-authored settings that it does not expose as editable con
 | Inspect recovery and transition integrity                    | [Transitions and recovery](../HARNESS.md#18-transitions-and-recovery)                                                         |
 | Assess the execution trajectory                              | [Trajectory signals and judging](../HARNESS.md#19-trajectory-signals-and-judging)                                             |
 | Check the work against the task the instance was started for | [Command check inputs](../HARNESS.md#what-a-command-check-is-told), [recipe](#check-work-against-the-task-it-was-started-for) |
+| Open a gate when its pull request merges                     | [Approval conditions](../HARNESS.md#approval-conditions), [recipe](#open-a-gate-when-its-pull-request-merges)                 |
 
 Start with the [reference pipeline](../HARNESS.md#9-reference-pipeline), then add only the options your task needs. An unenforceable capability, unavailable transcript or incomplete check is not proof of compliance.

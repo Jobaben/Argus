@@ -145,15 +145,16 @@ export function createCandidates(core: EngineCore) {
       res = T(
         applyCandidatesExhausted(def, inst, phaseId, failureClass, reason, outcomes, nowISO()),
       );
-      if (failureClass === "configuration") {
+      if (failureClass === "configuration" || failureClass === "approval-condition") {
         // Every candidate was refused as declared, so the definition is what is
         // wrong and another attempt cannot help. Journalled, never retried.
+        // (No candidate carries `approval-condition`; it is never retried either.)
         void journal(inst.id, {
           at: nowISO(),
           kind: "phase.failed",
           phaseId,
           attempt: phase.attempt,
-          detail: `configuration: ${reason}`,
+          detail: `${failureClass}: ${reason}`,
         });
       } else {
         // The class is already on the payload; this is what schedules the retry

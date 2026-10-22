@@ -123,6 +123,14 @@ test("eligibility: a phase that declares autoApprove is the auto-approve-declare
   assert.deepEqual(e, { ok: true, relevantRuns: ["run-a"], population: "auto-approve-declared" });
 });
 
+test("eligibility: a phase that declares approveWhen is the same population as autoApprove", () => {
+  const inst = gateInstance({
+    phaseDef: { approveWhen: { kind: "command", run: "exit 1", everySeconds: 60 } } as never,
+  });
+  const e = gateEligibility(inst, item, inst.definition, noRecords);
+  assert.deepEqual(e, { ok: true, relevantRuns: ["run-a"], population: "auto-approve-declared" });
+});
+
 test("eligibility: every way an attempt stops being an item names its reason", () => {
   const reason = (
     inst: PipelineInstance | null,
@@ -253,6 +261,12 @@ test("settle: automated and unattributed mechanisms are not operator actions", (
   const a = settleIn(auto);
   assert.equal(a.kind, "unlabeled");
   assert.equal((a as { reason: string }).reason, "automated-approval");
+
+  const condition = newWorld();
+  condition.act("inst-1", "approve", { mechanism: "approval-condition", channel: "approval-poll" });
+  const c = settleIn(condition);
+  assert.equal(c.kind, "unlabeled", "an approval condition's approval is no label");
+  assert.equal((c as { reason: string }).reason, "automated-approval");
 
   const unspecified = newWorld();
   unspecified.act("inst-1", "approve", { mechanism: "unspecified" });

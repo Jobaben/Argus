@@ -8,6 +8,7 @@ import type {
   TransitionRecord,
   GateDecision,
   GateDecisionChannel,
+  GateDecisionConditionBasis,
   GateDecisionPrincipal,
   AcceptanceCriterion,
   AcceptedChangeProposal,
@@ -255,9 +256,10 @@ export interface GateTarget {
 }
 
 /** A person-facing channel's account of who asked. Operators only: an
- *  automated rule never approves through {@link Engine.approve}. */
+ *  automated rule (a Verdict, an approval condition) never approves through
+ *  {@link Engine.approve}, so no request can claim an automated channel. */
 export interface OperatorSource {
-  channel: Exclude<GateDecisionChannel, "verdict-watcher">;
+  channel: Exclude<GateDecisionChannel, "verdict-watcher" | "approval-poll">;
   principal: GateDecisionPrincipal;
 }
 
@@ -284,6 +286,29 @@ export interface AutomatedApproval {
    * trajectory, and refused when it does not. Identity only, like `verdicts`.
    */
   trajectoryVerdicts?: Array<{ runId: string; verdictId: string | null }>;
+}
+
+/**
+ * An approval condition's request to open a gate (DL-A3): the exact phase
+ * attempt its poll ran for, and what the poll observed. Engine-internal — the
+ * poller is its only caller — and re-checked under the instance lock, because
+ * the poll ran outside it and a person may have decided since.
+ */
+export interface ConditionApproval {
+  instanceId: string;
+  phaseId: string;
+  attempt: number;
+  basis: GateDecisionConditionBasis;
+}
+
+/** An approval condition's request to fail its phase (`approveWhen.failOnExit`). */
+export interface ConditionFailure {
+  instanceId: string;
+  phaseId: string;
+  attempt: number;
+  exitCode: number;
+  /** The phase's failure reason, already bounded (`conditionFailureReason`). */
+  reason: string;
 }
 
 export interface Engine {
@@ -320,6 +345,17 @@ export interface Engine {
    */
   withStartsHeld<T>(pipelineId: string, work: () => Promise<T>): Promise<T>;
   reconcile(): Promise<void>;
+  /**
+   * Poll the gates whose phase declares `approveWhen` (DL-A3): for every phase
+   * attempt waiting at a `gate` pause, with no poll in flight and none started
+   * within its `everySeconds`, queue one. Resolves once they are queued —
+   * never waits for a command — and never rejects. Called on the scheduler
+   * tick, right after `reconcile`.
+   */
+  pollGates(): Promise<void>;
+  /** Stop polling, for shutdown: every poll in flight is cut (its process tree
+   *  ended, its result discarded) and `pollGates` queues no more. */
+  stopPolls(): void;
   /** On boot: claim still-alive runs from running instances so they keep
    *  their concurrency slots and get finalized by reconcile when they end. */
   adopt(): Promise<void>;

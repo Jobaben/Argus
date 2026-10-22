@@ -84,7 +84,8 @@ async function readPhaseBaseline(
  * environment policy (pipeline → phase capabilities, the merge its steps ran
  * under), then the identity of the work they judge (`commandInputLayer`). The
  * trigger payload file is ensured first, and only when some check is a
- * command: nothing else reads it.
+ * command — or when `runsCommand` says the caller is one (an approval poll,
+ * DL-A3): nothing else reads it.
  */
 async function checkEnv(
   parent: NodeJS.ProcessEnv,
@@ -92,8 +93,9 @@ async function checkEnv(
   phaseDef: PhaseDef,
   inst: PipelineInstance,
   work: { attempt: number; artifactDir: string | null; workspace: string | null },
+  runsCommand = false,
 ): Promise<Record<string, string>> {
-  const runsCommands = (phaseDef.checks ?? []).some((c) => c.kind === "command");
+  const runsCommands = runsCommand || (phaseDef.checks ?? []).some((c) => c.kind === "command");
   const triggerPayloadFile = runsCommands ? await ensureTriggerPayloadFile(inst) : null;
   return buildChildEnv(
     parent,
@@ -393,9 +395,36 @@ export function createVerification(core: EngineCore) {
     }
   }
 
+  /**
+   * The environment a phase attempt's approval polls run under (DL-A3):
+   * exactly what a command check of the same attempt gets — the phase's
+   * environment policy, and the attempt's inputs, folder and worktree — with
+   * the trigger payload file always ensured, since a poll is a command.
+   */
+  async function commandEnv(
+    def: PipelineDefinition,
+    phaseDef: PhaseDef,
+    inst: PipelineInstance,
+    phase: PhaseProgress,
+  ): Promise<Record<string, string>> {
+    return checkEnv(
+      parentEnv(),
+      def,
+      phaseDef,
+      inst,
+      {
+        attempt: phase.attempt,
+        artifactDir: phase.artifactDir ?? null,
+        workspace: phase.workspace?.path ?? null,
+      },
+      true,
+    );
+  }
+
   return {
     queueVerification,
     queueCandidateVerification,
     queueVerifications,
+    commandEnv,
   };
 }

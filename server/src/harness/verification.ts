@@ -328,20 +328,41 @@ function result(
   };
 }
 
-async function runCommandCheck(
+/** How a command ended, as far as Argus saw. Only `exit` carries an exit
+ *  code that means anything: a timed-out, killed, unstartable or cut command
+ *  may still leave one behind. */
+export type CommandEnd = "exit" | "timeout" | "signal" | "error" | "aborted";
+
+export interface CommandRun {
+  result: CheckResult;
+  end: CommandEnd;
+}
+
+/**
+ * Run one `command` check and say how it ended: the runner behind command
+ * checks, and behind approval polls (DL-A3), which must tell a command that
+ * exited from one that timed out or was killed. When `signal` aborts, the
+ * process tree is ended exactly as on a timeout and the run settles
+ * `aborted`; an already-aborted signal spawns nothing. Never throws.
+ */
+export async function runCommand(
   check: Extract<PhaseCheck, { kind: "command" }>,
   ctx: CheckContext,
-): Promise<CheckResult> {
+  signal?: AbortSignal,
+): Promise<CommandRun> {
   const started = Date.now();
   const resolvedCwd = check.cwd ? path.resolve(ctx.cwd, check.cwd) : ctx.cwd;
+  const missing = (): CommandRun => ({
+    result: result(check, "failed", `cwd does not exist: ${resolvedCwd}`, Date.now() - started),
+    end: "error",
+  });
   try {
     const st = await stat(resolvedCwd);
-    if (!st.isDirectory()) {
-      return result(check, "failed", `cwd does not exist: ${resolvedCwd}`, Date.now() - started);
-    }
+    if (!st.isDirectory()) return missing();
   } catch {
-    return result(check, "failed", `cwd does not exist: ${resolvedCwd}`, Date.now() - started);
+    return missing();
   }
+  if (signal?.aborted) return { result: result(check, "failed", "stopped", 0), end: "aborted" };
 
   const timeoutMs =
     check.timeoutSeconds != null && check.timeoutSeconds > 0
@@ -349,7 +370,7 @@ async function runCommandCheck(
       : (ctx.defaultCommandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS);
   const env = ctx.env ?? defaultCheckEnv();
 
-  return new Promise<CheckResult>((resolve) => {
+  return new Promise<CommandRun>((resolve) => {
     let child: ChildProcess;
     try {
       child = nodeSpawn(check.run, {
@@ -360,14 +381,21 @@ async function runCommandCheck(
         detached: process.platform !== "win32",
       });
     } catch (e) {
-      resolve(
-        result(check, "failed", e instanceof Error ? e.message : String(e), Date.now() - started),
-      );
+      resolve({
+        result: result(
+          check,
+          "failed",
+          e instanceof Error ? e.message : String(e),
+          Date.now() - started,
+        ),
+        end: "error",
+      });
       return;
     }
 
     let output = "";
     let timedOut = false;
+    let aborted = false;
     let spawnError: string | null = null;
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -394,25 +422,36 @@ async function runCommandCheck(
           result(
             check,
             "failed",
-            spawnError !== null
-              ? `${spawnError} (process did not exit)`
-              : `timed out after ${Math.round(timeoutMs / 1000)}s (process did not exit)`,
+            aborted
+              ? "stopped (process did not exit)"
+              : spawnError !== null
+                ? `${spawnError} (process did not exit)`
+                : `timed out after ${Math.round(timeoutMs / 1000)}s (process did not exit)`,
             Date.now() - started,
             { exitCode: null, output: tail(output) },
           ),
+          aborted ? "aborted" : spawnError === null && timedOut ? "timeout" : "error",
         ),
     });
     timer = setTimeout(() => {
       timedOut = true;
       stopper.stop();
     }, timeoutMs);
+    // Cut from outside (an approval poll at shutdown): the tree is ended
+    // exactly as on a timeout.
+    const onAbort = (): void => {
+      aborted = true;
+      stopper.stop();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
 
-    function finish(res: CheckResult): void {
+    function finish(res: CheckResult, end: CommandEnd): void {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       stopper.dispose();
-      resolve(res);
+      resolve({ result: res, end });
     }
 
     child.on("error", (err) => {
@@ -423,13 +462,24 @@ async function runCommandCheck(
         stopper.stop();
         return;
       }
-      finish(result(check, "failed", err.message, Date.now() - started, { output: tail(output) }));
+      finish(
+        result(check, "failed", err.message, Date.now() - started, { output: tail(output) }),
+        "error",
+      );
     });
-    child.on("close", (code, signal) => {
+    child.on("close", (code, killedBy) => {
       const durationMs = Date.now() - started;
       if (spawnError !== null) {
         finish(
           result(check, "failed", spawnError, durationMs, { exitCode: code, output: tail(output) }),
+          "error",
+        );
+        return;
+      }
+      if (aborted) {
+        finish(
+          result(check, "failed", "stopped", durationMs, { exitCode: code, output: tail(output) }),
+          "aborted",
         );
         return;
       }
@@ -439,15 +489,17 @@ async function runCommandCheck(
             exitCode: code,
             output: tail(output),
           }),
+          "timeout",
         );
         return;
       }
-      if (signal) {
+      if (killedBy) {
         finish(
-          result(check, "failed", `killed by ${signal}`, durationMs, {
+          result(check, "failed", `killed by ${killedBy}`, durationMs, {
             exitCode: code,
             output: tail(output),
           }),
+          "signal",
         );
         return;
       }
@@ -457,6 +509,7 @@ async function runCommandCheck(
             exitCode: code,
             output: tail(output),
           }),
+          "exit",
         );
         return;
       }
@@ -465,9 +518,17 @@ async function runCommandCheck(
           exitCode: code,
           output: tail(output),
         }),
+        "exit",
       );
     });
   });
+}
+
+async function runCommandCheck(
+  check: Extract<PhaseCheck, { kind: "command" }>,
+  ctx: CheckContext,
+): Promise<CheckResult> {
+  return (await runCommand(check, ctx)).result;
 }
 
 function tail(output: string): string {

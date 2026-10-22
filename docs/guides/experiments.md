@@ -201,7 +201,8 @@ used is not reported, and stays blank rather than guessed.
   attempt, with no decision on record yet. Questions an agent asked
   (`needs-input`) and pauses of unknown cause are excluded. A best-of-N
   phase is judged on the selected candidate. Gates whose phase declares
-  `autoApprove` are reported as their own population.
+  `autoApprove` or `approveWhen` are reported as their own population: a rule
+  may open them before a person sees them.
 - **Capture first, no call needed.** Within a tick of the pause, Argus
   captures a bounded, redacted snapshot of the review:
   - step prompts and final messages;
@@ -222,9 +223,10 @@ used is not reported, and stays blank rather than guessed.
   with your action.
 - **Your action.** Only an applied operator decision on that exact attempt
   counts: approve means "not sent back", and revise or abort means "sent
-  back". Automated approvals, unattributed or unfinished decisions, and
-  pruned instances are never labels, and never negatives. A signed-in
-  session is an account, not proof that a person clicked.
+  back". Automated approvals (a Verdict or an approval condition),
+  unattributed or unfinished decisions, and pruned instances are never
+  labels, and never negatives. A signed-in session is an account, not proof
+  that a person clicked.
 - **Records** live in `~/.claude/argus/decision-experiments/h1/`: an
   append-only ledger (32 MiB cap) and the captured snapshots (64 MiB cap).
   Collection stops at either cap, and nothing is pruned automatically.

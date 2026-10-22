@@ -20,6 +20,8 @@ const FAILURE_LABEL: Record<PhaseFailureClass, string> = {
   // was involved.
   unverified: "unverified completion",
   configuration: "configuration",
+  // The gate's approveWhen command exited with its failOnExit code.
+  "approval-condition": "approval condition",
 };
 
 function pct(n: number | null): string {

@@ -95,7 +95,7 @@ export const H1_METHODS: Record<string, string> = {
   target:
     "gate.operator-action@1: will the operator send this phase attempt back (revise or abort) rather than approve it as it stands? p is the probability of sent back",
   populations:
-    "manual gates and gates whose definition declares autoApprove are separate populations; model rows are further split by question id, version and digest, projection digest and full provider identity; nothing is pooled",
+    "manual gates and gates whose definition declares autoApprove or approveWhen are separate populations; model rows are further split by question id, version and digest, projection digest and full provider identity; nothing is pooled",
   scoring:
     "an item is scored when it is settled with an applied operator decision on the exact attempt, its review state held (no drift, and the action bracketed by observations at most 10 minutes apart), and, for a model row, its assessment is present and a post-check after the result saw the attempt still eligible and unchanged",
   threshold:
