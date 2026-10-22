@@ -583,10 +583,12 @@ it (`PhaseDef.approveWhen`, `ApprovalCondition` in `@argus/contracts`;
   is the agent's to edit, and an edit that makes it exit 0 opens the gate with
   no person approving and nothing merged. On Windows a program named without
   a path is looked for in the current directory before `PATH`, whether the
-  shell or the script starts it, so name the interpreter by absolute path too;
-  otherwise a `node.cmd` the agent left in its worktree runs in its place. A
-  worktree is not a jail (§11): an agent that can write outside it can still
-  edit the script itself.
+  shell or the script starts it, so name the interpreter by absolute path too,
+  and have the script start what it runs from a folder outside the tree
+  (`git -C <tree>`, and the provider's CLI with its repository named, as the
+  guide's example does); otherwise a `node.cmd`, `git.exe` or `az.cmd` the
+  agent left in its worktree runs in its place. A worktree is not a jail
+  (§11): an agent that can write outside it can still edit the script itself.
 - **What a result means.** Only a command that exited on its own speaks
   (`conditionOutcome` in `sources/gatePolicy.ts`):
   - **exit 0** approves the gate, through the same write-ahead record, link,

@@ -1934,9 +1934,10 @@ included. At most one poll per phase attempt runs at a time, no sooner than
   not start — keeps the gate waiting.
 
 The command runs in the tree the phase's agent has just edited, so keep the
-script, and every program it starts, outside that tree, and name the script by
-absolute path (on Windows the interpreter too): an agent that can edit the
-script can open its own gate (HARNESS.md
+script, and every program it starts, outside that tree, name the script by
+absolute path (on Windows the interpreter too), and start those programs from a
+folder outside the tree: an agent that can edit the script, or plant a program
+the script finds first, can open its own gate (HARNESS.md
 [§ Approval conditions](HARNESS.md#approval-conditions)).
 
 A person's approve, revise and abort are unaffected and may come first. The
@@ -2551,7 +2552,8 @@ stopped on recovery (HARNESS §18); `phase.verifying` /
 every step is in; `phase.approval-condition` marks a new result of a gate's
 [approval condition](#approval-conditions), its detail starting with the
 condition's label and a colon (`<label>: `): the first wait (`waiting: exit 1`,
-`waiting: timed out after 60s`), an approval (`approved the gate`), a failure
+`waiting: timed out after 60s`), an approval
+(`exit 0 in <N>ms: approved the gate`), a failure
 (`exit 3: failed the phase`, beside the phase's own `phase.failed` entry) or a
 refused result (`exit 0, not applied: <reason>`). It is written only when the
 result changes, so once per change per server process. A gate whose attempt

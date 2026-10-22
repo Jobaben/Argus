@@ -276,6 +276,23 @@ test("settle: automated and unattributed mechanisms are not operator actions", (
   assert.equal((u as { reason: string }).reason, "unattributed");
 });
 
+test("settle: a spawn parent's abort of a child at its gate is its own reason, never unattributed", () => {
+  // The cascade names the parent's decision; the sweep acts on the parent's
+  // state and names none (engine/children.ts).
+  for (const parentDecisionId of ["GD-parent", undefined]) {
+    const world = newWorld();
+    world.act("inst-1", "abort", {
+      mechanism: "parent-decision",
+      channel: "in-process",
+      principal: { kind: "system", component: "spawn" },
+      ...(parentDecisionId ? { parentDecisionId } : {}),
+    });
+    const s = settleIn(world);
+    assert.equal(s.kind, "unlabeled", String(parentDecisionId));
+    assert.equal((s as { reason: string }).reason, "parent-decision", String(parentDecisionId));
+  }
+});
+
 test("settle: two applied records for one attempt conflict", () => {
   const world = newWorld();
   world.link(world.record("inst-1", "approve"), false);

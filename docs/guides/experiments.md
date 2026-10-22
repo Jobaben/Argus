@@ -223,10 +223,10 @@ used is not reported, and stays blank rather than guessed.
   with your action.
 - **Your action.** Only an applied operator decision on that exact attempt
   counts: approve means "not sent back", and revise or abort means "sent
-  back". Automated approvals (a Verdict or an approval condition),
-  unattributed or unfinished decisions, and pruned instances are never
-  labels, and never negatives. A signed-in session is an account, not proof
-  that a person clicked.
+  back". Automated approvals (a Verdict or an approval condition), a spawn
+  parent's abort of its child, unattributed or unfinished decisions, and
+  pruned instances are never labels, and never negatives. A signed-in session
+  is an account, not proof that a person clicked.
 - **Records** live in `~/.claude/argus/decision-experiments/h1/`: an
   append-only ledger (32 MiB cap) and the captured snapshots (64 MiB cap).
   Collection stops at either cap, and nothing is pruned automatically.

@@ -146,9 +146,9 @@ const digestOrNull = (v: unknown): string | null => {
 /**
  * What the operator did at an item whose attempt is no longer eligible. Only
  * an `applied` record with `mechanism: "operator"` becomes a reference;
- * automated (a Verdict or an approval condition), unattributed, incomplete,
- * unapplied, conflicting and unknown records never do, and a missing action
- * is never a negative.
+ * automated (a Verdict or an approval condition), carried out for a spawn
+ * parent, unattributed, incomplete, unapplied, conflicting and unknown records
+ * never do, and a missing action is never a negative.
  */
 export function settle(
   item: GateItem,
@@ -172,6 +172,10 @@ export function settle(
   if (d.mechanism === "verdict-auto-approve" || d.mechanism === "approval-condition") {
     return { kind: "unlabeled", reason: "automated-approval", decisionIds: ids };
   }
+  // Argus carrying out a spawn parent's decision (at a gate: its abort cascade
+  // or sweep): its actor is known, so it is not `unattributed`, nor a person's.
+  if (d.mechanism === "parent-decision")
+    return { kind: "unlabeled", reason: "parent-decision", decisionIds: ids };
   if (d.mechanism !== "operator")
     return { kind: "unlabeled", reason: "unattributed", decisionIds: ids };
   const recordDigest = digestOrNull(d);

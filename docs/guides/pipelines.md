@@ -485,11 +485,17 @@ worktree is not a jail, and only Codex's sandbox limits writes at the OS level
      process.exit(1);
    }
    const { task, base } = JSON.parse(readFileSync(file, "utf8"));
+   const tree = process.env.ARGUS_WORKSPACE || process.cwd();
+   // git reads the tree through -C but starts in this script's folder: on
+   // Windows a program named without a path is looked for in the current
+   // folder first, and the agent can leave a git.exe in its tree.
    // --end-of-options: git never reads the payload's base as an option.
    const range = `${base}...HEAD`;
-   const changed = execFileSync("git", ["diff", "--name-only", "--end-of-options", range], {
-     encoding: "utf8",
-   })
+   const changed = execFileSync(
+     "git",
+     ["-C", tree, "diff", "--name-only", "--end-of-options", range],
+     { cwd: import.meta.dirname, encoding: "utf8" },
+   )
      .split("\n")
      .filter(Boolean);
    const outside = changed.filter((f) => !task.files.includes(f));
@@ -502,7 +508,9 @@ worktree is not a jail, and only Codex's sandbox limits writes at the OS level
 
 2. Add the check to the phase, with the script's absolute path:
    `{ "kind": "command", "run": "node /home/you/argus-checks/scope.mjs", "label": "task scope" }`.
-   The check runs in the phase's worktree, so `git` sees the agent's branch.
+   The check runs in the phase's worktree, and the script reads the agent's
+   branch there. On Windows the shell looks for a program named without a path
+   in that worktree before `PATH`, so name `node.exe` by its absolute path too.
    List it before any check that runs the repository's code, such as
    `npm test`: checks run in the order listed, and Argus puts an edited payload
    file back before each verification run, not between one run's checks.
@@ -546,48 +554,70 @@ with an **approval condition** badge on the phase.
 agent to commit, push its branch and open a pull request; Node.js and your
 provider's CLI on the server's `PATH`. The example uses the Azure DevOps CLI
 (`az repos`); with GitHub's `gh`, list
-`gh pr list --head <branch> --state all --json number,state,headRefOid`
+`gh pr list --repo <owner>/<name> --head <branch> --base <target> --state all --json number,state,headRefOid`
 instead, where `MERGED` is completed, `CLOSED` abandoned and `headRefOid` the
 merged commit. The phase must not commit
 knowledge: `approveWhen` is refused on such a phase, because a person must
 approve it.
 
-1. Sign the CLI in as the user Argus runs as (`az login`, and
-   `az devops configure --defaults organization=<url> project=<name>` if the
-   remote does not say). The CLI keeps that sign-in under the user's home,
-   which a poll can read even under `inherit: "minimal"`. If the CLI needs a
-   variable beyond the minimal set, such as a non-default `AZURE_CONFIG_DIR`,
-   name it in the phase's `capabilities.env.allow`. Never put a token in
-   `env.set`: it becomes part of the definition, which `GET /api/pipelines`
-   returns to every caller of the API, signed in or not
-   ([API security](../API.md#security)). **Expected:** `az repos pr list` run
-   in a clone of the repository lists its pull requests.
+1. Sign the CLI in as the user Argus runs as (`az login`). The CLI keeps that
+   sign-in under the user's home, which a poll can read even under
+   `inherit: "minimal"`. If the CLI needs a variable beyond the minimal set,
+   such as a non-default `AZURE_CONFIG_DIR`, name it in the phase's
+   `capabilities.env.allow`. Never put a token in `env.set`: it becomes part of
+   the definition, which `GET /api/pipelines` returns to every caller of the
+   API, signed in or not ([API security](../API.md#security)). **Expected:**
+   `az repos pr list --organization <url> --project <name> --repository <name> --detect false`
+   lists the repository's pull requests.
 2. Save this script outside the repository, for example as
    `~/argus-checks/pr-merged.mjs`, so the agent's commits cannot change what
-   opens its gate. It finds the pull request by the branch the worktree is on
-   and binds it to the commit the worktree holds, so neither an id the agent
-   wrote down nor a commit pushed to the pull request later can open the gate:
+   opens its gate. Set `org`, `project` and `repository` to the values that
+   listed the pull requests in step 1, and `target` to the branch the work must
+   merge into. It finds the pull request by the branch
+   the worktree is on and binds it to the commit the worktree holds and to the
+   branch it must merge into (`target`), so neither an id the agent wrote down,
+   a commit pushed to the pull request later, nor a pull request into another
+   branch can open the gate:
 
    ```js
    // pr-merged.mjs: exit 0 once this worktree's pull request merged exactly
    // this HEAD; 3 when it never will; 1 while it may; 2 when asking failed.
    import { execFileSync } from "node:child_process";
 
-   const cwd = process.env.ARGUS_WORKSPACE || process.cwd();
-   const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+   // Named here, because az runs outside the worktree and so cannot read them
+   // from its remote.
+   const org = "https://dev.azure.com/your-org";
+   const project = "your-project";
+   const repository = "your-repository";
+   // The branch the work must land on. A pull request into any other branch,
+   // which the agent might be able to complete itself, never opens the gate.
+   const target = "refs/heads/main";
+
+   const tree = process.env.ARGUS_WORKSPACE || process.cwd();
+   // Every program starts in this script's folder, never in the tree: on
+   // Windows a program named without a path is looked for in the current
+   // folder first, and the agent can leave a git.exe or an az.cmd in its tree.
+   const cwd = import.meta.dirname;
+   const git = (...args) =>
+     execFileSync("git", ["-C", tree, ...args], { cwd, encoding: "utf8" }).trim();
    const branch = git("rev-parse", "--abbrev-ref", "HEAD");
    const head = git("rev-parse", "HEAD");
-   // On Windows `az` is az.cmd, which Node runs only through the shell, so the
-   // branch name must be one the shell reads as plain text.
-   if (!/^[\w./-]+$/.test(branch)) {
-     console.log(`will not ask about branch "${branch}"`);
-     process.exit(2);
+   // On Windows `az` is az.cmd, which Node runs only through the shell, so every
+   // value on its command line must be one the shell reads as plain text (name
+   // a project whose name has a space by its id).
+   for (const value of [org, project, repository, branch]) {
+     if (!/^[\w.:/-]+$/.test(value)) {
+       console.log(`will not pass "${value}" to az`);
+       process.exit(2);
+     }
    }
+   const where = ["--organization", org, "--project", project, "--repository", repository];
+   const ask = ["--source-branch", branch, "--status", "all", "-o", "json"];
    let prs;
    try {
      const out = execFileSync(
        "az",
-       ["repos", "pr", "list", "--source-branch", branch, "--status", "all", "-o", "json"],
+       ["repos", "pr", "list", ...where, "--detect", "false", ...ask],
        { cwd, encoding: "utf8", shell: process.platform === "win32" },
      );
      prs = JSON.parse(out);
@@ -595,9 +625,11 @@ approve it.
      console.log(`could not ask about ${branch}`);
      process.exit(2);
    }
-   const pr = prs.sort((a, b) => b.pullRequestId - a.pullRequestId)[0];
+   const pr = prs
+     .filter((p) => p.targetRefName === target)
+     .sort((a, b) => b.pullRequestId - a.pullRequestId)[0];
    if (!pr) {
-     console.log(`no pull request from ${branch} yet`);
+     console.log(`no pull request from ${branch} into ${target} yet`);
      process.exit(1);
    }
    const merged = pr.lastMergeSourceCommit?.commitId;
@@ -635,9 +667,11 @@ approve it.
    ```
 
    The poll runs in the agent's worktree. On Windows a program named without a
-   path is looked for there before `PATH`, so name `node.exe` by its absolute
-   path too; the [harness reference](../HARNESS.md#approval-conditions) says
-   what else to keep out of the agent's reach.
+   path is looked for there before `PATH`, whether the shell or the script
+   starts it, so name `node.exe` by its absolute path too, and start every
+   program the script runs from outside the worktree, as the script does with
+   `git -C` and `az`; the [harness reference](../HARNESS.md#approval-conditions)
+   says what else to keep out of the agent's reach.
 
    **Expected:** the save succeeds. A `400` saying approveWhen "only means
    something on a gated phase" or "cannot open a gate that commits knowledge"
@@ -658,9 +692,10 @@ and **Revise** starts a new attempt.
 
 **If it fails:** `waiting: exit 2` in the journal means the CLI could not be
 asked: it is not signed in as the user Argus runs as, its credentials expired,
-or the network is down. The gate keeps waiting, and the journal records it once
-per server process, so check the sign-in when a gate that should have opened
-has not. `not polled: this gate commits knowledge` means the attempt staged a
+the network is down, or the script's `org`, `project` or `repository` is wrong;
+run the script by hand in the worktree to see which. The gate keeps waiting,
+and the journal records it once per server process, so check the sign-in when a
+gate that should have opened has not. `not polled: this gate commits knowledge` means the attempt staged a
 knowledge delta; a person must approve it. A person can approve, revise or abort
 at any time; a poll that finishes afterwards changes nothing. The details are in
 [the harness reference](../HARNESS.md#approval-conditions).
