@@ -5,7 +5,12 @@ import { claudeRuntime, runtimeFor } from "../runtimes/index.js";
 import type { SpawnPlan } from "../runtimes/index.js";
 import type { ClaimRef } from "@argus/contracts";
 import type { Run } from "../sources/scheduleTypes.js";
-import type { PhaseDef, PipelineDefinition } from "../sources/pipelineTypes.js";
+import type {
+  ChildrenManifest,
+  PhaseDef,
+  PipelineDefinition,
+  SpawnTaskState,
+} from "../sources/pipelineTypes.js";
 
 /**
  * Injected into every step run's system prompt so the Stop hook can derive an
@@ -149,6 +154,52 @@ export function memoryInstruction(memory: PipelineDefinition["memory"] | undefin
     "\n\nDurable notes for this pipeline live at $ARGUS_MEMORY_DIR/NOTES.md. Append what a " +
     "future run of this pipeline must know (decisions, gotchas, what was tried); keep it under " +
     `${cap} bytes — Argus trims the head beyond that.`
+  );
+}
+
+/** Task states in the order the children instruction counts them. */
+const TASK_STATE_ORDER: readonly SpawnTaskState[] = [
+  "succeeded",
+  "failed",
+  "aborted",
+  "blocked",
+  "pending",
+  "planned",
+  "reviving",
+  "running",
+  "awaiting-approval",
+];
+
+/**
+ * The instruction a step gets when its phase declares `childrenContext`
+ * (DL-A2b): which spawn phase, how its tasks ended, where the manifest is and
+ * what it holds, and that the children's folders are for reading. Per-run data
+ * (the path), so it rides in the prompt like {@link artifactInstruction};
+ * {@link STEP_CONTRACT} stays constant and the cache prefix holds.
+ */
+export function childrenContextInstruction(
+  manifest: Pick<ChildrenManifest, "spawnPhase" | "tasks"> | null,
+  file: string | null,
+): string {
+  if (!manifest || !file) return "";
+  const { spawnPhase, tasks } = manifest;
+  const counts = TASK_STATE_ORDER.flatMap((state) => {
+    const n = tasks.filter((t) => t.state === state).length;
+    return n > 0 ? [`${n} ${state}`] : [];
+  });
+  const ran =
+    tasks.length === 0
+      ? `started no children (it is ${spawnPhase.status})`
+      : `ran ${tasks.length} task${tasks.length === 1 ? "" : "s"} as child instances ` +
+        `(${counts.join(", ")})`;
+  return (
+    `\n\nChildren of this instance. The spawn phase "${spawnPhase.id}" ${ran}. Argus has ` +
+    `written a read-only JSON manifest of them to ${file} (also given as the ` +
+    "ARGUS_CHILDREN_FILE environment variable): every task and its child instance's phases, " +
+    "results, verification, gate decisions with their notes, runs and cost, the folder that " +
+    "holds the child's file artifacts (artifactsDir), which you may read, and this instance's " +
+    "own phases, decisions and cost. Read the manifest before you reason about the children. " +
+    "Do not modify it or anything in a child's folder."
   );
 }
 

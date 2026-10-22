@@ -169,6 +169,7 @@ test("parent per-invocation identifiers are dropped when no layer supplies them"
     ARGUS_PHASE_ID: "old-phase",
     ARGUS_PHASE_ATTEMPT: "7",
     ARGUS_TRIGGER_PAYLOAD_FILE: "/old/trigger-payload.json",
+    ARGUS_CHILDREN_FILE: "/old/children.json",
   };
   const { env, stripped } = buildChildEnv(parent, undefined);
   for (const name of [
@@ -180,6 +181,7 @@ test("parent per-invocation identifiers are dropped when no layer supplies them"
     "ARGUS_PHASE_ID",
     "ARGUS_PHASE_ATTEMPT",
     "ARGUS_TRIGGER_PAYLOAD_FILE",
+    "ARGUS_CHILDREN_FILE",
   ]) {
     assert.equal(env[name], undefined, `${name} should be stripped`);
     assert.ok(stripped.includes(name), `${name} should be reported as stripped`);

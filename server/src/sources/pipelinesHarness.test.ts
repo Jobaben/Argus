@@ -743,6 +743,15 @@ test("env.set rejects ARGUS_PHASE_ATTEMPT and ARGUS_TRIGGER_PAYLOAD_FILE as rese
   }
 });
 
+test("env.set rejects ARGUS_CHILDREN_FILE as a reserved per-invocation identifier", async () => {
+  const m = await fresh();
+  assert.throws(
+    () => m.validateCapabilities({ env: { set: { ARGUS_CHILDREN_FILE: "x" } } }, "ctx"),
+    /reserved variable "ARGUS_CHILDREN_FILE"/,
+    "a step may not point its own children manifest elsewhere",
+  );
+});
+
 test("mcpServers env/headers reject a key with = or a space, and accept a hyphenated header name", async () => {
   const m = await fresh();
   assert.throws(

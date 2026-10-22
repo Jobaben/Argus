@@ -202,6 +202,7 @@ const FORBIDDEN: Record<string, unknown> = {
   ruleVerification: {},
   changeIntent: {},
   changeContext: { fromPhase: "plan" },
+  childrenContext: { fromPhase: "plan" },
   implementation: {},
   acceptanceVerification: {},
   result: { artifact: "x", schema: { type: "object" } },
@@ -210,6 +211,8 @@ const FORBIDDEN: Record<string, unknown> = {
 
 test("a spawn phase refuses every field that would belong to an agent", () => {
   for (const [key, value] of Object.entries(FORBIDDEN)) {
+    // Refused with advice of its own: see the childrenContext tests below.
+    if (key === "childrenContext") continue;
     refused(
       input([planPhase(), spawnPhase({ [key]: value })]),
       `phase 1: a spawn phase runs no agent of its own, so it cannot declare ${key}; ` +
@@ -704,6 +707,151 @@ test("validatePipelinePatch runs the spawn graph checks on a patched phase list"
   );
   const patch = pipelines.validatePipelinePatch({ phases: [planPhase(), spawnPhase()] });
   assert.deepEqual(patch.phases?.[1].steps, [], "a valid patch stores the spawn phase");
+});
+
+// ── Children context (DL-A2b): a later phase reads the children ────────────
+
+/** `plan`, the spawn phase `tasks`, then `learn` reading its children. */
+const withLearn = (learn: Record<string, unknown>, before: unknown[] = []) =>
+  input([planPhase(), spawnPhase(), ...before, phase("learn", { needs: ["tasks"], ...learn })]);
+
+test("childrenContext names a spawn phase this phase depends on, and is stored trimmed", () => {
+  const out = pipelines.validatePipelineInput(
+    withLearn({ childrenContext: { fromPhase: " tasks " } }),
+  );
+  assert.deepEqual(
+    out.phases[2].childrenContext,
+    { fromPhase: "tasks" },
+    "stored with the phase, trimmed",
+  );
+  const again = pipelines.validatePipelineInput(JSON.parse(JSON.stringify(out)));
+  assert.deepEqual(again.phases, out.phases, "a GET → PUT round trip saves");
+  assert.equal(
+    "childrenContext" in pipelines.validatePipelineInput(withLearn({})).phases[2],
+    false,
+    "absent stays absent",
+  );
+  assert.equal(
+    "childrenContext" in
+      pipelines.validatePipelineInput(withLearn({ childrenContext: null })).phases[2],
+    false,
+    "null is absent",
+  );
+});
+
+test("a linear pipeline needs no needs: every earlier phase is a dependency", () => {
+  const out = pipelines.validatePipelineInput(
+    input([
+      planPhase(),
+      spawnPhase({ needs: undefined }),
+      phase("learn", { childrenContext: { fromPhase: "tasks" } }),
+    ]),
+  );
+  assert.deepEqual(out.phases[2].childrenContext, { fromPhase: "tasks" }, "accepted");
+});
+
+test("childrenContext is held to its shape", () => {
+  refused(
+    withLearn({ childrenContext: "tasks" }),
+    "phase 2: childrenContext must be an object { fromPhase }",
+    "a bare string is refused",
+  );
+  refused(
+    withLearn({ childrenContext: ["tasks"] }),
+    /phase 2: childrenContext must be an object/,
+    "a list is refused",
+  );
+  refused(
+    withLearn({ childrenContext: { fromPhase: "tasks", x: 1 } }),
+    'phase 2: childrenContext has unknown key "x"',
+    "an unknown key is refused",
+  );
+  for (const fromPhase of [undefined, "", "  ", 3]) {
+    refused(
+      withLearn({ childrenContext: { fromPhase } }),
+      "phase 2: childrenContext.fromPhase must name a phase",
+      `fromPhase ${JSON.stringify(fromPhase)} is refused`,
+    );
+  }
+});
+
+test("childrenContext.fromPhase must be a spawn phase that runs first", () => {
+  refused(
+    withLearn({ childrenContext: { fromPhase: "nope" } }),
+    'phase "learn": childrenContext.fromPhase names unknown phase "nope"',
+    "an unknown phase",
+  );
+  refused(
+    withLearn({ childrenContext: { fromPhase: "learn" } }),
+    'phase "learn": childrenContext.fromPhase cannot name its own phase',
+    "its own phase",
+  );
+  refused(
+    withLearn({ childrenContext: { fromPhase: "plan" } }),
+    'phase "learn": childrenContext.fromPhase names "plan", which is not a spawn phase and so starts no children',
+    "a phase that spawns nothing",
+  );
+  refused(
+    input([
+      planPhase(),
+      spawnPhase(),
+      phase("learn", { needs: ["plan"], childrenContext: { fromPhase: "tasks" } }),
+    ]),
+    'phase "learn": childrenContext.fromPhase names "tasks", which is not a dependency of this phase; ' +
+      "add it to needs so its children have settled first",
+    "a spawn phase beside this one could still be starting children",
+  );
+  // Through another phase counts.
+  const out = pipelines.validatePipelineInput(
+    withLearn({ needs: ["ship"], childrenContext: { fromPhase: "tasks" } }, [
+      phase("ship", { needs: ["tasks"] }),
+    ]),
+  );
+  assert.deepEqual(out.phases[3].childrenContext, { fromPhase: "tasks" }, "a transitive need");
+});
+
+test("a spawn phase cannot declare childrenContext, and is pointed at a later phase", () => {
+  refused(
+    input([planPhase(), spawnPhase({ childrenContext: { fromPhase: "plan" } })]),
+    "phase 1: a spawn phase cannot declare childrenContext; " +
+      "put it on a later phase of this pipeline that needs this one",
+    "it reads no children of its own, and the spawned pipeline has no spawn phase to name",
+  );
+  const followed = pipelines.validatePipelineInput(
+    withLearn({ childrenContext: { fromPhase: "tasks" } }),
+  );
+  assert.deepEqual(
+    followed.phases[2].childrenContext,
+    { fromPhase: "tasks" },
+    "the advice, followed, saves",
+  );
+});
+
+test("validatePipelinePatch applies the childrenContext graph rule to a patched phase list", () => {
+  assert.throws(
+    () =>
+      pipelines.validatePipelinePatch({
+        phases: [
+          planPhase(),
+          spawnPhase(),
+          phase("learn", { needs: ["plan"], childrenContext: { fromPhase: "tasks" } }),
+        ],
+      }),
+    { name: "PipelineValidationError", message: /which is not a dependency of this phase/ },
+    "a patch is held to the same rule",
+  );
+  const patch = pipelines.validatePipelinePatch({
+    phases: [
+      planPhase(),
+      spawnPhase(),
+      phase("learn", { needs: ["tasks"], childrenContext: { fromPhase: "tasks" } }),
+    ],
+  });
+  assert.deepEqual(
+    patch.phases?.[2].childrenContext,
+    { fromPhase: "tasks" },
+    "a valid patch saves it",
+  );
 });
 
 // ── Realization: no spawn phase between an implementation and its verifier ───

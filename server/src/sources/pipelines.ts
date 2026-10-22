@@ -5,6 +5,7 @@ import { argusWorkRoot, claudeHome, paths } from "../claudeHome.js";
 import { mintHookToken, validateTrigger } from "./schedules.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
 import type {
+  ChildrenContextSpec,
   Dependency,
   PhaseDef,
   PhaseStep,
@@ -1527,6 +1528,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   const ruleVerification = validateRuleVerification(p.ruleVerification, `phase ${i}`);
   const changeIntent = validateChangeIntent(p.changeIntent, `phase ${i}`, gated);
   const changeContext = validateChangeContext(p.changeContext, `phase ${i}`);
+  const childrenContext = validateChildrenContext(p.childrenContext, `phase ${i}`);
   const implementation = validateImplementation(p.implementation, `phase ${i}`, changeContext);
   const acceptanceVerification = validateAcceptanceVerification(
     p.acceptanceVerification,
@@ -1564,6 +1566,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(changeContext ? { changeContext } : {}),
     ...(implementation ? { implementation } : {}),
     ...(acceptanceVerification ? { acceptanceVerification } : {}),
+    ...(childrenContext ? { childrenContext } : {}),
   };
   // Decided from the phase's effective configuration, after every field is
   // validated: a model-scored gate may never be the one that makes semantic
@@ -1628,6 +1631,13 @@ function validateSpawnPhase(
 ): PhaseDef {
   for (const [key, value] of Object.entries(p)) {
     if (value === undefined || value === null || SPAWN_PHASE_KEYS.has(key)) continue;
+    // Not on the spawned pipeline's phases either: it has no spawn phase to name.
+    if (key === "childrenContext") {
+      throw new PipelineValidationError(
+        `phase ${i}: a spawn phase cannot declare childrenContext; ` +
+          "put it on a later phase of this pipeline that needs this one",
+      );
+    }
     throw new PipelineValidationError(
       `phase ${i}: a spawn phase runs no agent of its own, so it cannot declare ${key}; ` +
         "put it on the spawned pipeline's phases",
@@ -1903,6 +1913,26 @@ function validateChangeContext(raw: unknown, ctx: string): ChangeContextSpec | u
   return out;
 }
 
+/** A phase's children-context selector (DL-A2b, `PhaseDef.childrenContext`).
+ *  The named phase must be a spawn phase and a dependency — checked across the
+ *  whole graph in {@link validateChildrenContextSelectors}. */
+function validateChildrenContext(raw: unknown, ctx: string): ChildrenContextSpec | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: childrenContext must be an object { fromPhase }`);
+  }
+  const v = raw as Record<string, unknown>;
+  for (const k of Object.keys(v)) {
+    if (k !== "fromPhase") {
+      throw new PipelineValidationError(`${ctx}: childrenContext has unknown key "${k}"`);
+    }
+  }
+  if (typeof v.fromPhase !== "string" || !v.fromPhase.trim()) {
+    throw new PipelineValidationError(`${ctx}: childrenContext.fromPhase must name a phase`);
+  }
+  return { fromPhase: v.fromPhase.trim() };
+}
+
 /**
  * A phase's business-rule verification policy (Phase 6,
  * `PhaseDef.ruleVerification`).
@@ -2141,6 +2171,7 @@ function validateGraph(phases: PhaseDef[]): void {
   validateChangeContextSelectors(phases);
   validateRealizationPhases(phases);
   validateSpawnPhases(phases);
+  validateChildrenContextSelectors(phases);
 }
 
 /** Every phase that must finish before `id`, transitively. */
@@ -2381,6 +2412,44 @@ function validateChangeContextSelectors(phases: PhaseDef[]): void {
     if (!transitiveNeeds(needs, phase.id).has(spec.fromPhase)) {
       throw new PipelineValidationError(
         `${where}: changeContext.fromPhase names "${spec.fromPhase}", which is not a dependency of this phase; add it to needs so it is guaranteed to have been accepted first`,
+      );
+    }
+  }
+}
+
+/**
+ * `childrenContext.fromPhase` names a spawn phase of *this* pipeline that is
+ * guaranteed to have settled first (DL-A2b): it exists, it is not the phase
+ * itself, it declares `spawn`, and it is a transitive dependency — a spawn
+ * phase that merely sits beside this one could still be starting children
+ * while this phase reads them.
+ */
+function validateChildrenContextSelectors(phases: PhaseDef[]): void {
+  const needs = resolveNeeds(phases);
+  const known = new Map(phases.map((p) => [p.id, p]));
+  for (const phase of phases) {
+    const spec = phase.childrenContext;
+    if (!spec) continue;
+    const where = `phase "${phase.id}"`;
+    const source = known.get(spec.fromPhase);
+    if (!source) {
+      throw new PipelineValidationError(
+        `${where}: childrenContext.fromPhase names unknown phase "${spec.fromPhase}"`,
+      );
+    }
+    if (spec.fromPhase === phase.id) {
+      throw new PipelineValidationError(
+        `${where}: childrenContext.fromPhase cannot name its own phase`,
+      );
+    }
+    if (!source.spawn) {
+      throw new PipelineValidationError(
+        `${where}: childrenContext.fromPhase names "${spec.fromPhase}", which is not a spawn phase and so starts no children`,
+      );
+    }
+    if (!transitiveNeeds(needs, phase.id).has(spec.fromPhase)) {
+      throw new PipelineValidationError(
+        `${where}: childrenContext.fromPhase names "${spec.fromPhase}", which is not a dependency of this phase; add it to needs so its children have settled first`,
       );
     }
   }

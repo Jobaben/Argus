@@ -84,6 +84,9 @@ export const ARGUS_PER_INVOCATION_IDENTIFIERS: readonly string[] = [
   // Every revise note of this one run's phase, in full. Inherited, a nested
   // child would read another run's notes as its own.
   "ARGUS_REVISION_NOTES_FILE",
+  // The children manifest of this one run's phase. Inherited, a nested child
+  // would read another run's children as its own.
+  "ARGUS_CHILDREN_FILE",
   // The instance's trigger payload, copied for its command checks. Inherited,
   // a nested child's checks would read another instance's task as their own.
   "ARGUS_TRIGGER_PAYLOAD_FILE",

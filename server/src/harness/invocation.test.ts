@@ -719,3 +719,107 @@ test("knowledge context: without a capability profile the channel is offered and
   assert.deepEqual(prepared.record.knowledgeContext, CONTEXT_RECORD);
   assert.equal(prepared.plan.args.includes("--add-dir"), false);
 });
+
+// ── prepareInvocation: the children manifest and folders (DL-A2b) ───────────
+
+const CHILDREN_FILE = "/home/op/.claude/argus/invocations/run-1/children/children-manifest.json";
+const CHILD_DIRS = [
+  { dir: "/home/op/.claude-argus/artifacts/child-1", instanceId: "child-1", key: "a" },
+  { dir: "/home/op/.claude-argus/artifacts/child-2", instanceId: "child-2", key: "b" },
+];
+
+test("children: the record names the manifest; the manifest is a required read channel, each folder an optional one", () => {
+  const prepared = prepareInvocation(
+    baseInputs({
+      argusEnv: { ARGUS_ARTIFACT_DIR: "/art", ARGUS_CHILDREN_FILE: CHILDREN_FILE },
+      childrenFile: CHILDREN_FILE,
+      childArtifacts: CHILD_DIRS,
+      phaseDef: makePhase({ capabilities: { filesystem: "workspace-write" } }),
+    }),
+  );
+  assert.deepEqual(prepared.blocking, [], "nothing blocks the launch");
+  assert.equal(prepared.record.childrenFile, CHILDREN_FILE, "the record names the manifest");
+  assert.equal(prepared.env.ARGUS_CHILDREN_FILE, CHILDREN_FILE, "and the agent is told where");
+  assert.deepEqual(
+    prepared.record.channels?.map((c) => [c.kind, c.path, c.access, c.required, c.status]),
+    [
+      ["children-manifest", CHILDREN_FILE, "read", true, "granted"],
+      ["child-artifacts", CHILD_DIRS[0].dir, "read", false, "granted"],
+      ["child-artifacts", CHILD_DIRS[1].dir, "read", false, "granted"],
+      ["artifact-dir", "/art", "write", false, "granted"],
+    ],
+    "in the fixed order",
+  );
+  const denied = prepared.plan.args[prepared.plan.args.indexOf("--disallowedTools") + 1];
+  for (const rule of [
+    "Edit(//home/op/.claude/argus/invocations/run-1/children/**)",
+    "Edit(//home/op/.claude-argus/artifacts/child-1/**)",
+    "Edit(//home/op/.claude-argus/artifacts/child-2/**)",
+  ]) {
+    assert.ok(denied.includes(rule), `${rule} is denied (${denied})`);
+  }
+});
+
+test("children: absent means no record entry, no channel and no variable", () => {
+  const prepared = prepareInvocation(baseInputs());
+  assert.equal("childrenFile" in prepared.record, false, "the legacy record shape");
+  assert.equal(
+    prepared.record.channels?.some(
+      (c) => c.kind === "children-manifest" || c.kind === "child-artifacts",
+    ),
+    false,
+    "no children channel",
+  );
+  assert.equal("ARGUS_CHILDREN_FILE" in prepared.env, false, "no variable");
+});
+
+test("children: a runtime that cannot mount them refuses only over the manifest under strict enforcement", () => {
+  const inputs = (enforcement?: "strict" | "best-effort") =>
+    baseInputs({
+      run: makeRun({ runtime: "qwen" }),
+      childrenFile: CHILDREN_FILE,
+      childArtifacts: CHILD_DIRS,
+      phaseDef: makePhase({ capabilities: { ...(enforcement ? { enforcement } : {}) } }),
+    });
+  const before = process.env.ARGUS_QWEN_ARGS;
+  process.env.ARGUS_QWEN_ARGS = "--sandbox";
+  try {
+    const strict = prepareInvocation(inputs());
+    assert.deepEqual(
+      strict.blocking,
+      [
+        "Qwen Code container sandbox (--sandbox in ARGUS_QWEN_ARGS) does not mount the children manifest (ARGUS_CHILDREN_FILE)",
+      ],
+      "only the required manifest blocks; the folders are evidence",
+    );
+    assert.equal(
+      strict.record.limitations.filter((l) => l.endsWith("(ARGUS_CHILDREN_FILE)")).length,
+      3,
+      "all three are recorded",
+    );
+
+    const lenient = prepareInvocation(inputs("best-effort"));
+    assert.deepEqual(lenient.blocking, [], "best-effort launches");
+    assert.equal(
+      lenient.record.limitations.filter((l) => l.endsWith("(ARGUS_CHILDREN_FILE)")).length,
+      3,
+      "and records all three",
+    );
+  } finally {
+    if (before === undefined) delete process.env.ARGUS_QWEN_ARGS;
+    else process.env.ARGUS_QWEN_ARGS = before;
+  }
+});
+
+test("children: without a capability profile the channels are offered and recorded unmanaged", () => {
+  const prepared = prepareInvocation(
+    baseInputs({ childrenFile: CHILDREN_FILE, childArtifacts: CHILD_DIRS }),
+  );
+  assert.deepEqual(
+    prepared.record.channels
+      ?.filter((c) => c.kind === "children-manifest" || c.kind === "child-artifacts")
+      .map((c) => c.status),
+    ["unmanaged", "unmanaged", "unmanaged"],
+  );
+  assert.equal(prepared.plan.args.includes("--add-dir"), false, "nothing is added to argv");
+});

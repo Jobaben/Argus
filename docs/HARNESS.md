@@ -263,7 +263,7 @@ not tampering — the file is untouched and integrity passes (KNOWLEDGE-LEDGER.m
 | `knowledge-context-integrity` | The KnowledgeContext Argus materialized for the run no longer hashes to the value recorded at launch — the file was modified, or removed, while the agent ran. The completion is refused and nothing the run proposed becomes canonical. The reason names the run, the expected hash, the hash found and the path; never the contents.                                                                                                                                                                                                                                                                                                          | No — opt in                                             |
 | `rule-verification`           | The run emitted a rule-verification proposal Argus refused — malformed, a rule it was not supplied, a supplied rule left without an outcome (or no file written at all), an outcome with no evidence, an `unverifiable` with no reason, a `check` label the phase does not declare, source evidence that is not a real file inside the repository — or the phase commit was refused (a cited check absent from the report; a `holds` whose check did not pass under `holds: "deterministic-check"`). The refusal names exactly what was missing (KNOWLEDGE-LEDGER.md §15.7).                                                                    | No — opt in                                             |
 | `change-proposal`             | The run emitted a ChangeProposal Argus refused — malformed, no file written at all, a supplied rule left unclassified, a classification that contradicts the semantic delta, a claim both preserved and revised, an acceptance criterion naming a local id the delta does not declare, a business-rule change with no acceptance criteria under a `required` policy, or a separate KnowledgeDelta file written beside it — or the phase commit was refused (a local reference the commit did not create; the ledger moved under the proposal's `expectedRevision`). The refusal names exactly what was missing (KNOWLEDGE-LEDGER.md §16.8).     | No — opt in                                             |
-| `change-context-integrity`    | An Argus-owned **read-only input** the run was given — its ChangeContext, its ImplementationScope, its RemediationContext — no longer hashes to what Argus recorded at launch. The exact counterpart of `knowledge-context-integrity`, and it asks the same question: _did the bytes supplied to this invocation change?_, never _is this still the newest proposal?_. The completion is refused and nothing the run proposed becomes durable (KNOWLEDGE-LEDGER.md §17.8).                                                                                                                                                                      | No — opt in                                             |
+| `change-context-integrity`    | An Argus-owned **read-only input** the run was given — its ChangeContext, its ImplementationScope, its RemediationContext, its children manifest (§20) — no longer hashes to what Argus recorded at launch. The exact counterpart of `knowledge-context-integrity`, and it asks the same question: _did the bytes supplied to this invocation change?_, never _is this still the newest proposal?_. The completion is refused and nothing the run proposed becomes durable (KNOWLEDGE-LEDGER.md §17.8).                                                                                                                                         | No — opt in                                             |
 | `acceptance-verification`     | The run emitted an acceptance-verification proposal Argus refused — malformed, a criterion the accepted proposal does not declare, a required criterion left without an outcome (or no file written at all), an outcome with no evidence, an `unverifiable` with no reason, a `check` label the phase does not declare, a report written against a different accepted change, source evidence that is not a real file inside the repository — or the phase commit was refused (a cited check absent from the report; a `satisfied` citing a check Argus observed failing) (KNOWLEDGE-LEDGER.md §17.7).                                          | No — opt in                                             |
 | `configuration`               | The declared capability profile could not be enforced under strict enforcement, or a change realization's preconditions do not hold (the accepted intent's target revisions are no longer active; the attempt budget is spent) — the step never launched.                                                                                                                                                                                                                                                                                                                                                                                       | **Never** — the definition is what's wrong, not the run |
 | `approval-condition`          | The phase waited at its gate and its `approveWhen` command exited with its `failOnExit` code (for example: the pull request was abandoned). See [Approval conditions](#approval-conditions).                                                                                                                                                                                                                                                                                                                                                                                                                                                    | **Never** — a person revises or aborts                  |
@@ -855,26 +855,29 @@ than a hard requirement.
 
 Beyond the working tree, Argus hands every agent process a small set of files
 and directories that _it_ owns — the protocol between the agent and Argus.
-Each is named to the agent by one environment variable, lives outside the
+Each is named to the agent by one environment variable (a child's artifact
+folder by the children manifest that variable names), lives outside the
 repository (under `~/.claude/argus/`), and must stay reachable whatever
 `filesystem` says about the rest of the disk: a read-only researcher still
 writes its report, its decision and its proposal there.
 
-| Channel                 | Env var                              | Direction     | Required access | Launch depends on it when…                                                                                                                                                                                                                                                                                                                |
-| ----------------------- | ------------------------------------ | ------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Result file             | `ARGUS_RESULT_FILE`                  | agent → Argus | write           | the step publishes the phase's `result` (always required then: the routing reads it). `results/<runId>/result.json` — a directory per run, so granting it admits this run's result only                                                                                                                                                   |
-| KnowledgeDelta file     | `ARGUS_KNOWLEDGE_DELTA_FILE`         | agent → Argus | write           | the phase declares `knowledgeDelta: "required"`. Offered to every run; emitting a delta stays optional either way (KNOWLEDGE-LEDGER.md §12.5)                                                                                                                                                                                             |
-| Artifact directory      | `ARGUS_ARTIFACT_DIR`                 | agent → Argus | write when used | the phase declares an `artifact` check. Offered to every run                                                                                                                                                                                                                                                                              |
-| Memory directory        | `ARGUS_MEMORY_DIR`                   | agent ↔ Argus | write           | `memory.enabled` is set (every step's prompt then asks the agent to append to `NOTES.md`)                                                                                                                                                                                                                                                 |
-| KnowledgeContext        | `ARGUS_KNOWLEDGE_CONTEXT_FILE`       | Argus → agent | **read**        | the step (or its phase) declares a `knowledgeContext` — always required then: the step was authored to reason from it. `invocations/<runId>/knowledge-context.json`, per run, `0444`; the agent never writes it, and Argus re-hashes it before accepting the completion (KNOWLEDGE-LEDGER.md §13, §13.11)                                 |
-| Rule verification       | `ARGUS_RULE_VERIFICATION_FILE`       | agent → Argus | write           | the phase declares `ruleVerification` — always required then: the conformance report _is_ the phase's output, not an optional proposal. `rule-verifications/<runId>/verification.json`, a directory per run (KNOWLEDGE-LEDGER.md §15.6)                                                                                                   |
-| Change request          | `ARGUS_CHANGE_REQUEST_FILE`          | Argus → agent | **read**        | the phase declares `changeIntent` — always required then: it is the phase's input. The requested change verbatim plus, per accountable rule, its support and its current implementation conformance. `invocations/<runId>/change-request.json`, per run, `0444` (KNOWLEDGE-LEDGER.md §16.4)                                               |
-| Change proposal         | `ARGUS_CHANGE_PROPOSAL_FILE`         | agent → Argus | write           | the phase declares `changeIntent` — always required then: the proposal _is_ the phase's output. `change-proposals/<runId>/proposal.json`, a directory per run (KNOWLEDGE-LEDGER.md §16.5)                                                                                                                                                 |
-| Change context          | `ARGUS_CHANGE_CONTEXT_FILE`          | Argus → agent | **read**        | the phase declares `changeContext` — always required then: the step was authored to implement that accepted intent. The approved proposal as exact canonical refs, never restated statements. `invocations/<runId>/change-context.json`, per run, `0444`; re-hashed before the completion is accepted (KNOWLEDGE-LEDGER.md §16.11, §17.8) |
-| Implementation scope    | `ARGUS_IMPLEMENTATION_SCOPE_FILE`    | Argus → agent | **read**        | the phase declares `implementation` — always required then: the run was authored to realize that scope. Where the ledger says the change lives, with a closed reason code per target. `invocations/<runId>/implementation-scope.json`, per run, `0444`, re-hashed at completion (KNOWLEDGE-LEDGER.md §17.5)                               |
-| Remediation context     | `ARGUS_REMEDIATION_CONTEXT_FILE`     | Argus → agent | **read**        | the attempt is a remediation (2..n) — always required then. The exact rules and criteria the previous attempt left unmet, from Argus's own accepted results rather than the previous agent's transcript. `invocations/<runId>/remediation-context.json`, per run, `0444`, re-hashed at completion (KNOWLEDGE-LEDGER.md §17.10)            |
-| Acceptance verification | `ARGUS_ACCEPTANCE_VERIFICATION_FILE` | agent → Argus | write           | the phase declares `acceptanceVerification` — always required then: the criterion outcomes _are_ the phase's output. `acceptance-verifications/<runId>/acceptance.json`, a directory per run (KNOWLEDGE-LEDGER.md §17.7)                                                                                                                  |
-| Revision notes          | `ARGUS_REVISION_NOTES_FILE`          | Argus → agent | **read**        | never required. Offered only when the phase's revise notes did not all fit the prompt (§13, _Revision notes_): every note in full, oldest first. `invocations/<runId>/notes/revision-notes.md`, in a folder of its own so the read rule covers nothing else                                                                               |
+| Channel                 | Env var                                       | Direction     | Required access | Launch depends on it when…                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------- | --------------------------------------------- | ------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Result file             | `ARGUS_RESULT_FILE`                           | agent → Argus | write           | the step publishes the phase's `result` (always required then: the routing reads it). `results/<runId>/result.json` — a directory per run, so granting it admits this run's result only                                                                                                                                                                                                      |
+| KnowledgeDelta file     | `ARGUS_KNOWLEDGE_DELTA_FILE`                  | agent → Argus | write           | the phase declares `knowledgeDelta: "required"`. Offered to every run; emitting a delta stays optional either way (KNOWLEDGE-LEDGER.md §12.5)                                                                                                                                                                                                                                                |
+| Artifact directory      | `ARGUS_ARTIFACT_DIR`                          | agent → Argus | write when used | the phase declares an `artifact` check. Offered to every run                                                                                                                                                                                                                                                                                                                                 |
+| Memory directory        | `ARGUS_MEMORY_DIR`                            | agent ↔ Argus | write           | `memory.enabled` is set (every step's prompt then asks the agent to append to `NOTES.md`)                                                                                                                                                                                                                                                                                                    |
+| KnowledgeContext        | `ARGUS_KNOWLEDGE_CONTEXT_FILE`                | Argus → agent | **read**        | the step (or its phase) declares a `knowledgeContext` — always required then: the step was authored to reason from it. `invocations/<runId>/knowledge-context.json`, per run, `0444`; the agent never writes it, and Argus re-hashes it before accepting the completion (KNOWLEDGE-LEDGER.md §13, §13.11)                                                                                    |
+| Rule verification       | `ARGUS_RULE_VERIFICATION_FILE`                | agent → Argus | write           | the phase declares `ruleVerification` — always required then: the conformance report _is_ the phase's output, not an optional proposal. `rule-verifications/<runId>/verification.json`, a directory per run (KNOWLEDGE-LEDGER.md §15.6)                                                                                                                                                      |
+| Change request          | `ARGUS_CHANGE_REQUEST_FILE`                   | Argus → agent | **read**        | the phase declares `changeIntent` — always required then: it is the phase's input. The requested change verbatim plus, per accountable rule, its support and its current implementation conformance. `invocations/<runId>/change-request.json`, per run, `0444` (KNOWLEDGE-LEDGER.md §16.4)                                                                                                  |
+| Change proposal         | `ARGUS_CHANGE_PROPOSAL_FILE`                  | agent → Argus | write           | the phase declares `changeIntent` — always required then: the proposal _is_ the phase's output. `change-proposals/<runId>/proposal.json`, a directory per run (KNOWLEDGE-LEDGER.md §16.5)                                                                                                                                                                                                    |
+| Change context          | `ARGUS_CHANGE_CONTEXT_FILE`                   | Argus → agent | **read**        | the phase declares `changeContext` — always required then: the step was authored to implement that accepted intent. The approved proposal as exact canonical refs, never restated statements. `invocations/<runId>/change-context.json`, per run, `0444`; re-hashed before the completion is accepted (KNOWLEDGE-LEDGER.md §16.11, §17.8)                                                    |
+| Implementation scope    | `ARGUS_IMPLEMENTATION_SCOPE_FILE`             | Argus → agent | **read**        | the phase declares `implementation` — always required then: the run was authored to realize that scope. Where the ledger says the change lives, with a closed reason code per target. `invocations/<runId>/implementation-scope.json`, per run, `0444`, re-hashed at completion (KNOWLEDGE-LEDGER.md §17.5)                                                                                  |
+| Remediation context     | `ARGUS_REMEDIATION_CONTEXT_FILE`              | Argus → agent | **read**        | the attempt is a remediation (2..n) — always required then. The exact rules and criteria the previous attempt left unmet, from Argus's own accepted results rather than the previous agent's transcript. `invocations/<runId>/remediation-context.json`, per run, `0444`, re-hashed at completion (KNOWLEDGE-LEDGER.md §17.10)                                                               |
+| Acceptance verification | `ARGUS_ACCEPTANCE_VERIFICATION_FILE`          | agent → Argus | write           | the phase declares `acceptanceVerification` — always required then: the criterion outcomes _are_ the phase's output. `acceptance-verifications/<runId>/acceptance.json`, a directory per run (KNOWLEDGE-LEDGER.md §17.7)                                                                                                                                                                     |
+| Revision notes          | `ARGUS_REVISION_NOTES_FILE`                   | Argus → agent | **read**        | never required. Offered only when the phase's revise notes did not all fit the prompt (§13, _Revision notes_): every note in full, oldest first. `invocations/<runId>/notes/revision-notes.md`, in a folder of its own so the read rule covers nothing else                                                                                                                                  |
+| Children manifest       | `ARGUS_CHILDREN_FILE`                         | Argus → agent | **read**        | the phase declares `childrenContext` — always required then: it is the phase's input. Every task of the spawn phase and its child's phases, results, verification, gate decisions, runs and cost, and the instance's own (§20, _The parent's view of its children_). `invocations/<runId>/children/children-manifest.json`, per run, `0444`, in a folder of its own; re-hashed at completion |
+| Child artifact folder   | named in the manifest (`ARGUS_CHILDREN_FILE`) | Argus → agent | **read**        | never required: the manifest already carries each child's results, and a folder is evidence. One per child whose folder exists, `artifacts/<childInstanceId>/` (every phase folder of that child), at most 100 per run                                                                                                                                                                       |
 
 The model (`harness/channels.ts`, `InvocationChannel` in `runtimes/types.ts`):
 `prepareInvocation` builds **one** list of channels — kind, env var, path, the
@@ -887,8 +890,9 @@ with a reason. A channel the runtime does not answer for is treated as
 unavailable — a protocol path is never presumed writable. Nothing on the
 runtime side is special-cased by kind: the result file, the delta file and the
 artifact directory are the same thing to an adapter. The one distinction an
-adapter makes is by **access**: a `read` channel (the KnowledgeContext file,
-and the change-context, implementation-scope and remediation-context files)
+adapter makes is by **access**: a `read` channel (the KnowledgeContext file;
+the change-context, implementation-scope, remediation-context and
+revision-notes files; the children manifest and every child's artifact folder)
 must be reachable and, where the runtime can express it, must _not_ be made
 writable — Claude Code adds an `Edit(//<dir>/**)` deny rule beside the
 `--add-dir`; Codex never lists it in `writable_roots`; OpenCode and Qwen Code
@@ -918,7 +922,8 @@ no KnowledgeDelta and no file artifacts, with or without a profile, launches
 exactly as it always did.
 
 For a run with a capability profile, every channel's path also travels in the
-run's own prompt, after Argus's other instructions and before any revision
+run's own prompt (a child's artifact folder through the children manifest,
+whose path is listed), after Argus's other instructions and before any revision
 notes or retry note (`channelInstruction` in `engine/prompts.ts`, appended by
 `launchStep` once the paths are known). A read-only profile denies the shell,
 and with it the only way an agent could read its environment. A run without a
@@ -936,7 +941,7 @@ stays the same for every run.
 | **Codex**       | `read-only` (declared, or via `ARGUS_CODEX_SANDBOX`)               | ❌ no way to admit a write; one limitation per channel                                                         | ✅ readable; the sandbox refuses every write                                                              |
 | **OpenCode**    | any (the profile's `filesystem` is itself unenforceable)           | ✅ `opencode run --auto` runs unsandboxed; nothing stands in the way                                           | ✅ readable (writes cannot be prevented — the profile is unenforceable regardless)                        |
 | **Qwen Code**   | any, no `--sandbox` in `ARGUS_QWEN_ARGS`                           | ✅ `--approval-mode yolo` runs unsandboxed                                                                     | ✅ readable (writes cannot be prevented — as above)                                                       |
-| **Qwen Code**   | `--sandbox` / `-s` in `ARGUS_QWEN_ARGS`                            | ❌ the container mounts the project and the CLI's home, not Argus's data directory                             | ❌ unavailable; the channel is required, so a strict launch is refused                                    |
+| **Qwen Code**   | `--sandbox` / `-s` in `ARGUS_QWEN_ARGS`                            | ❌ the container mounts the project and the CLI's home, not Argus's data directory                             | ❌ unavailable; a required one (not a revision-notes file or a child's folder) refuses a strict launch    |
 
 Where a runtime cannot prevent a write to the context file, the file's `0444`
 mode guards against an accidental overwrite and the invocation record's
@@ -1125,10 +1130,10 @@ always applied; there is nothing to "fail to enforce" here).
   `ARGUS_MEMORY_DIR`, `ARGUS_KNOWLEDGE_DELTA_FILE`,
   `ARGUS_KNOWLEDGE_CONTEXT_FILE`, `ARGUS_RULE_VERIFICATION_FILE`,
   `ARGUS_CHANGE_REQUEST_FILE`, `ARGUS_CHANGE_PROPOSAL_FILE`,
-  `ARGUS_CHANGE_CONTEXT_FILE`, `ARGUS_REVISION_NOTES_FILE` and
-  `ARGUS_TRIGGER_PAYLOAD_FILE` (`ARGUS_PER_INVOCATION_IDENTIFIERS` in
-  `harness/childEnv.ts`). A pipeline that names one in `env.set` is refused when
-  it is saved.
+  `ARGUS_CHANGE_CONTEXT_FILE`, `ARGUS_REVISION_NOTES_FILE`,
+  `ARGUS_CHILDREN_FILE` and `ARGUS_TRIGGER_PAYLOAD_FILE`
+  (`ARGUS_PER_INVOCATION_IDENTIFIERS` in `harness/childEnv.ts`). A pipeline
+  that names one in `env.set` is refused when it is saved.
 
 The engine builds a `command` check's environment the same way: the phase's
 `inherit`, `allow` and `deny`, then the check's own identity as a layer, then
@@ -2158,10 +2163,12 @@ run long, so they are never capped.
 **Placement.** A step's prompt is the agent's own words, first. Everything
 Argus injects rides _after_ it, in a fixed order, short: the result
 instruction (§ pipelineEngine.ts `resultInstruction`), the artifact
-instruction (`artifactInstruction`), the memory instruction (below), then
-the channel paths (§3a), the phase's revision notes (§ Revision notes, below),
-and last — because recency is what a model weighs most, and a retry note is
-the part most worth remembering — the retry note (§ Retry feedback, below). None
+instruction (`artifactInstruction`), the children instruction
+(`childrenContextInstruction`, on a phase that declares `childrenContext`,
+§20), the memory instruction (below), then the channel paths (§3a), the
+phase's revision notes (§ Revision notes, below), and last — because recency
+is what a model weighs most, and a retry note is the part most worth
+remembering — the retry note (§ Retry feedback, below). None
 of this reorders the `OUTCOME_CONTRACT` system-prompt mechanism (§1), which is
 a pure constant carried separately so the prompt cache prefix holds across
 every run.
@@ -3714,6 +3721,204 @@ count: every child runs its own pipeline's agents.
   waits on another parent's child or a manual start; set the task pipeline's
   `overlapPolicy` to `"allow"` to avoid that.
 - **`enabled`** on the task pipeline is not consulted.
+
+### The parent's view of its children
+
+A phase after the spawn phase (a retrospective, a ship step) reads every
+child's results, decisions and cost by declaring `childrenContext`. Every step
+of the phase then gets a read-only **children manifest** at
+`ARGUS_CHILDREN_FILE`, and each child's artifact folder as a read channel. The
+worked recipe is
+[Read the children from a later phase](guides/pipelines.md#read-the-children-from-a-later-phase).
+
+```jsonc
+{
+  "id": "learn",
+  "name": "Learn",
+  "cwd": "/src/app",
+  "gated": true,
+  "needs": ["tasks"],
+  "childrenContext": { "fromPhase": "tasks" }, // the spawn phase whose children it reads
+  "steps": [{ "name": "learn", "prompt": "Read the children manifest, then …" }],
+}
+```
+
+- **The save rules** (`validateChildrenContextSelectors` in
+  `sources/pipelines.ts`). `fromPhase` names another phase of the same
+  pipeline that declares `spawn` and that this phase depends on through
+  `needs`, directly or through other phases (in a pipeline with no `needs`,
+  any earlier phase): a spawn phase beside this one could still be starting
+  children while it reads them. A spawn phase cannot declare `childrenContext`,
+  and a task pipeline has no spawn phase to name. The messages are in
+  [API.md § Phase fields](API.md#phase-fields).
+- **Built once per attempt.** `startPhase` builds it right after the ledger
+  snapshot, before any run is planned (`planChildrenManifest` in
+  `sources/childrenManifest.ts`): one read of each child's record, of the
+  gate-decisions log and of the run records. Every run of the attempt gets the
+  same bytes, and a retry or a revise builds a fresh one, so the next attempt
+  reads the children (and its own phase's runs and decisions) as they are then.
+  Child records are read from disk without their locks (§ Lock order).
+- **Written per run** at `invocations/<runId>/children/children-manifest.json`,
+  mode `0444`, before the process starts, in a folder of its own so the read
+  rule covers nothing else. Its SHA-256 goes into the invocation record's
+  `suppliedInputs`, and the completion re-hashes it: a manifest changed or
+  removed while the run worked fails the step as `change-context-integrity`
+  (`… run <id>'s children-manifest file changed during execution at …`), as a
+  change context does (§16). The record names it as `childrenFile`.
+- **The prompt** says which spawn phase, how its tasks ended
+  (`ran 3 tasks as child instances (2 succeeded, 1 failed)`), where the
+  manifest is, what it holds, and that neither it nor a child's folder is to
+  be modified. It comes after the acceptance instruction and before the
+  memory instruction (§13, Placement); a run under a capability profile also
+  finds the path among its channel paths.
+
+An abbreviated manifest:
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-22T12:00:00.000Z",
+  "for": { "instanceId": "…", "phaseId": "learn", "attempt": 0 },
+  "spawnPhase": {
+    "id": "tasks",
+    "name": "Tasks",
+    "status": "succeeded",
+    "attempt": 0,
+    "childPipelineId": "task-loop",
+    "counts": { "succeeded": 2 },
+  },
+  "tasks": [
+    {
+      "index": 1,
+      "key": "auth",
+      "title": "Add sign-in",
+      "dependsOn": ["schema"],
+      "state": "succeeded",
+      "task": { "id": "auth", "title": "Add sign-in", "after": ["schema"] }, // as the child got it
+      "child": {
+        "instanceId": "…",
+        "status": "succeeded",
+        "pipelineId": "task-loop",
+        "createdAt": "…",
+        "endedAt": "…",
+        "artifactsDir": "/home/you/.claude-argus/artifacts/<child id>",
+        "phases": [
+          {
+            "id": "implement",
+            "name": "Implement",
+            "status": "succeeded",
+            "attempt": 1,
+            "gated": true,
+            "result": { "prId": 42 },
+            "artifactDir": "/home/you/.claude-argus/artifacts/<child id>/implement",
+            "workspace": { "branch": "argus/…", "base": "origin/main", "baseHead": "…" },
+            "runs": [
+              {
+                "runId": "…",
+                "status": "succeeded",
+                "queuedAt": "…",
+                "startedAt": "…",
+                "endedAt": "…",
+                "durationMs": 410000,
+                "costUsd": 0.41,
+                "tokens": 18000,
+                "model": "…",
+                "runtime": "claude",
+                "outcome": "succeeded",
+              },
+            ],
+            "cost": {
+              "runs": 2,
+              "costUsd": 0.83,
+              "tokens": 35000,
+              "unpricedRuns": 0,
+              "durationMs": 912000,
+            },
+          },
+        ],
+        "decisions": [
+          {
+            "id": "GD-…",
+            "decision": "revise",
+            "mechanism": "operator",
+            "phases": [{ "phaseId": "implement", "attempt": 0 }],
+            "note": "use the existing session helper",
+            "recordedAt": "…",
+            "effect": "applied",
+          },
+        ],
+        "cost": {
+          "runs": 2,
+          "costUsd": 0.83,
+          "tokens": 35000,
+          "unpricedRuns": 0,
+          "durationMs": 912000,
+        },
+      },
+    },
+  ],
+  "parent": { "instanceId": "…", "status": "running" }, // and its phases, decisions and cost
+  "childrenCost": {
+    "runs": 3,
+    "costUsd": 1.2,
+    "tokens": 51000,
+    "unpricedRuns": 0,
+    "durationMs": 1400000,
+  },
+  "warnings": [],
+}
+```
+
+| Field                                  | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `for`                                  | The phase attempt it was built for.                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `spawnPhase`                           | The spawn phase `fromPhase`: its status and attempt, the pipeline its children run (`null` when it never built a task list, as when it was skipped through an `allowSkipped` edge) and its tasks counted by state.                                                                                                                                                                                                                                        |
+| `tasks[]`                              | Every task, in list order: `index` (its position, as the child's `parent.index`), `key`, `title` (clipped to 60 characters), `dependsOn` (keys), `state`, `reason`, `task` (the task object the current child received), `child` and `earlierChildren` (children a fresh one replaced, oldest first).                                                                                                                                                     |
+| `child`, `earlierChildren[]`, `parent` | One instance: `status` (`null` when its record could not be read, and then nothing else), `pipelineId`, `createdAt`, `endedAt`, `abortCause`, `artifactsDir` (a child whose folder is offered), `phases[]`, `decisions[]`, `cost`. `parent` is this instance itself.                                                                                                                                                                                      |
+| `phases[]`                             | `id`, `name`, `status`, `attempt`, `gated`, `pause`, `retries`, `result`, `failure` (`failureClass`, `reason` clipped to 2,000 characters), `verification`, `artifactDir` (a child whose folder is offered), `workspace` (`branch`, `base`, `baseHead`), `runs[]` and `cost`.                                                                                                                                                                             |
+| `runs[]`                               | Every run of the phase, oldest first, superseded attempts included: `runId`, `status`, `queuedAt`, `startedAt`, `endedAt`, `durationMs`, `costUsd`, `tokens`, `model`, `runtime`, `outcome`, `termination`, `error` (clipped to 500 characters).                                                                                                                                                                                                          |
+| `decisions[]`                          | The gate decisions that took effect, oldest first: `id`, `decision`, `mechanism` (a person, an automated rule, or `parent-decision`), `phases`, `note`, `recordedAt`, `effect` (`applied`, or `incomplete` while its effects are being applied), `parentDecisionId`. A decision recorded but never linked is left out.                                                                                                                                    |
+| `cost`, `childrenCost`, `parent.cost`  | The run records' `Run.costUsd` and `Run.tokens` as recorded, summed: `runs`, `costUsd` (4 decimals; `null` when no run recorded one), `tokens` (likewise), `unpricedRuns`, `durationMs`. The manifest adds no estimate of its own, but for a supported Codex model `Run.costUsd` is itself Argus's public token-price estimate (API.md, `GET /api/runtimes`), summed like any other. `childrenCost` covers every child's runs, earlier children included. |
+| `warnings`                             | What Argus could not read or offer while building it, one line each.                                                                                                                                                                                                                                                                                                                                                                                      |
+
+- **What it never carries.** It is an explicit projection, never a copy of a
+  record: no signal token, no definition (it holds the pipeline's
+  `hookToken`), no prompt, and no decision's `principal` or `channel`. The
+  agent's environment has no Argus token (§4), so this file is all it learns
+  of the decisions and the cost, and who made a decision is not part of it:
+  the `mechanism` says whether a person, a rule or the parent did.
+- **The channels** (§3a). The manifest is a required read channel
+  (`children-manifest`). Each child whose folder exists gets an optional read
+  channel (`child-artifacts`) on `artifacts/<childInstanceId>/`, every phase
+  folder of that child, named in the manifest (`artifactsDir`) rather than in a
+  variable of its own. So a step under a capability profile, even
+  `filesystem: "read-only"` or scoped `Read` rules, can open it. A child that
+  never started a phase has no folder and gets no channel. At most 100 folders
+  are offered per run (`CHILD_ARTIFACT_CHANNELS_MAX`): each adds an `--add-dir`
+  and a deny rule to one Claude Code command line, which Windows caps at 32,767
+  characters. Current children come first, then the ones they replaced, and a
+  warning counts any left out. A folder holds each phase's **latest attempt's
+  files only**: a phase's folder is emptied at every attempt (§5).
+- **The parent's own phase folders are not offered.** A read channel over
+  `artifacts/<parentId>/` would put an edit-deny rule over this phase's own
+  artifact directory beneath it, and under Claude Code a deny wins.
+  `{{artifactDir.<phaseId>}}` (§13) still puts an earlier phase's folder in the
+  prompt, and without a capability profile the CLI's own defaults decide
+  whether the agent can open it. Argus does not admit a run under a profile to
+  it, and `additionalDirectories` cannot name it: it takes only folders that
+  exist when the definition is saved, and an instance's folders are made when
+  it starts. Naming the whole artifacts root instead puts, under `read-only`,
+  the same edit-deny rule over this phase's own artifact directory.
+- **Warnings, never refusals.** A child record or the decisions log Argus
+  cannot read becomes a line in `warnings` (and in the server log), and the
+  child is listed by id with `status: null`. Only a `fromPhase` the instance
+  does not have (an instance running against a definition it predates) fails
+  the phase, as `configuration`, before any run is planned.
+- **Retention.** A child and its folder are kept while the parent's record
+  exists (§ Abort, delete, edit and retention); a run's copy of the manifest
+  lives as long as its invocation folder.
+- **Command checks** of the phase are not given `ARGUS_CHILDREN_FILE`; only its
+  agent steps are.
 
 ### Known limits
 

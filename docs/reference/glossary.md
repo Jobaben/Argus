@@ -23,6 +23,7 @@
 | Approval condition          | A gated phase's `approveWhen` command, polled while the gate waits: exit 0 opens the gate, its `failOnExit` code fails the phase, anything else waits. |
 | Spawn phase                 | A phase that runs no agent: it starts one child instance of another pipeline per task in an earlier phase's result and succeeds once all have.         |
 | Child instance              | An instance a spawn phase started for one task. It runs its own pipeline's phases and gates and names its parent instance and task.                    |
+| Children manifest           | A read-only file each step of a `childrenContext` phase gets: an earlier spawn phase's tasks and each child's results, decisions and cost.             |
 | Children pause              | A spawn phase waiting for a person after a child failed or was aborted: approve accepts the rest, revise re-runs what did not succeed.                 |
 | Outcome marker              | The agent's explicit completion report, such as `ARGUS_OUTCOME: succeeded`. It is not independent verification.                                        |
 | Check / verification report | Deterministic evidence about declared requirements. Incomplete input may be `not-evaluated`, which is not a pass.                                      |

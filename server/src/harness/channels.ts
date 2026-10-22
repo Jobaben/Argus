@@ -12,10 +12,11 @@
  * runtime maps the list (docs/HARNESS.md § Argus-owned invocation channels),
  * and `prepareInvocation` decides what an unreachable channel means.
  *
- * Pure. The KnowledgeContext file (Phase 4) is the one read channel: Argus →
- * agent, `access: "read"`, through the same list — a runtime that grants a
- * directory grants it whichever way the data flows, and the one thing a
- * runtime does differently for a read channel is refuse to make it writable.
+ * Pure. Read channels (the KnowledgeContext file of Phase 4, and every Argus →
+ * agent input since) are `access: "read"`, through the same list — a runtime
+ * that grants a directory grants it whichever way the data flows, and the one
+ * thing a runtime does differently for a read channel is refuse to make it
+ * writable.
  */
 
 import path from "node:path";
@@ -40,9 +41,20 @@ export const CHANNEL_ENV_VARS = [
   "ARGUS_REMEDIATION_CONTEXT_FILE",
   "ARGUS_ACCEPTANCE_VERIFICATION_FILE",
   "ARGUS_REVISION_NOTES_FILE",
+  "ARGUS_CHILDREN_FILE",
   "ARGUS_ARTIFACT_DIR",
   "ARGUS_MEMORY_DIR",
 ] as const;
+
+/** One child's artifact folder, offered read-only to a phase that declares
+ *  `childrenContext` (DL-A2b). */
+export interface ChildArtifactsInput {
+  /** `<artifacts>/<childInstanceId>`: every phase folder of that child. */
+  dir: string;
+  instanceId: string;
+  /** The key of the task the child ran. */
+  key: string;
+}
 
 export interface ChannelInputs {
   /** `ARGUS_RESULT_FILE`, when this step publishes the phase's structured result. */
@@ -75,6 +87,12 @@ export interface ChannelInputs {
   /** `ARGUS_REVISION_NOTES_FILE`, only when the prompt could not carry every
    *  revise note. Null = the notes, if any, are all in the prompt. */
   revisionNotesFile?: string | null;
+  /** `ARGUS_CHILDREN_FILE`, when the phase declares `childrenContext`. Null =
+   *  not a children-context phase. */
+  childrenFile?: string | null;
+  /** The children's artifact folders this run may read, each named in the
+   *  manifest rather than in a variable of its own. */
+  childArtifacts?: readonly ChildArtifactsInput[];
   /** `ARGUS_ARTIFACT_DIR`. */
   artifactDir: string | null;
   /** `ARGUS_MEMORY_DIR`, when the pipeline's `memory` is enabled. */
@@ -94,8 +112,8 @@ export function phaseUsesArtifacts(phaseDef: Pick<PhaseDef, "checks">): boolean 
  * Every channel this invocation offers, in a fixed order (result, delta,
  * context, rule verification, change request, change proposal, change
  * context, implementation scope, remediation context, acceptance
- * verification, revision notes, artifacts, memory) so records and argv are
- * deterministic.
+ * verification, revision notes, children manifest, child artifact folders,
+ * artifacts, memory) so records and argv are deterministic.
  *
  * Which channels are *required* — the ones a runtime must be able to deliver
  * or the launch is refused under strict enforcement — follows from what the
@@ -140,6 +158,13 @@ export function phaseUsesArtifacts(phaseDef: Pick<PhaseDef, "checks">): boolean 
  * The revision-notes file is never required: it repeats in full the notes the
  * prompt already carries in part, so a run that cannot open it still has the
  * oldest note and the newest ones.
+ *
+ * The children manifest is required whenever the phase declares
+ * `childrenContext`, by the same rule as the change context: it is the
+ * phase's input, and a run that cannot read it was authored to reason about
+ * children it cannot see. Each child's artifact folder is never required: the
+ * manifest already carries every child's results, verification, decisions and
+ * cost, and a folder is evidence the agent may open.
  */
 export function invocationChannels(inputs: ChannelInputs): InvocationChannel[] {
   const out: InvocationChannel[] = [];
@@ -268,6 +293,30 @@ export function invocationChannels(inputs: ChannelInputs): InvocationChannel[] {
       access: "read",
       required: false,
       label: "revision-notes file",
+    });
+  }
+  if (inputs.childrenFile) {
+    out.push({
+      kind: "children-manifest",
+      envVar: "ARGUS_CHILDREN_FILE",
+      path: inputs.childrenFile,
+      dir: path.dirname(inputs.childrenFile),
+      access: "read",
+      required: true,
+      label: "children manifest",
+    });
+  }
+  for (const child of inputs.childArtifacts ?? []) {
+    out.push({
+      kind: "child-artifacts",
+      // The agent learns each folder from the manifest at ARGUS_CHILDREN_FILE:
+      // a variable per child would not scale, and none is ever set.
+      envVar: "ARGUS_CHILDREN_FILE",
+      path: child.dir,
+      dir: child.dir,
+      access: "read",
+      required: false,
+      label: `artifact folder of child ${child.instanceId} (task "${child.key}")`,
     });
   }
   if (inputs.artifactDir) {

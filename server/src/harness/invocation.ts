@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { operatorClaudeMd } from "../claudeHome.js";
 import { buildChildEnv } from "./childEnv.js";
 import { invocationChannels } from "./channels.js";
+import type { ChildArtifactsInput } from "./channels.js";
 import { runtimeFor, resolveRuntimeId } from "../runtimes/index.js";
 import type {
   CapabilityRequest,
@@ -161,6 +162,12 @@ export interface InvocationInputs {
    *  carry them all. Never `required`: the prompt already holds the oldest
    *  and the newest. */
   revisionNotesFile?: string | null;
+  /** Where this run's children manifest was written, when its phase declares
+   *  `childrenContext`. `required`: it is the phase's input. */
+  childrenFile?: string | null;
+  /** The children's artifact folders this run is offered, read-only. Never
+   *  `required`: the manifest carries the results; a folder is evidence. */
+  childArtifacts?: readonly ChildArtifactsInput[];
   /**
    * Every Argus-owned read-only input besides the KnowledgeContext, with the
    * SHA-256 of the bytes as written (Phase 8). Recorded so the completion can
@@ -249,6 +256,8 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     remediationContextFile: inputs.remediationContextFile ?? null,
     acceptanceVerificationFile: inputs.acceptanceVerificationFile ?? null,
     revisionNotesFile: inputs.revisionNotesFile ?? null,
+    childrenFile: inputs.childrenFile ?? null,
+    childArtifacts: inputs.childArtifacts ?? [],
     artifactDir: inputs.artifactDir,
     memoryDir: inputs.memoryDir ?? null,
     phaseDef,
@@ -358,6 +367,7 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     remediationContextFile: inputs.remediationContextFile ?? null,
     acceptanceVerificationFile: inputs.acceptanceVerificationFile ?? null,
     ...(inputs.revisionNotesFile ? { revisionNotesFile: inputs.revisionNotesFile } : {}),
+    ...(inputs.childrenFile ? { childrenFile: inputs.childrenFile } : {}),
     ...(inputs.suppliedInputs?.length ? { suppliedInputs: inputs.suppliedInputs } : {}),
     channels: channelRecords,
     ...(claudeConfigDir ? { claudeConfigDir } : {}),
@@ -435,9 +445,14 @@ export function readGitHead(cwd: string): Promise<string | null> {
   });
 }
 
+/** Where every phase folder of one instance lives: `<root>/<instanceId>`. */
+export function instanceArtifactDir(root: string, instanceId: string): string {
+  return path.join(root, safeSegment(instanceId));
+}
+
 /** Where a phase attempt's steps leave their file artifacts. */
 export function phaseArtifactDir(root: string, instanceId: string, phaseId: string): string {
-  return path.join(root, safeSegment(instanceId), safeSegment(phaseId));
+  return path.join(instanceArtifactDir(root, instanceId), safeSegment(phaseId));
 }
 
 /** Where one candidate of a phase attempt leaves its file artifacts: a

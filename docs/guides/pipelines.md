@@ -817,23 +817,98 @@ stop is on. `after` chains of the task pipeline fire once per child, and
 Plan, accept the rest and start a follow-up instance. The details are in
 [the harness reference](../HARNESS.md#20-spawn-phases).
 
+### Read the children from a later phase
+
+Once a spawn phase has run its tasks, a later phase can read what every child
+did: its results, its checks, the gate decisions on it with their notes, its
+runs and what they cost, and its files. Declare `childrenContext` on that
+phase, and each of its steps gets a read-only **children manifest**, a JSON
+file at `ARGUS_CHILDREN_FILE`, with this instance's own phases, decisions and
+cost beside the children's. The pipelines form does not show the field:
+author it through the API, as you do the spawn phase.
+
+**Before you start:** a parent pipeline with a spawn phase, as in
+[Spawn child instances](#spawn-child-instances). The reading phase must run
+after the spawn phase: list the spawn phase in its `needs` (directly, or
+through another phase it needs).
+
+1. Add the reading phase after `tasks` in the parent's `phases`: in the body
+   you save in step 2 of [Spawn child instances](#spawn-child-instances)
+   (`POST /api/pipelines`), or in the whole definition you send to
+   `PUT /api/pipelines/<parent id>`:
+
+   ```json
+   {
+     "id": "learn",
+     "name": "Learn",
+     "cwd": "/home/you/repo",
+     "gated": true,
+     "needs": ["tasks"],
+     "childrenContext": { "fromPhase": "tasks" },
+     "steps": [
+       {
+         "name": "learn",
+         "prompt": "Read the children manifest. For each task, say what went well, what a person asked to change and why, and what it cost. Propose one change to the task pipeline."
+       }
+     ]
+   }
+   ```
+
+   **Expected:** `201` (or `200` for the `PUT`) with the saved definition. A
+   `400` names what to change, for example
+   `phase "learn": childrenContext.fromPhase names "tasks", which is not a dependency of this phase; …`
+   when `needs` leaves the spawn phase out. Saving changes the definition only;
+   a `PUT` is held with `409 instances-running` while an instance of the parent
+   is live (`?force=1` saves anyway, for the next instances).
+
+2. Run the parent as in [Spawn child instances](#spawn-child-instances). When
+   the Tasks phase succeeds, or you approve it at its `children` pause, Learn
+   starts. This alters state and runs Learn's agent, which invokes its
+   provider.
+
+   **Expected:** each Learn run's prompt, after your own words, says
+   `Children of this instance. The spawn phase "tasks" ran 2 tasks as child instances (2 succeeded).`
+   and names the manifest's path.
+
+3. Read what the run was given: `GET /api/runs/<run id>/invocation`. It is
+   only a read.
+
+   **Expected:** `childrenFile` names the manifest; `suppliedInputs` holds its
+   SHA-256 (kind `children-manifest`); `channels` lists `children-manifest`
+   (required) and one `child-artifacts` channel (optional) for each child that
+   has an artifact folder.
+
+**Expected result:** Learn's agent reads every task's child, its phases and
+results, the revise notes it got and what it cost, and can open each child's
+folder at `artifactsDir`, even under a `filesystem: "read-only"` profile.
+
+Argus builds the manifest once per attempt, so a revise of Learn reads the
+children again; a run that changes or deletes its copy fails as
+`change-context-integrity`. A child's folder holds each of its phases' latest
+attempt only, and at most 100 folders are offered per run. The manifest never
+names who made a decision, and it does not offer the parent's own folders:
+`{{artifactDir.<phaseId>}}` names one in the prompt, but Argus does not
+admit a run under a capability profile to it. The details are in
+[the harness reference](../HARNESS.md#the-parents-view-of-its-children).
+
 ## Advanced feature recipes
 
 The form preserves API-authored settings that it does not expose as editable controls. Use the protocol examples in the harness reference for these options:
 
-| Goal                                                         | Recipe                                                                                                                        |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
-| Limit CLI capabilities and execution environment             | [Capabilities](../HARNESS.md#3-capability-profiles), [environment policy](../HARNESS.md#4-environment-policy)                 |
-| Give a pipeline its own Claude instructions and settings     | [Claude setup folder](../HARNESS.md#3b-a-claude-setup-folder-per-pipeline-claudeconfigdir)                                    |
-| Require independently checked results                        | [Completion](../HARNESS.md#2-agent-completion--phase-success), [verification checks](../HARNESS.md#6-verification-checks)     |
-| Run in a separate git working tree                           | [Workspace isolation](../HARNESS.md#11-workspace-isolation)                                                                   |
-| Compare multiple attempts and select a verified candidate    | [Candidates](../HARNESS.md#12-candidates)                                                                                     |
-| Carry bounded outputs and notes between phases               | [Context and memory](../HARNESS.md#13-context-and-memory), [artifacts](../HARNESS.md#5-artifacts)                             |
-| Detect a stalled process                                     | [Timeouts](../HARNESS.md#7-timeouts)                                                                                          |
-| Inspect recovery and transition integrity                    | [Transitions and recovery](../HARNESS.md#18-transitions-and-recovery)                                                         |
-| Assess the execution trajectory                              | [Trajectory signals and judging](../HARNESS.md#19-trajectory-signals-and-judging)                                             |
-| Check the work against the task the instance was started for | [Command check inputs](../HARNESS.md#what-a-command-check-is-told), [recipe](#check-work-against-the-task-it-was-started-for) |
-| Open a gate when its pull request merges                     | [Approval conditions](../HARNESS.md#approval-conditions), [recipe](#open-a-gate-when-its-pull-request-merges)                 |
-| Work through a task list with one child instance per task    | [Spawn phases](../HARNESS.md#20-spawn-phases), [recipe](#spawn-child-instances)                                               |
+| Goal                                                             | Recipe                                                                                                                        |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Limit CLI capabilities and execution environment                 | [Capabilities](../HARNESS.md#3-capability-profiles), [environment policy](../HARNESS.md#4-environment-policy)                 |
+| Give a pipeline its own Claude instructions and settings         | [Claude setup folder](../HARNESS.md#3b-a-claude-setup-folder-per-pipeline-claudeconfigdir)                                    |
+| Require independently checked results                            | [Completion](../HARNESS.md#2-agent-completion--phase-success), [verification checks](../HARNESS.md#6-verification-checks)     |
+| Run in a separate git working tree                               | [Workspace isolation](../HARNESS.md#11-workspace-isolation)                                                                   |
+| Compare multiple attempts and select a verified candidate        | [Candidates](../HARNESS.md#12-candidates)                                                                                     |
+| Carry bounded outputs and notes between phases                   | [Context and memory](../HARNESS.md#13-context-and-memory), [artifacts](../HARNESS.md#5-artifacts)                             |
+| Detect a stalled process                                         | [Timeouts](../HARNESS.md#7-timeouts)                                                                                          |
+| Inspect recovery and transition integrity                        | [Transitions and recovery](../HARNESS.md#18-transitions-and-recovery)                                                         |
+| Assess the execution trajectory                                  | [Trajectory signals and judging](../HARNESS.md#19-trajectory-signals-and-judging)                                             |
+| Check the work against the task the instance was started for     | [Command check inputs](../HARNESS.md#what-a-command-check-is-told), [recipe](#check-work-against-the-task-it-was-started-for) |
+| Open a gate when its pull request merges                         | [Approval conditions](../HARNESS.md#approval-conditions), [recipe](#open-a-gate-when-its-pull-request-merges)                 |
+| Work through a task list with one child instance per task        | [Spawn phases](../HARNESS.md#20-spawn-phases), [recipe](#spawn-child-instances)                                               |
+| Let a later phase read every child's results, decisions and cost | [Children manifest](../HARNESS.md#the-parents-view-of-its-children), [recipe](#read-the-children-from-a-later-phase)          |
 
 Start with the [reference pipeline](../HARNESS.md#9-reference-pipeline), then add only the options your task needs. An unenforceable capability, unavailable transcript or incomplete check is not proof of compliance.

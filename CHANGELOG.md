@@ -121,6 +121,18 @@ All notable changes to Argus are documented here. The format follows
   under its own live instances (`409 instances-running`, `?force=1`), whose
   `instances` entries now carry `pipelineId`. The pipelines form cannot save a
   phase with no steps yet: author spawn phases through the API.
+- **Children manifest: a later phase reads its children.** A phase that
+  declares `childrenContext: { fromPhase }`, naming a spawn phase it depends
+  on, gets a read-only JSON manifest at `ARGUS_CHILDREN_FILE`: every task, its
+  child's phases, results, verification, gate decisions with their notes, runs
+  and cost, any child a fresh one replaced, and the instance's own phases,
+  decisions and cost. It never names who made a decision. Argus builds it once
+  per attempt, writes it for each run, and re-checks it when the run completes
+  (`change-context-integrity`). Each child's artifact folder is offered as an
+  optional read channel (at most 100 per run), so a step under a capability
+  profile can open it; the invocation record names the file (`childrenFile`)
+  and its hash. A saved `env.set` that names `ARGUS_CHILDREN_FILE` is refused
+  on its next save.
 
 ### Changed
 

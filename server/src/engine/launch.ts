@@ -85,6 +85,8 @@ import {
 import { acceptanceInstruction } from "../knowledge/acceptance.js";
 import { acceptanceVerificationFile, ensureAcceptanceDir } from "../knowledge/acceptanceStaging.js";
 import { markPipelineStarted } from "../sources/pipelines.js";
+import { childrenManifestFile, planChildrenManifest } from "../sources/childrenManifest.js";
+import type { ChildrenManifestPlan } from "../sources/childrenManifest.js";
 import {
   INSTANCE_KEEP,
   probeInstance,
@@ -125,6 +127,7 @@ import {
   STEP_CONTRACT,
   artifactInstruction,
   channelInstruction,
+  childrenContextInstruction,
   knowledgeContextInstruction,
   memoryInstruction,
   resultInstruction,
@@ -390,6 +393,24 @@ export function createLaunch(core: EngineCore) {
       phaseDef.changeIntent !== undefined ||
       phaseDef.changeContext !== undefined;
     const ledgerSnapshot = needsLedger ? await readLedger() : null;
+    // The children manifest (DL-A2b), read once per attempt like the ledger
+    // snapshot above: every run of the attempt is told the same children, and
+    // a retry or a revise reads them again. Before any realization opens or
+    // run is planned, so a manifest that cannot be built fails the phase as a
+    // definition Argus cannot honour.
+    let childrenPlan: Exclude<ChildrenManifestPlan, { error: string }> | null = null;
+    if (phaseDef.childrenContext) {
+      const built = await planChildrenManifest(inst, phaseDef.childrenContext, {
+        phaseId: phaseDef.id,
+        attempt: progress.attempt,
+        generatedAt: startedAt,
+      });
+      if ("error" in built) {
+        await failPhaseConfiguration(def, inst, phaseDef.id, built.error);
+        return;
+      }
+      childrenPlan = built;
+    }
     // The repository revision a change-intent phase's conformance projection is
     // scoped to: the phase's own tree, read once. A change phase reads no code,
     // so this is only the commit the answer is *about* — never evidence.
@@ -534,6 +555,7 @@ export function createLaunch(core: EngineCore) {
           ? candidates.variants[candidate % candidates.variants.length]
           : undefined;
       const runId = deps.newId();
+      const childrenFile = childrenPlan ? childrenManifestFile(runId) : null;
       const publishes = stepDef.name === publishingStep;
       // This run's semantic context, frozen now. A selector the snapshot
       // cannot resolve is carried to the launch as the reason the step will
@@ -682,6 +704,7 @@ export function createLaunch(core: EngineCore) {
             plannedAcceptance?.proposalId ?? null,
             plannedAcceptance?.required ?? [],
           ) +
+          childrenContextInstruction(childrenPlan?.manifest ?? null, childrenFile) +
           memoryInstruction(memoryPolicy) +
           (knowledgeContext && "resolved" in knowledgeContext
             ? knowledgeContextInstruction(knowledgeContext.resolved.supplied)
@@ -745,6 +768,14 @@ export function createLaunch(core: EngineCore) {
           text: notes.text,
           file: notes.full === null ? null : { path: notesFile, contents: notes.full },
         },
+        childrenManifest:
+          childrenPlan && childrenFile
+            ? {
+                path: childrenFile,
+                contents: childrenPlan.contents,
+                artifactDirs: childrenPlan.artifactDirs,
+              }
+            : null,
       });
     }
     // Record the runIds on the instance up front, then persist once (no write races).
@@ -849,6 +880,7 @@ export function createLaunch(core: EngineCore) {
           signalToken: unit.signalToken,
           noteSuffix: unit.revisionNotes.text + noteSuffix,
           revisionNotesFile: unit.revisionNotes.file,
+          childrenManifest: unit.childrenManifest,
         },
       });
     }
@@ -1210,6 +1242,9 @@ export function createLaunch(core: EngineCore) {
     // Every revise note in full, only when the prompt's block left some out:
     // an optional read channel, so a profiled run can open it.
     if (ctx.revisionNotesFile) env.ARGUS_REVISION_NOTES_FILE = ctx.revisionNotesFile.path;
+    // The children manifest (DL-A2b): a required read channel, and every
+    // child's artifact folder an optional one, named inside the manifest.
+    if (ctx.childrenManifest) env.ARGUS_CHILDREN_FILE = ctx.childrenManifest.path;
     // The channel paths, now that every one is known, then the retry note —
     // still last, after everything Argus says about this run. Only a run with
     // a capability profile is told the paths: a profile is what can deny the
@@ -1256,6 +1291,14 @@ export function createLaunch(core: EngineCore) {
           sha256: sha256Hex(plannedRealization.remediation.text),
         });
       }
+      if (ctx.childrenManifest) {
+        await writeReadOnlyInput(ctx.childrenManifest.path, ctx.childrenManifest.contents);
+        suppliedInputs.push({
+          kind: "children-manifest",
+          path: ctx.childrenManifest.path,
+          sha256: sha256Hex(ctx.childrenManifest.contents),
+        });
+      }
       // The clock the deadline runs from: now, with the slot held and the
       // process about to start.
       run.startedAt = nowISO();
@@ -1282,6 +1325,8 @@ export function createLaunch(core: EngineCore) {
         remediationContextFile: remediationFile,
         acceptanceVerificationFile: acceptanceFile,
         revisionNotesFile: ctx.revisionNotesFile?.path ?? null,
+        childrenFile: ctx.childrenManifest?.path ?? null,
+        childArtifacts: ctx.childrenManifest?.artifactDirs ?? [],
         suppliedInputs,
         knowledgeContext:
           contextFile && resolvedContext

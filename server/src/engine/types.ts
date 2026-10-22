@@ -1,3 +1,4 @@
+import type { ChildArtifactsInput } from "../harness/channels.js";
 import type { PreparedInvocation } from "../harness/invocation.js";
 import type { SignalBinding } from "../harness/signalToken.js";
 import type { ResolvedKnowledgeContext } from "../knowledge/context.js";
@@ -78,6 +79,9 @@ export interface PlannedRun {
   /** The phase's revise notes as this run's prompt carries them (oldest
    *  first, bounded), and every note in full when the bound left some out. */
   revisionNotes: { text: string; file: { path: string; contents: string } | null };
+  /** The children manifest this run receives. Null = the phase declares no
+   *  `childrenContext`. */
+  childrenManifest: PlannedChildrenManifest | null;
 }
 
 /**
@@ -135,6 +139,19 @@ export type PlannedChangeIntent =
  */
 export type PlannedChangeContext =
   { accepted: AcceptedChangeProposal; text: string } | { error: string };
+
+/**
+ * The children manifest one run of a `childrenContext` phase receives
+ * (DL-A2b): built once per attempt, so every run of the attempt carries the
+ * same `contents`, and written to the run's own `path` at launch.
+ */
+export interface PlannedChildrenManifest {
+  /** `invocations/<runId>/children/children-manifest.json`. */
+  path: string;
+  contents: string;
+  /** The child folders offered as optional read channels. */
+  artifactDirs: ChildArtifactsInput[];
+}
 
 export type PipelineSpawnFn = (
   run: Run,
@@ -466,6 +483,8 @@ export interface LaunchContext {
   /** Every revision note in full, for the run's `ARGUS_REVISION_NOTES_FILE`.
    *  Null unless the prompt's block had to leave notes out. */
   revisionNotesFile: { path: string; contents: string } | null;
+  /** The run's children manifest as planned, or null. */
+  childrenManifest: PlannedChildrenManifest | null;
 }
 
 /**

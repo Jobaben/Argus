@@ -1,8 +1,13 @@
 /** Pipeline definitions, running instances, and the board overview. */
-import type { AbortCause, PendingGateOperation } from "./gates.js";
+import type {
+  AbortCause,
+  GateDecisionKind,
+  GateDecisionMechanism,
+  PendingGateOperation,
+} from "./gates.js";
 
 import type { AgentRuntimeId, ReasoningEffort } from "./runtimes.js";
-import type { Trigger } from "./schedules.js";
+import type { Run, RunOutcome, RunStatus, Trigger } from "./schedules.js";
 import type { InstanceTransitionLogState } from "./transitions.js";
 import type { AutoApprove, Rubric, TrajectorySignalKind } from "./verdict.js";
 import type {
@@ -109,13 +114,13 @@ export type RetryableClass =
   | "change-proposal"
   /**
    * An Argus-owned read-only input the run was given — its ChangeContext, its
-   * ImplementationScope, its RemediationContext — no longer hashes to what
-   * Argus recorded at launch (Phase 8). The exact counterpart of
-   * `knowledge-context-integrity`, and it asks the same question: *did the
-   * bytes supplied to this invocation change?*, never *is this still the
-   * newest proposal?* Accepted intent is immutable, so a newer proposal is
-   * never tampering. The completion is refused and nothing the run proposed
-   * becomes durable. Not retried by default.
+   * ImplementationScope, its RemediationContext (Phase 8), its children
+   * manifest (DL-A2b) — no longer hashes to what Argus recorded at launch.
+   * The exact counterpart of `knowledge-context-integrity`, and it asks the
+   * same question: *did the bytes supplied to this invocation change?*, never
+   * *is this still the newest proposal?* Accepted intent is immutable, so a
+   * newer proposal is never tampering. The completion is refused and nothing
+   * the run proposed becomes durable. Not retried by default.
    */
   | "change-context-integrity"
   /**
@@ -648,6 +653,187 @@ export interface PhaseChildrenReview extends PhaseChildren {
   notSucceeded: string[];
 }
 
+// ── Children context (the parent's view of its children) ─────────────────────
+
+/**
+ * `PhaseDef.childrenContext`: give every step of this phase a read-only
+ * {@link ChildrenManifest} of the children an earlier spawn phase started
+ * (`ARGUS_CHILDREN_FILE`), and each child's artifact folder as a read channel.
+ */
+export interface ChildrenContextSpec {
+  /** A spawn phase of the same pipeline that this phase depends on, directly
+   *  or through other phases, so its children have settled before this phase
+   *  starts. Checked when the pipeline is saved. */
+  fromPhase: string;
+}
+
+/**
+ * The cost of a set of runs: each run record's `costUsd` and `tokens` as
+ * recorded, summed. The manifest adds no estimate of its own, but for a
+ * supported Codex model `Run.costUsd` is itself Argus's public token-price
+ * estimate, and it is summed like any other.
+ * Superseded attempts count: a phase retried twice cost all three runs.
+ */
+export interface ChildrenManifestCost {
+  runs: number;
+  /** `Run.costUsd` summed, rounded to 4 decimals. Null when no run recorded a cost. */
+  costUsd: number | null;
+  /** `Run.tokens` (input + output) summed. Null when no run recorded any. */
+  tokens: number | null;
+  /** Runs with no recorded cost, and so not in `costUsd`. */
+  unpricedRuns: number;
+  /** Recorded run durations, summed, in milliseconds. */
+  durationMs: number;
+}
+
+/** One run of a phase, as its record says. Superseded attempts included. */
+export interface ChildrenManifestRun {
+  runId: string;
+  status: RunStatus;
+  queuedAt: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  durationMs: number | null;
+  costUsd: number | null;
+  tokens: number | null;
+  model: string | null;
+  runtime: AgentRuntimeId;
+  /** The agent's own report (`ARGUS_OUTCOME`), when it gave one. */
+  outcome?: RunOutcome;
+  /** How the process ended, when Argus knows more than the exit code. */
+  termination?: NonNullable<Run["termination"]>;
+  /** The run's recorded error, clipped to 500 characters. */
+  error?: string;
+}
+
+/** One gate decision that took effect on an instance. Who made it is not
+ *  included: the decision record keeps that, and a step has no use for it. */
+export interface ChildrenManifestDecision {
+  /** `GD-…`, the id `GET /api/instances/:id/gate-decisions` shows. */
+  id: string;
+  decision: GateDecisionKind;
+  /** A person (`operator`), an automated rule (`verdict-auto-approve`,
+   *  `approval-condition`), the parent's own decision carried out on a child
+   *  (`parent-decision`), or `unspecified`. */
+  mechanism: GateDecisionMechanism;
+  /** The phase attempt(s) it acted on: one for approve and revise, every
+   *  phase still going for abort. */
+  phases: Array<{ phaseId: string; attempt: number }>;
+  /** A revise note, as recorded (clipped to 2,000 characters). */
+  note?: string;
+  recordedAt: string;
+  /** `incomplete` while its effects are still being applied. */
+  effect: "applied" | "incomplete";
+  /** Mechanism `parent-decision`: the parent's decision this one carried out. */
+  parentDecisionId?: string;
+}
+
+/** One phase of an instance in the manifest. */
+export interface ChildrenManifestPhase {
+  id: string;
+  name: string;
+  status: PhaseStatus;
+  /** The current attempt, 0-based. */
+  attempt: number;
+  gated: boolean;
+  pause?: PhaseProgress["pause"];
+  /** Automatic retries the current attempt chain used. */
+  retries?: number;
+  /** The validated structured result. */
+  result?: unknown;
+  /** Why the phase failed, on a failed phase. `reason` clipped to 2,000 characters. */
+  failure?: { failureClass?: PhaseFailureClass; reason?: string };
+  /** Argus's checks over the latest attempt. */
+  verification?: VerificationReport;
+  /** The latest attempt's artifact folder — emptied at every attempt, so it
+   *  holds that attempt's files only. On a child whose folder is offered
+   *  (`artifactsDir`) only. */
+  artifactDir?: string;
+  /** The worktree's branch and the commit it was cut from. */
+  workspace?: { branch: string; base: string; baseHead: string };
+  /** Every run of the phase, oldest first, superseded attempts included. */
+  runs: ChildrenManifestRun[];
+  cost: ChildrenManifestCost;
+}
+
+/** One instance in the manifest: a child, or the parent itself. */
+export interface ChildrenManifestInstance {
+  instanceId: string;
+  /** Null when Argus could not read the record (never created, removed, or
+   *  unreadable); every field below is then absent and `warnings` says why. */
+  status: InstanceStatus | null;
+  pipelineId?: string;
+  createdAt?: string;
+  endedAt?: string | null;
+  abortCause?: AbortCause;
+  /** `<artifacts>/<instanceId>`: the folder holding every phase folder of
+   *  this child, offered to the run as a read channel. Absent on the parent,
+   *  on a child that has no folder, and past the per-run channel limit. */
+  artifactsDir?: string;
+  phases?: ChildrenManifestPhase[];
+  /** Gate decisions that took effect, oldest first. */
+  decisions?: ChildrenManifestDecision[];
+  cost?: ChildrenManifestCost;
+}
+
+/** One task of the spawn phase and the children that ran it. */
+export interface ChildrenManifestTask {
+  /** The task's position in the list (`InstanceParentRef.index`). */
+  index: number;
+  key: string;
+  /** The task's title, clipped to 60 characters; `task` holds it whole. */
+  title?: string;
+  /** The keys of the tasks it waited for. */
+  dependsOn: string[];
+  /** The task's state as the spawn phase last saw it. */
+  state: SpawnTaskState;
+  reason?: string;
+  /** The task object as the current child received it
+   *  (`triggerPayload.task`). Absent when that record cannot be read. */
+  task?: Record<string, unknown>;
+  /** The child that runs (or ran) the task. Absent while the task has none:
+   *  never planned, or its child replaced and the new one not planned yet. */
+  child?: ChildrenManifestInstance;
+  /** Children a fresh child replaced (after an abort or a refused start),
+   *  oldest first. */
+  earlierChildren?: ChildrenManifestInstance[];
+}
+
+/**
+ * The document at `ARGUS_CHILDREN_FILE`: what a phase that declares
+ * `childrenContext` knows about the children of an earlier spawn phase, and
+ * about its own instance. Built once per phase attempt, so every run of the
+ * attempt reads the same bytes, and re-hashed when a run completes.
+ */
+export interface ChildrenManifest {
+  schemaVersion: 1;
+  /** When the attempt was planned. */
+  generatedAt: string;
+  /** The phase attempt this manifest was built for. */
+  for: { instanceId: string; phaseId: string; attempt: number };
+  /** The spawn phase it describes (`childrenContext.fromPhase`). */
+  spawnPhase: {
+    id: string;
+    name: string;
+    status: PhaseStatus;
+    attempt: number;
+    /** The pipeline every child runs; null when the phase never built a task
+     *  list (it was skipped). */
+    childPipelineId: string | null;
+    /** Tasks by state; a state with no task is absent. */
+    counts: Partial<Record<SpawnTaskState, number>>;
+  };
+  /** Every task, in list order. Empty when the spawn phase built no list. */
+  tasks: ChildrenManifestTask[];
+  /** The instance this manifest belongs to: its phases, decisions and cost. */
+  parent: ChildrenManifestInstance;
+  /** Every child's runs, earlier children included. The parent's own cost is
+   *  `parent.cost`. */
+  childrenCost: ChildrenManifestCost;
+  /** What Argus could not read or offer while building this, one line each. */
+  warnings: string[];
+}
+
 /**
  * A deterministic check Argus runs itself once every step of a phase has
  * reported success — the difference between "the agent said the tests pass"
@@ -830,7 +1016,7 @@ export interface AgentInvocationRecord {
    * Every Argus-owned **read-only input** materialized for this invocation
    * besides the KnowledgeContext, with the SHA-256 of the bytes as written
    * (Phase 8): the ChangeContext, the ImplementationScope, the
-   * RemediationContext.
+   * RemediationContext, and the children manifest (DL-A2b).
    *
    * The integrity counterpart of {@link knowledgeContext}'s hash, and there
    * for the same reason: at completion the bytes must still hash to this, or
@@ -855,6 +1041,11 @@ export interface AgentInvocationRecord {
    *  (`ARGUS_REVISION_NOTES_FILE`), when the prompt could not carry them all.
    *  Absent otherwise. */
   revisionNotesFile?: string;
+  /** Where this run's children manifest was written (`ARGUS_CHILDREN_FILE`),
+   *  when its phase declares `childrenContext`. The children's artifact
+   *  folders it was offered are in `channels` (`child-artifacts`). Absent
+   *  otherwise. */
+  childrenFile?: string;
   /**
    * Every Argus-owned channel this invocation was offered, with the access it
    * needs and whether the runtime could honour it. A channel `unavailable`
@@ -1095,6 +1286,13 @@ export interface PhaseDef {
    * {@link SpawnChildrenSummary}.
    */
   spawn?: SpawnPolicy;
+  /**
+   * Give every step of this phase a read-only {@link ChildrenManifest} of the
+   * children an earlier spawn phase started (`ARGUS_CHILDREN_FILE`), and each
+   * child's artifact folder as a read channel. `fromPhase` must be a spawn
+   * phase this phase depends on. Absent = an ordinary phase.
+   */
+  childrenContext?: ChildrenContextSpec;
 }
 
 // ── Harness: Argus-owned invocation channels ─────────────────────────────────
@@ -1118,6 +1316,8 @@ export type InvocationChannelKind =
   | "remediation-context"
   | "acceptance-verification"
   | "revision-notes"
+  | "children-manifest"
+  | "child-artifacts"
   | "artifact-dir"
   | "memory-dir";
 

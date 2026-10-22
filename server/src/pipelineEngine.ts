@@ -37,6 +37,7 @@ export {
   artifactInstruction,
   memoryInstruction,
   knowledgeContextInstruction,
+  childrenContextInstruction,
   buildStepPlan,
   buildClaudeArgs,
 } from "./engine/prompts.js";
