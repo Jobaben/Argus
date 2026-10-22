@@ -17,9 +17,8 @@
  * return on its own, say so, and be cheap to run again.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { WebSocket as NodeWebSocket } from "ws";
 import type {
   ActivityEvent,
@@ -29,8 +28,7 @@ import type {
   Run,
   Situation,
 } from "@argus/contracts";
-import { RUNTIMES } from "../runtimes/index.js";
-import { probeCommand } from "../setup/prereqs.js";
+import { bundledSkillDir, installSkills, installedSkillDir, reportInstall } from "./skills.js";
 import {
   buildSnapshot,
   endLine,
@@ -39,7 +37,6 @@ import {
   parseTailArgs,
   refreshFor,
   render,
-  SKILL_RUNTIMES,
   TAIL_HELP,
   Tracker,
   type SkillRuntime,
@@ -370,85 +367,30 @@ export async function runTail(options: TailOptions, io: TailIo): Promise<number>
 // ── Skill install ────────────────────────────────────────────────────────────
 
 /**
- * One skill file, every agent CLI that can read it.
- *
- * Claude Code and Codex both discover skills the same way — a
- * `skills/<name>/SKILL.md` tree under the CLI's home, with `name` and
- * `description` frontmatter, picked implicitly when a request matches the
- * description or explicitly by name (`/argus-tail` in Claude Code, `$argus-tail`
- * in Codex). So the skill is written once, in the runtime-neutral dialect both
- * accept, and installed under whichever homes apply. The homes come from the
- * runtime registry (`ARGUS_CLAUDE_HOME`, `ARGUS_CODEX_HOME` / `CODEX_HOME`
- * honoured), so pointing Argus at a relocated CLI points the install there too.
+ * `--install-skill` installs this command's own skill through `argus skills`,
+ * so the two can never disagree about where a skill lands or how an update
+ * treats an edited copy. See `skills.ts`.
  */
 const SKILL_NAME = "argus-tail";
 
 /** The skill file shipped in the repo, resolved from either `src/cli` or `dist/cli`. */
 export function bundledSkillPath(): string {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(here, "..", "..", "..", ".claude", "skills", SKILL_NAME, "SKILL.md");
+  return path.join(bundledSkillDir(SKILL_NAME), "SKILL.md");
 }
 
 /** Where the skill lands for one runtime; `home` overrides the registry's answer. */
 export function installedSkillPath(runtime: SkillRuntime = "claude", home?: string): string {
-  return path.join(home ?? RUNTIMES[runtime].home(), "skills", SKILL_NAME, "SKILL.md");
-}
-
-const INVOKE: Record<SkillRuntime, string> = { claude: `/${SKILL_NAME}`, codex: `$${SKILL_NAME}` };
-
-/** Which runtimes a target names; `auto` asks PATH and falls back to Claude Code. */
-export function resolveSkillTargets(
-  target: SkillTarget,
-  probe: (runtime: SkillRuntime) => boolean,
-): SkillRuntime[] {
-  if (target === "all") return [...SKILL_RUNTIMES];
-  if (target !== "auto") return [target];
-  const found = SKILL_RUNTIMES.filter((rt) => probe(rt));
-  return found.length > 0 ? found : ["claude"];
-}
-
-function defaultProbe(runtime: SkillRuntime): boolean {
-  const rt = RUNTIMES[runtime];
-  return probeCommand(rt.bin(), rt.versionArgs).ok;
+  return path.join(installedSkillDir(SKILL_NAME, runtime, home), "SKILL.md");
 }
 
 async function installSkill(target: SkillTarget, io: TailIo): Promise<number> {
-  const from = bundledSkillPath();
-  let body: string;
+  const skillsIo = { out: io.out, err: io.err, probe: io.probe, label: "argus tail" };
   try {
-    body = await readFile(from, "utf8");
-  } catch {
-    io.err(`[argus tail] the bundled skill is missing at ${from} — reinstall Argus from git`);
+    return reportInstall(await installSkills([SKILL_NAME], target, skillsIo), target, skillsIo);
+  } catch (e) {
+    io.err(`[argus tail] ${e instanceof Error ? e.message : String(e)}`);
     return 1;
   }
-  const targets = resolveSkillTargets(target, io.probe ?? defaultProbe);
-  let failed = false;
-  for (const runtime of targets) {
-    const to = installedSkillPath(runtime);
-    try {
-      await mkdir(path.dirname(to), { recursive: true });
-      await writeFile(to, body, "utf8");
-    } catch (e) {
-      io.err(`[argus tail] could not write ${to}: ${e instanceof Error ? e.message : String(e)}`);
-      failed = true;
-      continue;
-    }
-    io.out(
-      `[argus tail] installed the ${SKILL_NAME} skill for ${RUNTIMES[runtime].label} at ${to}`,
-    );
-  }
-  if (failed) return 1;
-  const how = targets.map((rt) => `${INVOKE[rt]} in ${RUNTIMES[rt].label}`).join(", ");
-  io.out(
-    `[argus tail] a session on this machine can now be asked "what is Argus doing?" — or invoke the skill by name: ${how}`,
-  );
-  if (target === "auto" && targets.length < SKILL_RUNTIMES.length) {
-    const skipped = SKILL_RUNTIMES.filter((rt) => !targets.includes(rt));
-    io.out(
-      `[argus tail] skipped ${skipped.map((rt) => RUNTIMES[rt].label).join(", ")} (CLI not found on PATH) — \`argus tail --install-skill=all\` installs regardless`,
-    );
-  }
-  return 0;
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────

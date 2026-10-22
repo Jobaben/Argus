@@ -35,7 +35,7 @@ export interface GateIo {
   env: NodeJS.ProcessEnv;
 }
 
-async function readJson(res: Response): Promise<{ error?: string; code?: string } | null> {
+export async function readJson(res: Response): Promise<{ error?: string; code?: string } | null> {
   try {
     return (await res.json()) as { error?: string; code?: string };
   } catch {
@@ -43,7 +43,10 @@ async function readJson(res: Response): Promise<{ error?: string; code?: string 
   }
 }
 
-async function obtainCredentials(io: GateIo): Promise<Credentials | null> {
+/** ARGUS_USER / ARGUS_PASSWORD, else the terminal's answer, else null. */
+export async function obtainCredentials(
+  io: Pick<GateIo, "env" | "isTTY" | "prompt">,
+): Promise<Credentials | null> {
   const fromEnv = credentialsFromEnv(io.env);
   if (fromEnv) return fromEnv;
   if (!io.isTTY) return null;
@@ -138,7 +141,7 @@ export async function runGate(options: GateOptions, io: GateIo): Promise<number>
 }
 
 /** Ask on the terminal, echoing the answer or not. */
-function terminalPrompt(question: string, hidden: boolean): Promise<string> {
+export function terminalPrompt(question: string, hidden: boolean): Promise<string> {
   const muted = new Writable({
     write(_chunk, _enc, cb) {
       cb();

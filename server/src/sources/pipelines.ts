@@ -2,7 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { argusWorkRoot, claudeHome, paths } from "../claudeHome.js";
-import { mintHookToken, validateTrigger } from "./schedules.js";
+import { ScheduleValidationError, mintHookToken, validateTrigger } from "./schedules.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
 import type {
   ChildrenContextSpec,
@@ -2511,6 +2511,20 @@ function validateProducedByPhaseSelectors(phases: PhaseDef[]): void {
   }
 }
 
+/**
+ * The shared trigger validator throws the schedules' error type, which the
+ * pipeline routes do not map: a malformed pipeline trigger was a 500 with the
+ * right message. Rethrown as this module's own, it is the 400 it always was.
+ */
+function validatePipelineTrigger(raw: unknown): Trigger {
+  try {
+    return validateTrigger(raw, { allowWindowed: true });
+  } catch (e) {
+    if (e instanceof ScheduleValidationError) throw new PipelineValidationError(e.message);
+    throw e;
+  }
+}
+
 export function validatePipelineInput(raw: unknown): PipelineInput {
   if (!raw || typeof raw !== "object") throw new PipelineValidationError("body required");
   const r = raw as Record<string, unknown>;
@@ -2524,7 +2538,7 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
   // an instance that starts and then simply never finishes, which is how a DAG
   // executor fails when nobody checks.
   validateGraph(phases);
-  const trigger = r.trigger == null ? null : validateTrigger(r.trigger, { allowWindowed: true });
+  const trigger = r.trigger == null ? null : validatePipelineTrigger(r.trigger);
   const overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
   const enabled = r.enabled === undefined ? true : Boolean(r.enabled);
   const input: PipelineInput = { name: r.name.trim(), phases, trigger, enabled, overlapPolicy };
@@ -2572,8 +2586,7 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
     // graph's checks — otherwise routing could only be broken by PUT.
     validateGraph(patch.phases);
   }
-  if ("trigger" in r)
-    patch.trigger = r.trigger == null ? null : validateTrigger(r.trigger, { allowWindowed: true });
+  if ("trigger" in r) patch.trigger = r.trigger == null ? null : validatePipelineTrigger(r.trigger);
   if ("enabled" in r) patch.enabled = Boolean(r.enabled);
   if ("overlapPolicy" in r) patch.overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
   if ("model" in r) patch.model = r.model == null ? undefined : validateModel(r.model, "pipeline");
@@ -2694,6 +2707,29 @@ export function assertValidAsSpawnTarget(
       );
     }
   }
+}
+
+/**
+ * Everything a save of `raw` would check, without saving it: the definition
+ * itself, its `after` trigger, and its spawn phases against the pipelines that
+ * exist. `id` names the pipeline it would replace (a `PUT`), or null for a new
+ * one. Lets an author — often an agent — iterate on the 400s before anything
+ * lands in the store, and before any edit could reach a running instance.
+ *
+ * Not under the store lock: it writes nothing, so a concurrent save can only
+ * make its answer stale, which the real save then re-checks.
+ */
+export async function checkPipeline(raw: unknown, id: string | null): Promise<PipelineInput> {
+  const input = validatePipelineInput(raw);
+  // A new pipeline has no id yet; one no definition can carry stands in, so
+  // the self-reference checks pass as they would for the id it will be given.
+  const self = id ?? "(new pipeline)";
+  if (input.trigger) await assertAfterTriggerValid(self, input.trigger);
+  const others = (await readPipelines()).filter((d) => d.id !== id);
+  const saved = { id: self, trigger: input.trigger, phases: input.phases };
+  assertSpawnTargetsValid(saved, others);
+  assertValidAsSpawnTarget(saved, others);
+  return input;
 }
 
 export async function createPipeline(

@@ -25,6 +25,8 @@ Usage: argus [options]
        argus tail [tail options]
        argus approve <instanceId> [--phase <id>]
        argus revise <instanceId> --note "<text>" [--phase <id>]
+       argus pipeline list | show | runtimes | validate | create | update | start
+       argus skills [status] | install [<skill>...] [--for claude|codex|all]
        argus release [--ref <ref>] | --list | --use <id>
 
 Commands:
@@ -38,6 +40,13 @@ Commands:
                  (ARGUS_USER / ARGUS_PASSWORD, or the prompt).
   revise         send a paused phase back to its agent with a note; the phase
                  runs again. Same credentials. \`argus revise --help\`.
+  pipeline       author pipelines from a terminal: list and show definitions,
+                 check one without saving it, save, replace and start them.
+                 \`argus pipeline --help\`.
+  skills         install or update the agent skills Argus ships
+                 (argus-pipeline, argus-tail) in the Claude Code and Codex
+                 homes, so agents author pipelines the way this build
+                 expects. \`argus skills --help\`.
   release        build a commit into its own folder and pin it, so pipelines
                  keep running while you work in the checkout.
                  \`argus release --help\`.
@@ -222,6 +231,12 @@ if (argv[0] === "tail") {
   const t = target();
   ensureBuilt(t, false);
   delegate(t, "gate.js", argv);
+} else if (argv[0] === "pipeline" || argv[0] === "skills") {
+  // `pipeline` is another client of the running server; `skills` installs the
+  // skills of the tree it runs from, so a pinned release installs its own.
+  const t = target();
+  ensureBuilt(t, false);
+  delegate(t, `${argv[0]}.js`, argv.slice(1));
 } else if (argv[0] === "release") {
   // Always the checkout's: it is what builds and pins the releases.
   const t = { kind: "dev", root: checkout };

@@ -6,6 +6,8 @@ import { hostname } from "node:os";
 import { claudeHome } from "./claudeHome.js";
 import { codexHome } from "./codexHome.js";
 import { readRuntimes } from "./sources/runtimeInfo.js";
+import { agentSkills, installSkills } from "./cli/skills.js";
+import { BUNDLED_SKILLS } from "./cli/skillsCore.js";
 import { readAgents, readTimeline } from "./sources/jobs.js";
 import { readDaemon } from "./sources/daemon.js";
 import {
@@ -87,6 +89,7 @@ import {
   IssueValidationError,
 } from "./sources/issues.js";
 import {
+  checkPipeline,
   createPipeline,
   deletePipeline,
   readPipelines,
@@ -156,6 +159,8 @@ import type {
   H2CollectionStatus,
   HealthResponse,
   MachineSummary,
+  AgentSkillsInstallResponse,
+  AgentSkillsResponse,
 } from "@argus/contracts";
 import { buildGateDecisionsResponse, readGateDecisions } from "./sources/gateDecisions.js";
 import { readTransitionLog } from "./transitionLog/store.js";
@@ -520,6 +525,7 @@ export function createApp(deps: AppDeps): Hono {
   app.use("/api/fleet/label", admin);
   app.use("/api/omnibar/plan", admin);
   app.use("/api/omnibar/execute", admin);
+  app.use("/api/skills/install", admin);
   // Knowledge Ledger: proposals (claims, revisions, evidence, justifications)
   // are admin writes; reads stay open like every other dashboard read.
   app.on(["POST", "PUT", "PATCH", "DELETE"], "/api/knowledge/*", admin);
@@ -531,6 +537,37 @@ export function createApp(deps: AppDeps): Hono {
   app.post("/api/setup/apply", async (c) =>
     c.json(await import("./setup/prereqs.js").then((m) => m.applyAll())),
   );
+
+  // Agent skills: what `argus skills` reports, and its install, for the
+  // Pipelines page. Installing writes into the operator's agent homes, so it is
+  // admin-gated and only ever runs when asked — never at startup.
+  const cliAvailable = async () => {
+    const { runtimes } = await readRuntimes();
+    return (rt: string) => runtimes.some((r) => r.id === rt && r.available);
+  };
+  app.get("/api/skills", async (c) => {
+    try {
+      const body: AgentSkillsResponse = await agentSkills(await cliAvailable());
+      return c.json(body);
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    }
+  });
+  app.post("/api/skills/install", async (c) => {
+    try {
+      const probe = await cliAvailable();
+      const quiet = { out: () => {}, err: () => {}, probe };
+      const results = await installSkills(BUNDLED_SKILLS, "auto", quiet);
+      const body: AgentSkillsInstallResponse = {
+        ok: results.every((r) => r.action !== "failed"),
+        results,
+        ...(await agentSkills(probe)),
+      };
+      return c.json(body, body.ok ? 200 : 500);
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    }
+  });
 
   app.get("/api/agents", async (c) => c.json({ agents: await readAgents() }));
   app.get("/api/agents/:short/timeline", async (c) =>
@@ -1216,6 +1253,23 @@ export function createApp(deps: AppDeps): Hono {
         randomUUID(),
       );
       return c.json(created, 201);
+    } catch (e) {
+      return fail(c, e, PipelineValidationError);
+    }
+  });
+
+  // Every check a save makes, and no save. Admin-gated with the rest of
+  // `/api/pipelines/:id`: it reads nothing secret, but it is part of authoring.
+  // `?id=` checks the body as a replacement (`PUT`) of that pipeline.
+  app.post("/api/pipelines/validate", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    const id = c.req.query("id") || null;
+    if (id && !(await readPipelines()).some((d) => d.id === id)) {
+      return c.json({ error: "not found" }, 404);
+    }
+    try {
+      return c.json({ valid: true, pipeline: await checkPipeline(body.value, id) });
     } catch (e) {
       return fail(c, e, PipelineValidationError);
     }
