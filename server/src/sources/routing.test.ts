@@ -5,6 +5,7 @@ import {
   ResultValidationError,
   evaluatePredicate,
   evaluateRoutes,
+  resolvePath,
   validateResult,
 } from "./routing.js";
 import type { Dependency, ResultSchema, RouteCondition } from "./pipelineTypes.js";
@@ -65,6 +66,27 @@ test("evaluatePredicate supports only equality, inequality, one-of, and existenc
     true,
   );
   assert.equal(evaluatePredicate(value, { path: ["missing"], operator: "exists" }), false);
+});
+
+test("resolvePath steps only through plain objects and returns a list at the end", () => {
+  const value = { plan: { tasks: [{ id: "a" }] }, note: null };
+  assert.deepEqual(resolvePath(value, []), { found: true, value }, "[] is the value itself");
+  assert.deepEqual(
+    resolvePath(value, ["plan", "tasks"]),
+    { found: true, value: [{ id: "a" }] },
+    "a list at the end",
+  );
+  assert.deepEqual(
+    resolvePath(value, ["plan", "tasks", "0", "id"]),
+    { found: false, value: undefined },
+    "never into a list",
+  );
+  assert.deepEqual(
+    resolvePath(value, ["note", "x"]),
+    { found: false, value: undefined },
+    "not through null",
+  );
+  assert.deepEqual(resolvePath(value, ["note"]), { found: true, value: null }, "a null leaf");
 });
 
 test("evaluateRoutes selects the group default only when no ordinary condition matches", () => {

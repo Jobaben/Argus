@@ -12,6 +12,7 @@ import {
   applyAbort,
   applyTemplate,
   applyUnlaunchable,
+  applyConditionFailed,
   candidateFailureClass,
   candidateFailureReason,
   candidateRecordOf,
@@ -319,6 +320,65 @@ test("applyUnlaunchable leaves a phase that is not running alone", () => {
   assert.equal(res.instance.phases[1].status, "pending");
   assert.equal(res.instance.status, "running");
   assert.deepEqual(res.startPhases, []);
+});
+
+/** Phase 0 (`brainstorm`, gated) waiting at its gate after a completion. */
+function atGate(d: PipelineDefinition): PipelineInstance {
+  const inst = advance(
+    d,
+    started(d),
+    sig({ type: "completed", payload: { summary: "s" } }),
+    NOW,
+  ).instance;
+  assert.equal(inst.phases[0].status, "awaiting-approval", "the fixture waits at its gate");
+  assert.equal(inst.phases[0].pause, "gate", "for a decision, not for input");
+  return inst;
+}
+
+test("applyConditionFailed fails the exact attempt at its gate, never retried, and settles", () => {
+  const d = def();
+  const reason = 'approval condition "pr" exited 3: abandoned';
+  const res = applyConditionFailed(d, atGate(d), "brainstorm", 0, reason, NOW);
+  const phase = res.instance.phases[0];
+  assert.equal(phase.status, "failed");
+  assert.deepEqual(phase.payload, {
+    summary: "s",
+    reason,
+    failureClass: "approval-condition",
+  });
+  assert.equal(phase.retryAt, undefined, "no retry is scheduled");
+  assert.equal(res.instance.status, "failed", "nothing else can progress");
+  assert.equal(res.instance.phases[1].status, "pending", "the downstream phase never starts");
+  assert.deepEqual(res.startPhases, []);
+  const event = res.events?.find((e) => e.kind === "condition-failed");
+  assert.deepEqual(event, {
+    kind: "condition-failed",
+    phaseId: "brainstorm",
+    attempt: 0,
+    detail: reason,
+  });
+});
+
+test("applyConditionFailed leaves anything but the exact attempt at a gate pause alone", () => {
+  const d = def();
+  const unchanged = (inst: PipelineInstance, attempt: number, label: string) => {
+    const before = JSON.stringify(inst);
+    const res = applyConditionFailed(d, inst, "brainstorm", attempt, "r", NOW);
+    assert.equal(JSON.stringify(res.instance), before, label);
+    assert.equal(res.events, undefined, `${label}: no events`);
+    assert.deepEqual(res.startPhases, [], label);
+  };
+  unchanged(atGate(d), 1, "another attempt");
+  unchanged(started(d), 0, "a running phase");
+  unchanged(
+    advance(d, started(d), sig({ type: "needs-input", payload: "Q?" }), NOW).instance,
+    0,
+    "a needs-input pause",
+  );
+  const approved = applyApprove(d, atGate(d), undefined, NOW, "brainstorm").instance;
+  unchanged(approved, 0, "a succeeded phase");
+  const res = applyConditionFailed(d, atGate(d), "nope", 0, "r", NOW);
+  assert.equal(res.events, undefined, "an unknown phase");
 });
 
 test("advance names why a signal it cannot apply was ignored", () => {

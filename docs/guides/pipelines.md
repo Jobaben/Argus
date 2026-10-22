@@ -24,6 +24,7 @@ A signed-in root or approved member, a working runtime, and a working directory 
 
 - [Pipelines](#pipelines)
 - [Weave](#weave)
+- [Child instances and command-opened gates](#child-instances-and-command-opened-gates)
 
 ## Pipelines
 
@@ -46,7 +47,11 @@ A failed run names the step and the first line of its reason. A pipeline that ha
 never run still shows its phases, greyed, because that is what it is going to do.
 Above the cards, filter chips count **All**, what **needs approval** (in the
 Command Center's words), what **failed** and what is **paused** — press one to
-narrow the list to those pipelines, press it again to go back.
+narrow the list to those pipelines, press it again to go back. A **spawned**
+chip says the latest instance was started by another pipeline's
+[spawn phase](#spawn-child-instances), and a pipeline that some spawn phase
+starts says **spawned by Delivery loop** under its name, after its trigger
+(**Manual** or **Webhook**, which is not how it usually starts).
 
 When you're **signed out**, the sign-in panel sits above the list (see
 [Users & sign-in](administration.md#users--sign-in)) — viewing is open, but every mutating
@@ -81,10 +86,34 @@ empty state back.
 - Inside the phase, ordered **steps** — each with a name, optional per-step
   **runtime / model / effort overrides**, and its prompt. Reorder or remove
   phases and steps freely; **Save pipeline** stays disabled until every phase has a
-  name, cwd and at least one complete step (the rail marks the incomplete
+  name, cwd and at least one complete step — or, for a spawn phase, a child
+  pipeline and valid task-list settings (the rail marks the incomplete
   ones). Phase features authored via the API — retry policies, published
-  artifacts, rubrics, auto-approve — show as badges on the panel and are
-  preserved on save.
+  artifacts, rubrics, auto-approve, approval conditions — show as badges on the
+  panel and are preserved on save. Unchecking **gated** drops auto-approve and
+  the approval condition with it: neither means anything without a gate.
+- **What this phase does** switches a phase between **Runs steps** and
+  **Spawns children** (a [spawn phase](#spawn-child-instances)). A spawn
+  phase has no steps, no gate of its own and none of the runtime,
+  result or candidate settings: switching drops them (the server refuses them
+  on a spawn phase), and switching back in the same sitting brings them back;
+  a spawn phase switched to steps and back keeps its policy the same way.
+  Its **Children** part holds a **Child pipeline** select (every other
+  pipeline) and **Task list and options (JSON)**: the rest of `spawn` —
+  `items`, `key` and the optional `dependsOn`, `title`, `maxParallel`,
+  `maxItems`, `base` and `include` — with the phases it can read from listed
+  under it by name and id. Text the form cannot read as those settings stays
+  as you typed it, says why under the field, and holds **Save pipeline** until
+  it can: JSON that does not parse, or that is not an object with `items` (a
+  `phase` and a `path` list) and a non-empty `key`, names a field not listed
+  here (`pipelineId` included: choose it in the select), or gives a field the
+  wrong type (`maxParallel` and `maxItems` are whole numbers of 1 or more).
+  The server checks the rest when you save — the source phase's result schema
+  and the task fields in it, the child pipeline's trigger, the limits — and
+  its `400` says what to change. The
+  task-list schema on the phase that writes the list is set through the API
+  (the result editor shows "schema set via the API" and keeps it). The rail
+  marks a spawn phase **Spawn**.
 
 **What you can do (signed in)** — from the card's footer: the run controls
 first, then **Analyze** and **Edit**, with **Disable**/**Enable** and **Delete**
@@ -95,7 +124,8 @@ the buttons (_Couldn't complete that: …_).
   is allowed).
 - **Stop / Stop all (N)** — abort active instances. It asks first, on a line
   of its own under the buttons: **Stop pipeline** (or **Stop N instances**)
-  goes ahead, **Keep running** leaves them be.
+  goes ahead, **Keep running** leaves them be. On a pipeline with a spawn
+  phase the question adds that the instances they spawned are stopped too.
 - **Enable / Disable**, **Edit**, **Delete**. Delete asks the same way —
   **Delete pipeline** or **Keep** — and the safe answer has focus, so Escape or
   a stray Enter keeps everything. An instance runs
@@ -105,10 +135,16 @@ the buttons (_Couldn't complete that: …_).
   anyway** or **Keep editing**, which leaves your edit in the form — so you
   know a fixed prompt lands on the _next_ start rather than the one you are
   watching; renaming, changing the trigger or overlap policy, and enabling or
-  disabling save without asking.
+  disabling save without asking. Editing a pipeline that a live parent's
+  [spawn phase](#spawn-child-instances) still starts children of asks the same
+  way, in its own words — "A live instance of another pipeline will start more
+  instances of “Task loop”. Those would run this edit." — because, unlike the
+  pipeline's own instances, those children would run your edit.
   **Delete** stops the pipeline's running and waiting instances first (the
   question says how many), then removes it. Pipelines chained `after` it do
-  not start from those stops. An instance left live by a pipeline
+  not start from those stops. A spawned child is one of those instances: each
+  parent that spawned one then waits for you at its spawn phase, which the
+  question says when another pipeline spawns this one. An instance left live by a pipeline
   deleted before this existed still gets a card on the Command Center, marked
   **Pipeline deleted**, with a **Stop** button that asks first (**Stop
   instance** or **Keep running**).
@@ -325,6 +361,11 @@ mean _unknown_, not _parallel_.
   you gave it, oldest first, not only the latest, so a short second note
   never erases a long first one. Notes are clipped to 2,000 characters each.
   See [HARNESS.md § Revision notes](../HARNESS.md#revision-notes).
+- **A gate a command can open.** A gated phase can declare `approveWhen`, a
+  command Argus runs every few minutes while the gate waits: exit 0 opens the
+  gate, its `failOnExit` code fails the phase, anything else keeps waiting. A
+  person can still decide first. See
+  [Open a gate when its pull request merges](#open-a-gate-when-its-pull-request-merges).
 
 **Retries.** A phase may declare `attempts`, a `backoffSeconds` that doubles
 each time (capped at an hour), and which failures are worth retrying:
@@ -408,20 +449,565 @@ never that it failed, retried, failed again and was revised. Read it at
 `GET /api/instances/:id/journal`. It is evidence, never the source of truth: a
 missing or corrupt journal costs you the history, never the pipeline.
 
+## Child instances and command-opened gates
+
+Recipes for pipelines that work through a list of tasks, one instance per task.
+
+### Check work against the task it was started for
+
+A pipeline started through its webhook carries the request body as its trigger
+payload. A `command` check can read that payload and judge the work against it,
+for example to fail a branch that changed files outside its task. The form does
+not show checks; author the check through the API, and the form keeps it on
+later saves.
+
+**Before you start:** a pipeline you start through its webhook
+(`POST /api/hooks/pipelines/:id`), a phase whose agent commits its work on a
+worktree branch (`workspace: { "scope": "instance" }` or `"attempt"`), and
+Node.js on the server's `PATH`. Keep the script outside the repository the agent
+edits, so the agent's commits cannot change its judge. That does not stop an
+agent that can write outside its worktree from editing the file itself: a
+worktree is not a jail, and only Codex's sandbox limits writes at the OS level
+([workspace isolation](../HARNESS.md#11-workspace-isolation)).
+
+1. Save this script, for example as `~/argus-checks/scope.mjs`. It reads the
+   payload file Argus names in `ARGUS_TRIGGER_PAYLOAD_FILE` and fails when the
+   branch changed a file the task does not list:
+
+   ```js
+   // scope.mjs: fail when the branch changes a file outside its task.
+   import { readFileSync } from "node:fs";
+   import { execFileSync } from "node:child_process";
+
+   const file = process.env.ARGUS_TRIGGER_PAYLOAD_FILE;
+   if (!file) {
+     console.error("no trigger payload: start this pipeline through its webhook");
+     process.exit(1);
+   }
+   const { task, base } = JSON.parse(readFileSync(file, "utf8"));
+   const tree = process.env.ARGUS_WORKSPACE || process.cwd();
+   // git reads the tree through -C but starts in this script's folder: on
+   // Windows a program named without a path is looked for in the current
+   // folder first, and the agent can leave a git.exe in its tree.
+   // --end-of-options: git never reads the payload's base as an option.
+   const range = `${base}...HEAD`;
+   const changed = execFileSync(
+     "git",
+     ["-C", tree, "diff", "--name-only", "--end-of-options", range],
+     { cwd: import.meta.dirname, encoding: "utf8" },
+   )
+     .split("\n")
+     .filter(Boolean);
+   const outside = changed.filter((f) => !task.files.includes(f));
+   if (outside.length > 0) {
+     console.error(`outside task ${task.id}: ${outside.join(", ")}`);
+     process.exit(1);
+   }
+   console.log(`${changed.length} changed file(s), all in task ${task.id}`);
+   ```
+
+2. Add the check to the phase, with the script's absolute path:
+   `{ "kind": "command", "run": "node /home/you/argus-checks/scope.mjs", "label": "task scope" }`.
+   The check runs in the phase's worktree, and the script reads the agent's
+   branch there. On Windows the shell looks for a program named without a path
+   in that worktree before `PATH`, so name `node.exe` by its absolute path too.
+   List it before any check that runs the repository's code, such as
+   `npm test`: checks run in the order listed, and Argus puts an edited payload
+   file back before each verification run, not between one run's checks.
+3. Start an instance through the webhook with the task as the body, for example
+   `{ "task": { "id": "T1", "files": ["src/a.ts", "src/a.test.ts"] }, "base": "origin/main" }`.
+   Starting the instance runs the phase's agent step, which invokes its
+   provider; the check itself only reads git and the payload file.
+
+**Expected result:** when the agent's step completes, the phase's verification
+shows `task scope` passed, with the count of changed files in its output. A
+branch that changed another file fails the phase under `verification`, and the
+check's output lists the files; the phase's `retry` policy applies as for any
+failed check.
+
+**If it fails:** an output of `no trigger payload` means the instance was not
+started with a body; a manual start has none, so start it through the webhook.
+A git error about the base means the worktree does not have that ref, or the
+payload's `base` is not a ref name; fetch it before the run, or name a ref the
+repository has.
+
+Never paste payload values into `run`: a check's fields are never interpolated,
+and a webhook body in a shell command line would be an injection. Passing a
+value to a program as an argument, as the script does, is safe from the shell
+but not from the program's own options: put it after `--end-of-options`, or
+refuse a value that starts with `-`. The check also gets `ARGUS_INSTANCE_ID`,
+`ARGUS_PHASE_ID`, `ARGUS_PHASE_ATTEMPT`, `ARGUS_ARTIFACT_DIR` and
+`ARGUS_WORKSPACE`; a candidate's checks get its own folder and tree. The details are in
+[the harness reference](../HARNESS.md#what-a-command-check-is-told).
+
+### Open a gate when its pull request merges
+
+A phase whose agent pushes its branch and opens a pull request can wait at its
+gate until that pull request merges, and then carry on by itself. Argus polls a
+command you write (`approveWhen`); the command asks your Git provider about the
+pull request and answers with its exit code. The form does not show
+`approveWhen`; author it through the API, and the form keeps it on later saves,
+with an **approval condition** badge on the phase.
+
+**Before you start:** a gated phase that works in a worktree
+(`workspace: { "scope": "instance" }` or `"attempt"`), whose prompt tells the
+agent to commit, push its branch and open a pull request; Node.js and your
+provider's CLI on the server's `PATH`. The example uses the Azure DevOps CLI
+(`az repos`); with GitHub's `gh`, list
+`gh pr list --repo <owner>/<name> --head <branch> --base <target> --state all --json number,state,headRefOid`
+instead, where `MERGED` is completed, `CLOSED` abandoned and `headRefOid` the
+merged commit. The phase must not commit
+knowledge: `approveWhen` is refused on such a phase, because a person must
+approve it.
+
+1. Sign the CLI in as the user Argus runs as (`az login`). The CLI keeps that
+   sign-in under the user's home, which a poll can read even under
+   `inherit: "minimal"`. If the CLI needs a variable beyond the minimal set,
+   such as a non-default `AZURE_CONFIG_DIR`, name it in the phase's
+   `capabilities.env.allow`. Never put a token in `env.set`: it becomes part of
+   the definition, which `GET /api/pipelines` returns to every caller of the
+   API, signed in or not ([API security](../API.md#security)). **Expected:**
+   `az repos pr list --organization <url> --project <name> --repository <name> --detect false`
+   lists the repository's pull requests.
+2. Save this script outside the repository, for example as
+   `~/argus-checks/pr-merged.mjs`, so the agent's commits cannot change what
+   opens its gate. Set `org`, `project` and `repository` to the values that
+   listed the pull requests in step 1, and `target` to the branch the work must
+   merge into. It finds the pull request by the branch
+   the worktree is on and binds it to the commit the worktree holds and to the
+   branch it must merge into (`target`), so neither an id the agent wrote down,
+   a commit pushed to the pull request later, nor a pull request into another
+   branch can open the gate:
+
+   ```js
+   // pr-merged.mjs: exit 0 once this worktree's pull request merged exactly
+   // this HEAD; 3 when it never will; 1 while it may; 2 when asking failed.
+   import { execFileSync } from "node:child_process";
+
+   // Named here, because az runs outside the worktree and so cannot read them
+   // from its remote.
+   const org = "https://dev.azure.com/your-org";
+   const project = "your-project";
+   const repository = "your-repository";
+   // The branch the work must land on. A pull request into any other branch,
+   // which the agent might be able to complete itself, never opens the gate.
+   const target = "refs/heads/main";
+
+   const tree = process.env.ARGUS_WORKSPACE || process.cwd();
+   // Every program starts in this script's folder, never in the tree: on
+   // Windows a program named without a path is looked for in the current
+   // folder first, and the agent can leave a git.exe or an az.cmd in its tree.
+   const cwd = import.meta.dirname;
+   const git = (...args) =>
+     execFileSync("git", ["-C", tree, ...args], { cwd, encoding: "utf8" }).trim();
+   const branch = git("rev-parse", "--abbrev-ref", "HEAD");
+   const head = git("rev-parse", "HEAD");
+   // On Windows `az` is az.cmd, which Node runs only through the shell, so every
+   // value on its command line must be one the shell reads as plain text (name
+   // a project whose name has a space by its id).
+   for (const value of [org, project, repository, branch]) {
+     if (!/^[\w.:/-]+$/.test(value)) {
+       console.log(`will not pass "${value}" to az`);
+       process.exit(2);
+     }
+   }
+   const where = ["--organization", org, "--project", project, "--repository", repository];
+   const ask = ["--source-branch", branch, "--status", "all", "-o", "json"];
+   let prs;
+   try {
+     const out = execFileSync(
+       "az",
+       ["repos", "pr", "list", ...where, "--detect", "false", ...ask],
+       { cwd, encoding: "utf8", shell: process.platform === "win32" },
+     );
+     prs = JSON.parse(out);
+   } catch {
+     console.log(`could not ask about ${branch}`);
+     process.exit(2);
+   }
+   const pr = prs
+     .filter((p) => p.targetRefName === target)
+     .sort((a, b) => b.pullRequestId - a.pullRequestId)[0];
+   if (!pr) {
+     console.log(`no pull request from ${branch} into ${target} yet`);
+     process.exit(1);
+   }
+   const merged = pr.lastMergeSourceCommit?.commitId;
+   if (pr.status === "completed" && merged === head) {
+     console.log(`PR ${pr.pullRequestId} merged ${head.slice(0, 12)}`);
+     process.exit(0);
+   }
+   if (pr.status === "completed") {
+     console.log(`PR ${pr.pullRequestId} merged ${merged?.slice(0, 12)}, not ${head.slice(0, 12)}`);
+     process.exit(3);
+   }
+   if (pr.status === "abandoned") {
+     console.log(`PR ${pr.pullRequestId} was abandoned`);
+     process.exit(3);
+   }
+   console.log(`PR ${pr.pullRequestId} is ${pr.status}`);
+   process.exit(1);
+   ```
+
+   It only reads: a shutdown can cut it, and a restart runs it again. It prints
+   one short line, because the last 500 characters of its output are kept in a
+   gate decision that is never pruned.
+
+3. Add the condition to the gated phase, with the script's absolute path:
+
+   ```jsonc
+   "approveWhen": {
+     "kind": "command",
+     "run": "node /home/you/argus-checks/pr-merged.mjs",
+     "label": "pull request merged",
+     "everySeconds": 300,
+     "timeoutSeconds": 60,
+     "failOnExit": 3
+   }
+   ```
+
+   The poll runs in the agent's worktree. On Windows a program named without a
+   path is looked for there before `PATH`, whether the shell or the script
+   starts it, so name `node.exe` by its absolute path too, and start every
+   program the script runs from outside the worktree, as the script does with
+   `git -C` and `az`; the [harness reference](../HARNESS.md#approval-conditions)
+   says what else to keep out of the agent's reach.
+
+   **Expected:** the save succeeds. A `400` saying approveWhen "only means
+   something on a gated phase" or "cannot open a gate that commits knowledge"
+   names what to change.
+
+4. Start an instance. Starting it runs the phase's agent, which invokes its
+   provider; the poll itself invokes no model, but it alters state: it opens
+   the gate, or fails the phase.
+
+**Expected result:** when the agent finishes, the phase waits at its gate and
+its journal shows `pull request merged: waiting: exit 1` once. Within one poll
+of the pull request merging (here up to five minutes, plus one scheduler tick),
+the gate opens: the next phases start, and the instance's gate decisions show an
+approval with mechanism `approval-condition` and the line the script printed.
+If the pull request is abandoned, or merged a different commit, the phase fails
+under `approval-condition` with that line as its reason; it is never retried,
+and **Revise** starts a new attempt.
+
+**If it fails:** `waiting: exit 2` in the journal means the CLI could not be
+asked: it is not signed in as the user Argus runs as, its credentials expired,
+the network is down, or the script's `org`, `project` or `repository` is wrong;
+run the script by hand in the worktree to see which. The gate keeps waiting,
+and the journal records it once per server process, so check the sign-in when a
+gate that should have opened has not. `not polled: this gate commits knowledge` means the attempt staged a
+knowledge delta; a person must approve it. A person can approve, revise or abort
+at any time; a poll that finishes afterwards changes nothing. The details are in
+[the harness reference](../HARNESS.md#approval-conditions).
+
+### Spawn child instances
+
+A pipeline can work through a list of tasks with one instance of another
+pipeline per task. One phase writes the task list into its result; a **spawn
+phase** after it starts one _child_ instance of the task pipeline per task, in
+dependency order and one at a time, and succeeds once every child has. Each
+child is an ordinary instance, with its own phases, gates and worktrees. The
+steps below author both pipelines through the API; the pipeline form edits a
+spawn phase too (**In the form**, below), except the task list's result
+schema, which stays API-authored.
+
+**Before you start:** a git repository the agents work in, fetched
+(`git fetch origin`), and a runtime that works for a plain pipeline. Each
+child's worktree is cut from your local `origin/main` here, and Argus never
+fetches it. The task pipeline must have no trigger (manual) or a webhook one,
+and no spawn phase of its own; give it `overlapPolicy: "allow"`, because with
+`"skip"` a child waits while any other instance of it is live. The phase that
+writes the task list declares a `result` whose schema is an array of objects
+with the key property required, and lists `signal` in its `retry.retryOn`, so
+a task list Argus cannot run gets another attempt with the reason.
+
+1. Save the task pipeline with `POST /api/pipelines`. Its prompts read the
+   task as `{{trigger.payload}}`:
+
+   ```json
+   {
+     "name": "Task loop",
+     "trigger": null,
+     "overlapPolicy": "allow",
+     "workspace": { "scope": "instance" },
+     "phases": [
+       {
+         "id": "implement",
+         "name": "Implement",
+         "cwd": "/home/you/repo",
+         "gated": true,
+         "steps": [
+           {
+             "name": "implement",
+             "prompt": "Do this task and commit it on your branch: {{trigger.payload}}"
+           }
+         ]
+       }
+     ]
+   }
+   ```
+
+   **Expected:** `201` with the saved definition. Note its `id`.
+
+2. Save the parent with `POST /api/pipelines`, naming that id as
+   `spawn.pipelineId`:
+
+   ```json
+   {
+     "name": "Delivery",
+     "trigger": null,
+     "phases": [
+       {
+         "id": "plan",
+         "name": "Plan",
+         "cwd": "/home/you/repo",
+         "gated": true,
+         "steps": [
+           {
+             "name": "plan",
+             "prompt": "Split docs/spec.md into small tasks, each with an id, a title and the ids of the tasks it needs first (after)."
+           }
+         ],
+         "retry": { "attempts": 2, "retryOn": ["spawn", "exit-code", "unverified", "signal"] },
+         "result": {
+           "artifact": "plan",
+           "schema": {
+             "type": "object",
+             "required": ["tasks"],
+             "properties": {
+               "tasks": {
+                 "type": "array",
+                 "items": {
+                   "type": "object",
+                   "required": ["id", "title"],
+                   "properties": {
+                     "id": { "type": "string" },
+                     "title": { "type": "string" },
+                     "after": { "type": "array", "items": { "type": "string" } }
+                   }
+                 }
+               }
+             }
+           }
+         }
+       },
+       {
+         "id": "tasks",
+         "name": "Tasks",
+         "cwd": "/home/you/repo",
+         "needs": ["plan"],
+         "spawn": {
+           "pipelineId": "<the id from step 1>",
+           "items": { "phase": "plan", "path": ["tasks"] },
+           "key": "id",
+           "dependsOn": "after",
+           "title": "title",
+           "base": "origin/main"
+         }
+       }
+     ]
+   }
+   ```
+
+   **Expected:** `201`. A `400` names what to change, for example
+   `phase "tasks": spawn.pipelineId names "Task loop", which has a "interval" trigger; …`.
+
+3. Start the parent with **Run now** on its card (or
+   `POST /api/pipelines/<id>/start`). This alters state and runs Plan's agent,
+   which invokes its provider. Plan waits at its gate with the task list as
+   its result; review it and **Approve**. A task list Argus could
+   not run (a missing or repeated `id`, an `after` naming an unknown task, a
+   cycle, more than 20 tasks) never reaches the gate: Plan fails under
+   `signal` with the reason, and its retry tries again.
+
+   **Expected:** the Tasks phase starts, the parent's journal records
+   `children.started` and `child.planned`, and an instance of Task loop starts
+   for the first task whose `after` tasks are done. Every child runs Task
+   loop's agents, which invoke their provider.
+
+4. Watch a task run. `argus tail` names a child after its task:
+   `Task loop [<task id>]`. When the child's Implement phase waits at its
+   gate, review and approve it in the Command Center like any gate (a state
+   change: the child succeeds, and the parent starts the next task). Meanwhile the parent's
+   Tasks phase stays `running`, and `argus tail --until-idle` returns: only
+   the child waits for you. On the board the spawn glyph and task count on
+   the parent's Tasks node (`0/5`) turn violet, while the node itself keeps
+   its working colour, and its panel leads with **A task is waiting for you**
+   and a **Review** that opens the child's gate. To have that gate open when
+   the task's pull request merges, give Implement an approval condition
+   ([Open a gate when its pull request merges](#open-a-gate-when-its-pull-request-merges));
+   its checks can read the task too
+   ([Check work against the task it was started for](#check-work-against-the-task-it-was-started-for)).
+5. Read the children: `GET /api/pipelines/<Task loop id>/instances?parent=<parent instance id>`
+   lists them, newest first. It is only a read. The parent's own record
+   (`GET /api/instances/<parent instance id>`) holds each task's `state` and
+   its child's `instanceId` in the Tasks phase's `children`.
+
+**Expected result:** one child per task, in `after` order, one at a time. When
+the last child succeeds, the Tasks phase succeeds with a summary of every task
+as its payload, and the phases after it start.
+
+**If a task fails:** no new task starts, the tasks that depend on it show
+`blocked`, and once no child is running the Tasks phase waits for you
+(`pause: "children"`; the tail says
+`waiting for you at "Tasks" (2 of 5 tasks did not succeed)`). The Command
+Center lists it under **Needs you** as **Tasks need a decision**; its
+**Review** opens the Tasks phase's drawer, which lists every task, with a
+**Review** on each one waiting at its child's gate or failed, into the child
+phase to act on (the same `children` that
+`GET /api/instances/<parent id>/phases/tasks/review` returns). Each choice
+alters state:
+
+- **Re-run one task:** revise the child's failed phase, on the child (its
+  **Review** in the Tasks drawer opens it, or
+  `argus revise <child id> --phase <phase> --note "<what to change>"`).
+  Its agent runs again and invokes its provider; the Tasks phase resumes, and
+  once the child succeeds the tasks it blocked continue.
+- **Re-run every task that did not succeed:** revise the Tasks phase on the
+  parent (**Re-run the rest** in its drawer, where the note is optional, or
+  `argus revise <parent id> --phase tasks --note "<what to change>"`).
+  Each failed child is revised in place with your note; an aborted or blocked
+  task gets a fresh child when it is ready. Tasks that succeeded stay done, and
+  the task list is not rebuilt.
+- **Accept the rest:** approve the Tasks phase (**Accept the rest** in its
+  drawer, which names the tasks it drops, or `argus approve <parent id>`).
+  It succeeds, its summary's `notSucceeded` names the tasks it dropped, and the
+  phases after it start. Answers are refused here
+  (`400 answers-not-accepted`), and so is an approval while a child you re-ran
+  is still running (`409 children-running`).
+- **Abort** the parent (**Stop** in its drawer, which asks first): its
+  children are aborted with it, and none of them fires an `after` chain.
+
+Approving or revising a child its parent no longer waits for (the parent
+ended, or the Tasks phase moved on) is refused with `409 parent-decided`;
+aborting a live child always works, and the drawer at its gate offers **Stop**
+once it has been told so (a failed child has already ended). A restart never
+starts a task twice: each child's id
+is saved on the parent before the child starts, and Argus picks up from the
+saved parent.
+
+Children run one at a time until parallel Claude sessions are safe (reliability
+WS13). Argus never fetches `base`: a child starts from the commit it named at
+your last fetch, unless the task pipeline's first phase fetches and resets.
+Spend adds up per task, and no new child starts while the spend budget's hard
+stop is on. `after` chains of the task pipeline fire once per child, and
+`{{previous.instance}}` in a child names another task's child. To rewind to
+Plan, accept the rest and start a follow-up instance. The details are in
+[the harness reference](../HARNESS.md#20-spawn-phases).
+
+**On the board.** The Tasks node in the parent's phase graph carries the spawn
+glyph and its tasks' done-of-total (`2/5`), violet while a child waits for you
+and red once a task failed. With the Tasks phase in focus, the panel lists
+every task with its state and one line on where it stands, a **Review** into a
+waiting or failed child while the Tasks phase still waits for its tasks
+(running, or at its `children` pause; once you accept the rest or stop the
+parent, no task has one), and a **Show** that scrolls to a working child's
+section on the task pipeline's card. Each child's section starts with **Task
+<key> · Delivery**, which takes you back to the parent, and the board names a
+child `Task loop [<key>]`. See [Command Center](monitoring.md#command-center).
+
+**In the form.** Select the Tasks phase on the rail, then **What this phase
+does** → **Spawns children**. Choose **Task loop** as the **Child pipeline**
+and edit the rest of `spawn` in **Task list and options (JSON)**; the line
+under it lists the phases it can read from. Save asks for a child pipeline and
+settings the form can read: an object with `items` and `key`, no field `spawn`
+does not have (nor `pipelineId`, which is the select), each of the right type.
+Otherwise the field says why and Save stays held. The server checks the rest,
+and its `400` appears in the form's **Couldn't save** strip. Saving alters
+state; it invokes no provider. See [The pipeline form](#pipelines).
+
+### Read the children from a later phase
+
+Once a spawn phase has run its tasks, a later phase can read what every child
+did: its results, its checks, the gate decisions on it with their notes, its
+runs and what they cost, and its files. Declare `childrenContext` on that
+phase, and each of its steps gets a read-only **children manifest**, a JSON
+file at `ARGUS_CHILDREN_FILE`, with this instance's own phases, decisions and
+cost beside the children's. The pipelines form does not show this field:
+author it through the API, and the form keeps it on later saves.
+
+**Before you start:** a parent pipeline with a spawn phase, as in
+[Spawn child instances](#spawn-child-instances). The reading phase must run
+after the spawn phase: list the spawn phase in its `needs` (directly, or
+through another phase it needs).
+
+1. Add the reading phase after `tasks` in the parent's `phases`: in the body
+   you save in step 2 of [Spawn child instances](#spawn-child-instances)
+   (`POST /api/pipelines`), or in the whole definition you send to
+   `PUT /api/pipelines/<parent id>`:
+
+   ```json
+   {
+     "id": "learn",
+     "name": "Learn",
+     "cwd": "/home/you/repo",
+     "gated": true,
+     "needs": ["tasks"],
+     "childrenContext": { "fromPhase": "tasks" },
+     "steps": [
+       {
+         "name": "learn",
+         "prompt": "Read the children manifest. For each task, say what went well, what a person asked to change and why, and what it cost. Propose one change to the task pipeline."
+       }
+     ]
+   }
+   ```
+
+   **Expected:** `201` (or `200` for the `PUT`) with the saved definition. A
+   `400` names what to change, for example
+   `phase "learn": childrenContext.fromPhase names "tasks", which is not a dependency of this phase; …`
+   when `needs` leaves the spawn phase out. Saving changes the definition only;
+   a `PUT` is held with `409 instances-running` while an instance of the parent
+   is live (`?force=1` saves anyway, for the next instances).
+
+2. Run the parent as in [Spawn child instances](#spawn-child-instances). When
+   the Tasks phase succeeds, or you approve it at its `children` pause, Learn
+   starts. This alters state and runs Learn's agent, which invokes its
+   provider.
+
+   **Expected:** each Learn run's prompt, after your own words, says
+   `Children of this instance. The spawn phase "tasks" ran 2 tasks as child instances (2 succeeded).`
+   and names the manifest's path.
+
+3. Read what the run was given: `GET /api/runs/<run id>/invocation`. It is
+   only a read.
+
+   **Expected:** `childrenFile` names the manifest; `suppliedInputs` holds its
+   SHA-256 (kind `children-manifest`); `channels` lists `children-manifest`
+   (required) and one `child-artifacts` channel (optional) for each child that
+   has an artifact folder.
+
+**Expected result:** Learn's agent reads every task's child, its phases and
+results, the revise notes it got and what it cost, and can open each child's
+folder at `artifactsDir`, even under a `filesystem: "read-only"` profile.
+
+Argus builds the manifest once per attempt, so a revise of Learn reads the
+children again; a run that changes or deletes its copy fails as
+`change-context-integrity`. A child's folder holds each of its phases' latest
+attempt only, and at most 100 folders are offered per run. The manifest never
+names who made a decision, and it does not offer the parent's own folders:
+`{{artifactDir.<phaseId>}}` names one in the prompt, but Argus does not
+admit a run under a capability profile to it. The details are in
+[the harness reference](../HARNESS.md#the-parents-view-of-its-children).
+
 ## Advanced feature recipes
 
 The form preserves API-authored settings that it does not expose as editable controls. Use the protocol examples in the harness reference for these options:
 
-| Goal                                                      | Recipe                                                                                                                    |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Limit CLI capabilities and execution environment          | [Capabilities](../HARNESS.md#3-capability-profiles), [environment policy](../HARNESS.md#4-environment-policy)             |
-| Give a pipeline its own Claude instructions and settings  | [Claude setup folder](../HARNESS.md#3b-a-claude-setup-folder-per-pipeline-claudeconfigdir)                                |
-| Require independently checked results                     | [Completion](../HARNESS.md#2-agent-completion--phase-success), [verification checks](../HARNESS.md#6-verification-checks) |
-| Run in a separate git working tree                        | [Workspace isolation](../HARNESS.md#11-workspace-isolation)                                                               |
-| Compare multiple attempts and select a verified candidate | [Candidates](../HARNESS.md#12-candidates)                                                                                 |
-| Carry bounded outputs and notes between phases            | [Context and memory](../HARNESS.md#13-context-and-memory), [artifacts](../HARNESS.md#5-artifacts)                         |
-| Detect a stalled process                                  | [Timeouts](../HARNESS.md#7-timeouts)                                                                                      |
-| Inspect recovery and transition integrity                 | [Transitions and recovery](../HARNESS.md#18-transitions-and-recovery)                                                     |
-| Assess the execution trajectory                           | [Trajectory signals and judging](../HARNESS.md#19-trajectory-signals-and-judging)                                         |
+| Goal                                                             | Recipe                                                                                                                        |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Limit CLI capabilities and execution environment                 | [Capabilities](../HARNESS.md#3-capability-profiles), [environment policy](../HARNESS.md#4-environment-policy)                 |
+| Give a pipeline its own Claude instructions and settings         | [Claude setup folder](../HARNESS.md#3b-a-claude-setup-folder-per-pipeline-claudeconfigdir)                                    |
+| Require independently checked results                            | [Completion](../HARNESS.md#2-agent-completion--phase-success), [verification checks](../HARNESS.md#6-verification-checks)     |
+| Run in a separate git working tree                               | [Workspace isolation](../HARNESS.md#11-workspace-isolation)                                                                   |
+| Compare multiple attempts and select a verified candidate        | [Candidates](../HARNESS.md#12-candidates)                                                                                     |
+| Carry bounded outputs and notes between phases                   | [Context and memory](../HARNESS.md#13-context-and-memory), [artifacts](../HARNESS.md#5-artifacts)                             |
+| Detect a stalled process                                         | [Timeouts](../HARNESS.md#7-timeouts)                                                                                          |
+| Inspect recovery and transition integrity                        | [Transitions and recovery](../HARNESS.md#18-transitions-and-recovery)                                                         |
+| Assess the execution trajectory                                  | [Trajectory signals and judging](../HARNESS.md#19-trajectory-signals-and-judging)                                             |
+| Check the work against the task the instance was started for     | [Command check inputs](../HARNESS.md#what-a-command-check-is-told), [recipe](#check-work-against-the-task-it-was-started-for) |
+| Open a gate when its pull request merges                         | [Approval conditions](../HARNESS.md#approval-conditions), [recipe](#open-a-gate-when-its-pull-request-merges)                 |
+| Work through a task list with one child instance per task        | [Spawn phases](../HARNESS.md#20-spawn-phases), [recipe](#spawn-child-instances)                                               |
+| Let a later phase read every child's results, decisions and cost | [Children manifest](../HARNESS.md#the-parents-view-of-its-children), [recipe](#read-the-children-from-a-later-phase)          |
 
 Start with the [reference pipeline](../HARNESS.md#9-reference-pipeline), then add only the options your task needs. An unenforceable capability, unavailable transcript or incomplete check is not proof of compliance.

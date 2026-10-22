@@ -107,6 +107,18 @@ export type {
   StepCompletion,
   WorkspacePolicy,
   WorkspaceRecord,
+  // Spawn phases (DL-A2)
+  GateActionRefusal,
+  InstanceParentRef,
+  PhaseChildren,
+  PhaseChildrenReview,
+  SpawnChildView,
+  SpawnChildrenSummary,
+  SpawnPolicy,
+  SpawnSource,
+  SpawnTask,
+  SpawnTaskReview,
+  SpawnTaskState,
   // Reliability
   PhaseReliability,
   PipelineReliability,

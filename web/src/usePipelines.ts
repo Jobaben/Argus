@@ -2,6 +2,14 @@ import { useCallback } from "react";
 import { useLiveResource } from "./live/useLiveResource";
 import type { InstanceStatus, PipelineDefinition, PipelineInput } from "./types";
 
+/** One live instance a `409 instances-running` names. `pipelineId` tells the
+ *  pipeline's own instances from the live parents that spawn it (DL-A2). */
+export interface RunningInstance {
+  id: string;
+  status: InstanceStatus;
+  pipelineId?: string;
+}
+
 /**
  * The server refused an edit because instances are still running (or waiting
  * at a gate) under the current definition. They keep the definition they
@@ -9,8 +17,8 @@ import type { InstanceStatus, PipelineDefinition, PipelineInput } from "./types"
  * decides whether that is what the author meant and retries with `force`.
  */
 export class InstancesRunningError extends Error {
-  readonly instances: { id: string; status: InstanceStatus }[];
-  constructor(message: string, instances: { id: string; status: InstanceStatus }[]) {
+  readonly instances: RunningInstance[];
+  constructor(message: string, instances: RunningInstance[]) {
     super(message);
     this.name = "InstancesRunningError";
     this.instances = instances;
@@ -39,7 +47,7 @@ export function usePipelines() {
         const msg = (await res.json().catch(() => ({}))) as {
           error?: string;
           code?: string;
-          instances?: { id: string; status: InstanceStatus }[];
+          instances?: RunningInstance[];
         };
         if (res.status === 409 && msg.code === "instances-running") {
           throw new InstancesRunningError(msg.error ?? `HTTP ${res.status}`, msg.instances ?? []);

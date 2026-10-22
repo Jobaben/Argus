@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +10,7 @@ import {
   checkLabel,
   runCheck,
   runChecks,
+  runCommand,
   snapshotWorkingTree,
   type CheckContext,
 } from "./verification.js";
@@ -141,6 +143,77 @@ test("command check: a cwd that resolves to a file (not a directory) fails clean
   assert.equal(res.status, "failed");
   await rm(dir, { recursive: true, force: true });
 });
+
+// ── runCommand: how a command ended (approval polls, DL-A3) ─────────────────
+
+test("runCommand: a command that exits on its own ends as an exit, with its code", async () => {
+  const ok = await runCommand({ kind: "command", run: "exit 0" }, baseCtx());
+  assert.equal(ok.end, "exit", "exit 0");
+  assert.equal(ok.result.status, "passed");
+  const three = await runCommand({ kind: "command", run: "exit 3" }, baseCtx());
+  assert.equal(three.end, "exit", "exit 3");
+  assert.equal(three.result.exitCode, 3);
+  assert.equal(three.result.detail, "exit 3");
+});
+
+test("runCommand: a timeout ends as a timeout", async () => {
+  const ran = await runCommand(
+    { kind: "command", run: `node -e "setTimeout(function(){}, 10000)"`, timeoutSeconds: 1 },
+    baseCtx(),
+  );
+  assert.equal(ran.end, "timeout");
+  assert.match(ran.result.detail, /^timed out after 1s/);
+});
+
+test("runCommand: an already-aborted signal spawns nothing", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "argus-run-command-"));
+  const marker = path.join(dir, "ran");
+  const ac = new AbortController();
+  ac.abort();
+  const ran = await runCommand(
+    {
+      kind: "command",
+      run: `node -e "require('fs').writeFileSync(process.argv[1], 'x')" "${marker}"`,
+    },
+    baseCtx(),
+    ac.signal,
+  );
+  assert.equal(ran.end, "aborted");
+  assert.equal(ran.result.status, "failed");
+  assert.equal(ran.result.durationMs, 0, "nothing ran");
+  assert.equal(existsSync(marker), false, "the command never started");
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("runCommand: aborting mid-run ends the tree and settles as aborted", async () => {
+  const ac = new AbortController();
+  const start = Date.now();
+  setTimeout(() => ac.abort(), 200);
+  const ran = await runCommand(
+    { kind: "command", run: `node -e "setTimeout(function(){}, 10000)"` },
+    baseCtx(),
+    ac.signal,
+  );
+  const elapsed = Date.now() - start;
+  assert.equal(ran.end, "aborted");
+  assert.match(ran.result.detail, /^stopped/);
+  assert.ok(elapsed < 8000, `expected well under 10s, took ${elapsed}ms`);
+});
+
+test(
+  "runCommand: a timed-out command that traps SIGTERM and exits 3 is still a timeout",
+  { skip: process.platform === "win32" ? "POSIX signals and shell traps" : false },
+  async () => {
+    // The reason an approval condition reads `end`, never the exit code alone:
+    // this command leaves exit code 3 behind, and it did not exit on its own.
+    const ran = await runCommand(
+      { kind: "command", run: "trap 'exit 3' TERM; sleep 10 & wait", timeoutSeconds: 1 },
+      baseCtx(),
+    );
+    assert.equal(ran.end, "timeout");
+    assert.equal(ran.result.exitCode, 3, "the trap's exit code is left behind");
+  },
+);
 
 // ── artifact / file checks ────────────────────────────────────────────────
 

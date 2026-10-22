@@ -41,14 +41,16 @@ export type Eligibility =
   | { ok: true; relevantRuns: string[]; population: "manual" | "auto-approve-declared" }
   | { ok: false; reason: string };
 
-/** Whether the definition the instance runs on declares `autoApprove` on this phase. */
+/** Whether the definition the instance runs on declares `autoApprove` or
+ *  `approveWhen` on this phase. */
 export function populationOf(
   def: PipelineDefinition | undefined,
   phaseId: string,
 ): "manual" | "auto-approve-declared" {
-  return def?.phases.find((p) => p.id === phaseId)?.autoApprove
-    ? "auto-approve-declared"
-    : "manual";
+  const phase = def?.phases.find((p) => p.id === phaseId);
+  // Either rule may open the gate before a person sees it, so the people's
+  // sample is biased the same way (RFC §Q.2): its own population.
+  return phase?.autoApprove || phase?.approveWhen ? "auto-approve-declared" : "manual";
 }
 
 /**
@@ -68,6 +70,8 @@ export function gateEligibility(
   if (phase.attempt !== item.attempt) return { ok: false, reason: "attempt-moved" };
   if (phase.status !== "awaiting-approval") return { ok: false, reason: `phase-${phase.status}` };
   if (phase.pause === "needs-input") return { ok: false, reason: "needs-input" };
+  // A spawn phase whose children stopped short: no step's work to judge.
+  if (phase.pause === "children") return { ok: false, reason: "children" };
   if (phase.pause !== "gate") return { ok: false, reason: "unknown-pause" };
   if (inst.pendingGateOperation) return { ok: false, reason: "pending-operation" };
   if (recordsFor(item, decisions).length > 0) return { ok: false, reason: "prior-decision-record" };
@@ -142,8 +146,9 @@ const digestOrNull = (v: unknown): string | null => {
 /**
  * What the operator did at an item whose attempt is no longer eligible. Only
  * an `applied` record with `mechanism: "operator"` becomes a reference;
- * automated, unattributed, incomplete, unapplied, conflicting and unknown
- * records never do, and a missing action is never a negative.
+ * automated (a Verdict or an approval condition), carried out for a spawn
+ * parent, unattributed, incomplete, unapplied, conflicting and unknown records
+ * never do, and a missing action is never a negative.
  */
 export function settle(
   item: GateItem,
@@ -164,9 +169,13 @@ export function settle(
   if (applied.length > 1)
     return { kind: "unlabeled", reason: "conflicting-records", decisionIds: ids };
   const { d } = applied[0];
-  if (d.mechanism === "verdict-auto-approve") {
+  if (d.mechanism === "verdict-auto-approve" || d.mechanism === "approval-condition") {
     return { kind: "unlabeled", reason: "automated-approval", decisionIds: ids };
   }
+  // Argus carrying out a spawn parent's decision (at a gate: its abort cascade
+  // or sweep): its actor is known, so it is not `unattributed`, nor a person's.
+  if (d.mechanism === "parent-decision")
+    return { kind: "unlabeled", reason: "parent-decision", decisionIds: ids };
   if (d.mechanism !== "operator")
     return { kind: "unlabeled", reason: "unattributed", decisionIds: ids };
   const recordDigest = digestOrNull(d);

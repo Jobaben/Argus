@@ -60,7 +60,9 @@ drawer — this is the wall you keep open on a second monitor.
   revise or retry is chosen in there. Its header tallies the list in the
   strip's words: `2 need approval · 1 failed · 3 outside pipelines`. A card
   shows one phase at a time, so this is where a second gate in a fan-out, or a
-  gate on a card further down, is never missed.
+  gate on a card further down, is never missed. A spawned child is named after
+  its task (`Task loop [b] · PR`), and a spawn phase paused at `children` reads
+  **Tasks need a decision** instead of **Needs approval**.
   Below them, under **Outside pipelines**, come the Briefing's items the board
   has no card for — **Monitor down**, **Monitor failing**, **Anomaly** and
   **Open issue** — each with the same action the Briefing gives it (**Open
@@ -87,7 +89,11 @@ approval` wins over `Failed` over `Working`…), then quieter facts — phase
 - Under the header, the **phase graph**: one numbered node per phase carrying
   its status dot, name, a **Gate** marker, a **Try N** marker after a retry or
   revise, and one mini-dot per step (a `done/total` count once dots stop being
-  countable). **Stages** — phases that can run at the same time — are rows,
+  countable). A **spawn phase** carries the spawn glyph (one node starting
+  three) and how many of its tasks are done, `2/5`: grey while they run,
+  **violet** while a child waits for you at its own gate (the parent itself
+  still reads as working, so the node's colour cannot say it), red once a task
+  failed or was stopped. **Stages** — phases that can run at the same time — are rows,
   read top to bottom; the chain that continues stays in the left lane and
   branches that end the run hang to its right. When the stages are too wide
   for the card (a fan-out of many parallel phases), the graph turns sideways:
@@ -128,8 +134,32 @@ approval` wins over `Failed` over `Working`…), then quieter facts — phase
   default the focus **follows the action** — the gate awaiting you, else the
   failure, else the live work, else the next phase up — so an untouched board
   always shows the detail that matters right now.
+- A **spawn phase** in focus lists its **tasks** in place of step tiles: each
+  task's key, title and state (**Pending**, **Starting**, **Working**,
+  **Re-running**, **Waiting for you**, **Done**, **Failed**, **Stopped**,
+  **Blocked**), with one line on where it stands — what it waits for, the phase
+  its child is at, why it failed — and a count line above the list
+  (`2 of 5 done · 1 waiting for you · 1 failed or stopped`). A task whose child
+  waits at a gate has a violet **Review** that opens that child's gate; a failed
+  task whose child is on the board has a **Review** that opens the child's failed
+  phase, where **Revise** re-runs just that child; a working task has **Show**,
+  which scrolls to its child's section. A **Review** is there only while the
+  spawn phase still waits for its tasks (it is running, or at its `children`
+  pause): once you accept the rest or stop the parent, a failed task keeps its
+  state and has none, as its child is no longer decided (the server would
+  refuse with `409 parent-decided`). While a child waits, **A task is
+  waiting for you** and its **Review** lead the panel. At a `children` pause the
+  panel leads instead with "2 of 5 tasks did not succeed, so nothing more
+  starts" and the spawn phase's own **Review**. Before the task list exists, it
+  says which pipeline it will start once per task.
 - If two instances of one pipeline run concurrently, the card splits into
   labeled sub-sections, one per instance, each with its own graph and focus.
+- A **spawned child**'s section (the whole card when it is its pipeline's only
+  instance, as it usually is) starts with a chip naming its task and its
+  parent, **Task b · Delivery loop**: press it to scroll to the parent's
+  section. Wherever the board names a child it reads `Task loop [b]`, as
+  `argus tail` prints it: in **Needs you**, the live rail, the screen-reader
+  announcements and the drawers' subtitles.
 - **Completed runs** (top-right): the all-time board total — tokens and
   dollars across every completed run, so a run still going is not in it yet.
   The small reset button beside it (**Reset total**) opens a confirm below the
@@ -171,6 +201,31 @@ approval` wins over `Failed` over `Working`…), then quieter facts — phase
   the agent's prompt; that attempt's files are discarded. Nothing in the drawer
   edits an artifact: the note is how you change the outcome. Approve and Revise
   live in the drawer and nowhere else on the board.
+- At a spawn phase's **`children` pause** (a task did not succeed, and nothing
+  more starts) the drawer says **Some tasks did not succeed** and lists every
+  task, with a **Review** on each one that waits at its child's gate or failed,
+  into the child phase to act on: its waiting gate, or its failed phase, where
+  **Revise** re-runs that one child. A stopped task has none: its child no
+  longer counts. (A spawn phase that failed lists its tasks with no **Review**:
+  its parent no longer waits for them.) Its buttons:
+  - **Accept the rest** approves the spawn phase: the phases after it start
+    without the tasks that did not succeed, which the line under the buttons
+    names (`Accepting continues without b and c.`).
+  - **Re-run the rest** revises it: every task that did not succeed runs again.
+    A failed child runs its failed phase again with your note, which is
+    optional here; an aborted or never-started task gets a new child; tasks
+    that succeeded stay done.
+  - **Stop** asks first (**Stop instance** or **Keep waiting**; Escape keeps
+    waiting), then stops the parent and any child still running.
+
+  Each alters state, and a re-run child runs its agents again. A refusal says
+  what it means ahead of the server's words: **Its parent no longer waits for
+  this task.** on a child whose parent moved on (`409 parent-decided`; at the
+  child's gate the drawer then offers **Stop**, the one decision left, and on
+  a failed child, which has already ended, it adds **Nothing is left to decide
+  here.**), and **A task you re-ran is running again.** when accepting while a
+  re-run child is live (`409 children-running`).
+
 - Both actions require a signed-in, approved account (see
   [Users & sign-in](administration.md#users--sign-in)); looking is open to everyone, and the
   server answers 401 to a decision unless you're authenticated. From a terminal,
@@ -204,8 +259,8 @@ show nothing. Money spent on a retried phase still counts toward the row Σ.
 `pipelines:changed` WS ping), `GET /api/insight` for the situation strip,
 `GET /api/runs` for the rail, `GET /api/runs/:id` for the drawer's log,
 `GET /api/totals` + `POST /api/totals/reset`, gate actions
-`POST /api/instances/:id/approve` / `/revise`, and
-`POST /api/runs/:id/cancel`.
+`POST /api/instances/:id/approve` / `/revise` / `/abort` (the drawer's **Stop**,
+and the orphaned instance's), and `POST /api/runs/:id/cancel`.
 
 ## Briefing
 

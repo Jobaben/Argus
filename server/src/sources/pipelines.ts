@@ -4,8 +4,18 @@ import path from "node:path";
 import { argusWorkRoot, claudeHome, paths } from "../claudeHome.js";
 import { mintHookToken, validateTrigger } from "./schedules.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
-import type { Dependency, PhaseDef, PhaseStep, PipelineDefinition } from "./pipelineTypes.js";
 import type {
+  ChildrenContextSpec,
+  Dependency,
+  PhaseDef,
+  PhaseStep,
+  PipelineDefinition,
+  ResultSchema,
+  SpawnPolicy,
+  SpawnSource,
+} from "./pipelineTypes.js";
+import type {
+  ApprovalCondition,
   CandidatePolicy,
   CandidateVariant,
   CapabilityProfile,
@@ -27,10 +37,19 @@ import type { TrajectorySignalKind } from "@argus/contracts";
 import { DagValidationError, validateDag } from "./dag.js";
 import {
   RouteAuthoringError,
+  schemaAt,
   validateDependency,
   validatePhaseResult,
   validateRoutes,
 } from "./routeAuthoring.js";
+import {
+  SPAWN_INCLUDE_NAME_RE,
+  SPAWN_MAX_INCLUDE,
+  SPAWN_MAX_ITEMS,
+  SPAWN_MAX_PARALLEL,
+  SPAWN_PATH_MAX_SEGMENTS,
+  printSpawnPath,
+} from "./children.js";
 import { isRuntimeId, runtimeIdList } from "../runtimes/index.js";
 import { toClaudeRulePath } from "../runtimes/claude.js";
 import {
@@ -62,7 +81,7 @@ import {
 import { CLAIM_KINDS, REALIZATION_MAX_ATTEMPTS, validArtifactPath } from "../knowledge/kernel.js";
 import { ChangeProposalError, validateChangeRequest } from "../knowledge/changeIntent.js";
 import { resolveNeeds } from "./dag.js";
-import { autoApproveRefusal, knowledgeCommitReasons } from "./gatePolicy.js";
+import { approveWhenRefusal, autoApproveRefusal, knowledgeCommitReasons } from "./gatePolicy.js";
 
 // The crash-safe, mutex-serialized single-file store (shared with schedules).
 const store = createJsonArrayStore<PipelineDefinition>({
@@ -185,16 +204,7 @@ export function validateWorkspace(raw: unknown, ctx: string): WorkspacePolicy | 
   }
   const policy: WorkspacePolicy = { scope: w.scope as WorkspacePolicy["scope"] };
   if (w.base !== undefined && w.base !== null) {
-    if (typeof w.base !== "string" || !w.base.trim()) {
-      throw new PipelineValidationError(`${ctx}: workspace.base must be a non-empty string`);
-    }
-    const base = w.base.trim();
-    if (/\s/.test(base) || base.startsWith("-")) {
-      throw new PipelineValidationError(
-        `${ctx}: workspace.base "${base}" is not a valid git ref (no whitespace, no leading "-")`,
-      );
-    }
-    policy.base = base;
+    policy.base = validateGitRef(w.base, ctx, "workspace.base");
   }
   if (w.keep !== undefined && w.keep !== null) {
     if (typeof w.keep !== "boolean") {
@@ -207,6 +217,21 @@ export function validateWorkspace(raw: unknown, ctx: string): WorkspacePolicy | 
 
 const WORKSPACE_KEYS = new Set(["scope", "base", "keep"]);
 const WORKSPACE_SCOPES = new Set<WorkspacePolicy["scope"]>(["instance", "attempt", "none"]);
+
+/** A ref that becomes one `git` argument: no whitespace, no leading "-". A
+ *  workspace's `base` and a spawn phase's are held to the same rule. */
+function validateGitRef(raw: unknown, ctx: string, field: string): string {
+  if (typeof raw !== "string" || !raw.trim()) {
+    throw new PipelineValidationError(`${ctx}: ${field} must be a non-empty string`);
+  }
+  const ref = raw.trim();
+  if (/\s/.test(ref) || ref.startsWith("-")) {
+    throw new PipelineValidationError(
+      `${ctx}: ${field} "${ref}" is not a valid git ref (no whitespace, no leading "-")`,
+    );
+  }
+  return ref;
+}
 
 // ── Candidates ───────────────────────────────────────────────────────────────
 
@@ -321,6 +346,175 @@ export function assertCandidatesRunnable(
       );
     }
   });
+}
+
+// ── Spawn phases ─────────────────────────────────────────────────────────────
+
+const SPAWN_KEYS = new Set([
+  "pipelineId",
+  "items",
+  "key",
+  "dependsOn",
+  "title",
+  "maxParallel",
+  "maxItems",
+  "base",
+  "include",
+]);
+const SPAWN_SOURCE_KEYS = new Set(["phase", "path"]);
+/**
+ * Everything a spawn phase may declare. It runs no agent, so step, check,
+ * gate, retry, timeout, isolation and knowledge fields would mean nothing on
+ * it, and a `retry` or `checks` that looks meaningful but is silently ignored
+ * is worse than a 400. `steps` and `gated` are accepted only as `[]` and
+ * `false`, the stored shape every phase keeps: a GET → PUT round trip sends
+ * them back, and the pipeline form always sends both.
+ */
+const SPAWN_PHASE_KEYS = new Set([
+  "id",
+  "name",
+  "cwd",
+  "needs",
+  "produces",
+  "spawn",
+  "steps",
+  "gated",
+]);
+
+/** Where a spawn phase reads a value from, on its own. Whether the phase
+ *  exists, runs first and declares the path is a whole-graph question,
+ *  answered in {@link validateSpawnPhases}. */
+function validateSpawnSource(raw: unknown, ctx: string, field: string): SpawnSource {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: ${field} must be an object { phase, path }`);
+  }
+  const s = raw as Record<string, unknown>;
+  for (const key of Object.keys(s)) {
+    if (!SPAWN_SOURCE_KEYS.has(key)) {
+      throw new PipelineValidationError(`${ctx}: ${field} has unknown key "${key}"`);
+    }
+  }
+  if (typeof s.phase !== "string" || !s.phase.trim()) {
+    throw new PipelineValidationError(`${ctx}: ${field}.phase must name a phase`);
+  }
+  if (!Array.isArray(s.path) || s.path.some((seg) => typeof seg !== "string" || !seg.trim())) {
+    throw new PipelineValidationError(
+      `${ctx}: ${field}.path must be a list of property names ([] for the whole result)`,
+    );
+  }
+  if (s.path.length > SPAWN_PATH_MAX_SEGMENTS) {
+    throw new PipelineValidationError(
+      `${ctx}: ${field}.path is capped at ${SPAWN_PATH_MAX_SEGMENTS} segments`,
+    );
+  }
+  return { phase: s.phase.trim(), path: (s.path as string[]).map((seg) => seg.trim()) };
+}
+
+/** The name of a property each task carries. */
+function validateTaskProperty(raw: unknown, ctx: string, field: string): string {
+  if (typeof raw !== "string" || !raw.trim()) {
+    throw new PipelineValidationError(`${ctx}: ${field} must name a task property`);
+  }
+  return raw.trim();
+}
+
+/**
+ * A spawn phase's `spawn` object, on its own.
+ *
+ * The shape only. That the task list comes from a dependency whose result
+ * declares it is checked once the whole graph is in hand
+ * ({@link validateSpawnPhases}), and that the target pipeline exists and may be
+ * spawned once every other definition is ({@link assertSpawnTargetsValid}).
+ * Absent optional fields stay absent, so a definition round-trips unchanged.
+ */
+export function validateSpawn(raw: unknown, ctx: string): SpawnPolicy {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: spawn must be an object`);
+  }
+  const s = raw as Record<string, unknown>;
+  for (const key of Object.keys(s)) {
+    if (!SPAWN_KEYS.has(key)) {
+      throw new PipelineValidationError(`${ctx}: spawn has unknown key "${key}"`);
+    }
+  }
+  if (typeof s.pipelineId !== "string" || !s.pipelineId.trim()) {
+    throw new PipelineValidationError(
+      `${ctx}: spawn.pipelineId must name the pipeline each child runs`,
+    );
+  }
+  const items = validateSpawnSource(s.items, ctx, "spawn.items");
+  const key = validateTaskProperty(s.key, ctx, "spawn.key");
+  const policy: SpawnPolicy = { pipelineId: s.pipelineId.trim(), items, key };
+  if (s.dependsOn !== undefined && s.dependsOn !== null) {
+    const dependsOn = validateTaskProperty(s.dependsOn, ctx, "spawn.dependsOn");
+    if (dependsOn === key) {
+      throw new PipelineValidationError(
+        `${ctx}: spawn.dependsOn cannot be the key property "${key}"`,
+      );
+    }
+    policy.dependsOn = dependsOn;
+  }
+  if (s.title !== undefined && s.title !== null) {
+    const title = validateTaskProperty(s.title, ctx, "spawn.title");
+    if (title === policy.dependsOn) {
+      throw new PipelineValidationError(
+        `${ctx}: spawn.title cannot be the dependsOn property "${title}"`,
+      );
+    }
+    policy.title = title;
+  }
+  if (s.maxParallel !== undefined && s.maxParallel !== null) {
+    const n = Number(s.maxParallel);
+    if (!Number.isInteger(n) || n < 1) {
+      throw new PipelineValidationError(
+        `${ctx}: spawn.maxParallel must be a whole number of at least 1`,
+      );
+    }
+    if (n > SPAWN_MAX_PARALLEL) {
+      throw new PipelineValidationError(
+        `${ctx}: spawn.maxParallel is capped at ${SPAWN_MAX_PARALLEL} until parallel Claude ` +
+          "sessions are safe (reliability WS13); children run one at a time",
+      );
+    }
+    policy.maxParallel = n;
+  }
+  if (s.maxItems !== undefined && s.maxItems !== null) {
+    const n = Number(s.maxItems);
+    if (!Number.isInteger(n) || n < 1 || n > SPAWN_MAX_ITEMS) {
+      throw new PipelineValidationError(
+        `${ctx}: spawn.maxItems must be an integer 1-${SPAWN_MAX_ITEMS}`,
+      );
+    }
+    policy.maxItems = n;
+  }
+  if (s.base !== undefined && s.base !== null) {
+    policy.base = validateGitRef(s.base, ctx, "spawn.base");
+  }
+  if (s.include !== undefined && s.include !== null) {
+    if (typeof s.include !== "object" || Array.isArray(s.include)) {
+      throw new PipelineValidationError(
+        `${ctx}: spawn.include must be an object of named { phase, path } sources`,
+      );
+    }
+    const entries = Object.entries(s.include as Record<string, unknown>);
+    if (entries.length > SPAWN_MAX_INCLUDE) {
+      throw new PipelineValidationError(
+        `${ctx}: spawn.include is capped at ${SPAWN_MAX_INCLUDE} names`,
+      );
+    }
+    const include: Array<[string, SpawnSource]> = [];
+    for (const [name, source] of entries) {
+      if (!SPAWN_INCLUDE_NAME_RE.test(name)) {
+        throw new PipelineValidationError(
+          `${ctx}: spawn.include name "${name}" must be 1-40 letters, digits, - or _`,
+        );
+      }
+      include.push([name, validateSpawnSource(source, ctx, `spawn.include.${name}`)]);
+    }
+    // Object.fromEntries keeps every name an own property, `__proto__` included.
+    if (include.length > 0) policy.include = Object.fromEntries(include);
+  }
+  return policy;
 }
 
 // ── Completion policy ────────────────────────────────────────────────────────
@@ -1071,6 +1265,96 @@ export function validateChecks(raw: unknown, ctx: string): PhaseCheck[] | undefi
   return raw.map((r, i) => validateCheck(r, ctx, i));
 }
 
+const APPROVE_WHEN_KEYS = [
+  "kind",
+  "run",
+  "cwd",
+  "label",
+  "everySeconds",
+  "timeoutSeconds",
+  "failOnExit",
+];
+
+/** An optional integer field of `approveWhen`, inside its bounds. Undefined/null = absent. */
+function approveWhenInteger(
+  raw: unknown,
+  ctx: string,
+  field: string,
+  min: number,
+  max: number,
+): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < min || n > max) {
+    throw new PipelineValidationError(
+      `${ctx}: approveWhen.${field} must be an integer ${min}-${max}`,
+    );
+  }
+  return n;
+}
+
+/**
+ * A gated phase's approval condition (DL-A3, `ApprovalCondition` in
+ * `@argus/contracts`). Shape only; whether the phase is gated and commits no
+ * knowledge is decided in `validatePhase`. Defaults (`timeoutSeconds` 60, the
+ * label) are applied at run time, never stored, so a definition round-trips
+ * byte for byte.
+ */
+function validateApproveWhen(raw: unknown, ctx: string): ApprovalCondition | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: approveWhen must be an object`);
+  }
+  const v = raw as Record<string, unknown>;
+  for (const key of Object.keys(v)) {
+    if (!APPROVE_WHEN_KEYS.includes(key)) {
+      throw new PipelineValidationError(`${ctx}: approveWhen has unknown key "${key}"`);
+    }
+  }
+  if (v.kind !== "command") {
+    throw new PipelineValidationError(`${ctx}: approveWhen.kind must be command`);
+  }
+  const run = v.run;
+  if (typeof run !== "string" || !run.trim() || run.length > 4000) {
+    throw new PipelineValidationError(
+      `${ctx}: approveWhen.run must be a non-empty string up to 4000 chars`,
+    );
+  }
+  let cwd: string | undefined;
+  if (v.cwd !== undefined && v.cwd !== null) {
+    if (typeof v.cwd !== "string" || !v.cwd.trim()) {
+      throw new PipelineValidationError(`${ctx}: approveWhen.cwd must be a non-empty string`);
+    }
+    cwd = v.cwd;
+  }
+  let label: string | undefined;
+  if (v.label !== undefined && v.label !== null) {
+    if (typeof v.label !== "string" || !v.label.trim() || v.label.length > 120) {
+      throw new PipelineValidationError(
+        `${ctx}: approveWhen.label must be a non-empty string up to 120 chars`,
+      );
+    }
+    label = v.label;
+  }
+  const everySeconds = approveWhenInteger(v.everySeconds, ctx, "everySeconds", 30, 86400);
+  if (everySeconds === undefined) {
+    throw new PipelineValidationError(
+      `${ctx}: approveWhen.everySeconds must be an integer 30-86400`,
+    );
+  }
+  const timeoutSeconds = approveWhenInteger(v.timeoutSeconds, ctx, "timeoutSeconds", 1, 600);
+  const failOnExit = approveWhenInteger(v.failOnExit, ctx, "failOnExit", 1, 255);
+  return {
+    kind: "command",
+    run,
+    ...(cwd !== undefined ? { cwd } : {}),
+    ...(label !== undefined ? { label } : {}),
+    everySeconds,
+    ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+    ...(failOnExit !== undefined ? { failOnExit } : {}),
+  };
+}
+
 function validateStep(raw: unknown, ctx: string): PhaseStep {
   if (!raw || typeof raw !== "object")
     throw new PipelineValidationError(`${ctx}: step must be an object`);
@@ -1178,6 +1462,10 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   ) {
     throw new PipelineValidationError(`phase ${i}: cwd does not exist: ${String(p.cwd)}`);
   }
+  // A spawn phase runs no agent: it has its own, much shorter field list.
+  if (p.spawn !== undefined && p.spawn !== null) {
+    return validateSpawnPhase(p, i, id, p.name.trim(), p.cwd);
+  }
   if (!Array.isArray(p.steps) || p.steps.length === 0) {
     throw new PipelineValidationError(`phase ${i}: needs at least one step`);
   }
@@ -1204,19 +1492,14 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
       `phase ${i}: autoApprove only means something on a gated phase`,
     );
   }
-
-  // Dependency edges. `needs: []` is meaningful (an explicit root), so the
-  // key's *presence* is what switches the whole graph from linear-implicit to
-  // explicit — see resolveNeeds. An entry is either the legacy phase id or a
-  // route-carrying edge object; the string form is preserved as a string so a
-  // pre-routing definition round-trips byte for byte.
-  let needs: Dependency[] | undefined;
-  if (p.needs !== undefined) {
-    if (!Array.isArray(p.needs)) {
-      throw new PipelineValidationError(`phase ${i}: needs must be a list of phase ids`);
-    }
-    needs = p.needs.map((n) => routeChecked(() => validateDependency(n, `phase "${id}"`)));
+  const approveWhen = validateApproveWhen(p.approveWhen, `phase ${i}`);
+  if (approveWhen && !gated) {
+    throw new PipelineValidationError(
+      `phase ${i}: approveWhen only means something on a gated phase`,
+    );
   }
+
+  const needs = validateNeeds(p.needs, i, id);
 
   // The declared structured result. Validated against this phase's own steps
   // here; whether a *condition* can read it is a whole-graph question, checked
@@ -1230,15 +1513,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   const completion = validateCompletion(p.completion, `phase ${i}`);
   const runtime = validateRuntime(p.runtime, `phase ${i}`);
 
-  let produces: string | undefined;
-  if (p.produces !== undefined && p.produces !== null) {
-    if (typeof p.produces !== "string" || !/^[A-Za-z0-9_-]{1,40}$/.test(p.produces)) {
-      throw new PipelineValidationError(
-        `phase ${i}: produces must be a short name of letters, digits, - or _`,
-      );
-    }
-    produces = p.produces;
-  }
+  const produces = validateProduces(p.produces, i);
 
   const timeoutSeconds = validateTimeout(p.timeoutSeconds, `phase ${i}`);
   const stallSeconds = validateStallSeconds(p.stallSeconds, `phase ${i}`);
@@ -1253,6 +1528,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   const ruleVerification = validateRuleVerification(p.ruleVerification, `phase ${i}`);
   const changeIntent = validateChangeIntent(p.changeIntent, `phase ${i}`, gated);
   const changeContext = validateChangeContext(p.changeContext, `phase ${i}`);
+  const childrenContext = validateChildrenContext(p.childrenContext, `phase ${i}`);
   const implementation = validateImplementation(p.implementation, `phase ${i}`, changeContext);
   const acceptanceVerification = validateAcceptanceVerification(
     p.acceptanceVerification,
@@ -1273,6 +1549,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(produces ? { produces } : {}),
     ...(rubric ? { rubric } : {}),
     ...(autoApprove ? { autoApprove } : {}),
+    ...(approveWhen ? { approveWhen } : {}),
     ...(runtime ? { runtime } : {}),
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
     ...(stallSeconds !== undefined ? { stallSeconds } : {}),
@@ -1289,6 +1566,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(changeContext ? { changeContext } : {}),
     ...(implementation ? { implementation } : {}),
     ...(acceptanceVerification ? { acceptanceVerification } : {}),
+    ...(childrenContext ? { childrenContext } : {}),
   };
   // Decided from the phase's effective configuration, after every field is
   // validated: a model-scored gate may never be the one that makes semantic
@@ -1301,7 +1579,97 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
       throw new PipelineValidationError(autoApproveRefusal(`phase ${i} ("${id}")`, reasons));
     }
   }
+  // The same rule for a gate a polled command opens: a command's exit code
+  // must never be what makes knowledge canonical either.
+  if (out.approveWhen) {
+    const reasons = knowledgeCommitReasons(out);
+    if (reasons.length > 0) {
+      throw new PipelineValidationError(approveWhenRefusal(`phase ${i} ("${id}")`, reasons));
+    }
+  }
   return out;
+}
+
+/**
+ * Dependency edges. `needs: []` is meaningful (an explicit root), so the key's
+ * *presence* is what switches the whole graph from linear-implicit to explicit
+ * — see resolveNeeds. An entry is either the legacy phase id or a
+ * route-carrying edge object; the string form is preserved as a string so a
+ * pre-routing definition round-trips byte for byte.
+ */
+function validateNeeds(raw: unknown, i: number, id: string): Dependency[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new PipelineValidationError(`phase ${i}: needs must be a list of phase ids`);
+  }
+  return raw.map((n) => routeChecked(() => validateDependency(n, `phase "${id}"`)));
+}
+
+function validateProduces(raw: unknown, i: number): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string" || !/^[A-Za-z0-9_-]{1,40}$/.test(raw)) {
+    throw new PipelineValidationError(
+      `phase ${i}: produces must be a short name of letters, digits, - or _`,
+    );
+  }
+  return raw;
+}
+
+/**
+ * A spawn phase: `id`, `name`, `cwd`, `needs`, `produces` and `spawn`, and
+ * nothing else that would mean something (see {@link SPAWN_PHASE_KEYS}).
+ * Stored with `steps: []` and `gated: false`. `cwd` is still required and must
+ * exist, although nothing runs in it: every phase has one, and the board and
+ * the form show it.
+ */
+function validateSpawnPhase(
+  p: Record<string, unknown>,
+  i: number,
+  id: string,
+  name: string,
+  cwd: string,
+): PhaseDef {
+  for (const [key, value] of Object.entries(p)) {
+    if (value === undefined || value === null || SPAWN_PHASE_KEYS.has(key)) continue;
+    // Not on the spawned pipeline's phases either: it has no spawn phase to name.
+    if (key === "childrenContext") {
+      throw new PipelineValidationError(
+        `phase ${i}: a spawn phase cannot declare childrenContext; ` +
+          "put it on a later phase of this pipeline that needs this one",
+      );
+    }
+    throw new PipelineValidationError(
+      `phase ${i}: a spawn phase runs no agent of its own, so it cannot declare ${key}; ` +
+        "put it on the spawned pipeline's phases",
+    );
+  }
+  if (
+    p.steps !== undefined &&
+    p.steps !== null &&
+    (!Array.isArray(p.steps) || p.steps.length > 0)
+  ) {
+    throw new PipelineValidationError(
+      `phase ${i}: a spawn phase has no steps; its work runs in the spawned pipeline's instances`,
+    );
+  }
+  if (p.gated !== undefined && p.gated !== null && p.gated !== false) {
+    throw new PipelineValidationError(
+      `phase ${i}: a spawn phase cannot be gated; it waits for you by itself when a child ` +
+        "fails, and each task is reviewed at its child's own gates",
+    );
+  }
+  const needs = validateNeeds(p.needs, i, id);
+  const produces = validateProduces(p.produces, i);
+  return {
+    id,
+    name,
+    cwd,
+    steps: [],
+    gated: false,
+    ...(needs === undefined ? {} : { needs }),
+    ...(produces ? { produces } : {}),
+    spawn: validateSpawn(p.spawn, `phase ${i}`),
+  };
 }
 
 /**
@@ -1545,6 +1913,26 @@ function validateChangeContext(raw: unknown, ctx: string): ChangeContextSpec | u
   return out;
 }
 
+/** A phase's children-context selector (DL-A2b, `PhaseDef.childrenContext`).
+ *  The named phase must be a spawn phase and a dependency — checked across the
+ *  whole graph in {@link validateChildrenContextSelectors}. */
+function validateChildrenContext(raw: unknown, ctx: string): ChildrenContextSpec | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: childrenContext must be an object { fromPhase }`);
+  }
+  const v = raw as Record<string, unknown>;
+  for (const k of Object.keys(v)) {
+    if (k !== "fromPhase") {
+      throw new PipelineValidationError(`${ctx}: childrenContext has unknown key "${k}"`);
+    }
+  }
+  if (typeof v.fromPhase !== "string" || !v.fromPhase.trim()) {
+    throw new PipelineValidationError(`${ctx}: childrenContext.fromPhase must name a phase`);
+  }
+  return { fromPhase: v.fromPhase.trim() };
+}
+
 /**
  * A phase's business-rule verification policy (Phase 6,
  * `PhaseDef.ruleVerification`).
@@ -1782,6 +2170,21 @@ function validateGraph(phases: PhaseDef[]): void {
   validateProducedByPhaseSelectors(phases);
   validateChangeContextSelectors(phases);
   validateRealizationPhases(phases);
+  validateSpawnPhases(phases);
+  validateChildrenContextSelectors(phases);
+}
+
+/** Every phase that must finish before `id`, transitively. */
+function transitiveNeeds(needs: Map<string, string[]>, id: string): Set<string> {
+  const seen = new Set<string>();
+  const queue = [...(needs.get(id) ?? [])];
+  while (queue.length) {
+    const next = queue.shift()!;
+    if (seen.has(next)) continue;
+    seen.add(next);
+    queue.push(...(needs.get(next) ?? []));
+  }
+  return seen;
 }
 
 /**
@@ -1804,17 +2207,6 @@ function validateGraph(phases: PhaseDef[]): void {
 function validateRealizationPhases(phases: PhaseDef[]): void {
   const needs = resolveNeeds(phases);
   const known = new Map(phases.map((p) => [p.id, p]));
-  const ancestorsOf = (id: string): Set<string> => {
-    const seen = new Set<string>();
-    const queue = [...(needs.get(id) ?? [])];
-    while (queue.length) {
-      const next = queue.shift()!;
-      if (seen.has(next)) continue;
-      seen.add(next);
-      queue.push(...(needs.get(next) ?? []));
-    }
-    return seen;
-  };
   for (const phase of phases) {
     const spec = phase.acceptanceVerification;
     if (!spec) continue;
@@ -1835,7 +2227,7 @@ function validateRealizationPhases(phases: PhaseDef[]): void {
         `${where}: acceptanceVerification.implementationPhase names "${impl.id}", which declares no implementation policy and so drives no change realization`,
       );
     }
-    if (!ancestorsOf(phase.id).has(impl.id)) {
+    if (!transitiveNeeds(needs, phase.id).has(impl.id)) {
       throw new PipelineValidationError(
         `${where}: acceptanceVerification.implementationPhase names "${impl.id}", which is not a dependency of this phase; add it to needs so the implementation is guaranteed to have happened first`,
       );
@@ -1864,6 +2256,126 @@ function validateRealizationPhases(phases: PhaseDef[]): void {
   }
 }
 
+/** `"an array of strings"`, `"a number"` and so on, for messages. */
+function describeSchema(s: ResultSchema): string {
+  if (s.type === "array") {
+    return s.items ? `an array of ${s.items.type}s` : "an array with no items schema";
+  }
+  return `${s.type === "object" ? "an" : "a"} ${s.type}`;
+}
+
+/**
+ * The schema at a spawn source's path: the phase exists, is not the spawn
+ * phase itself, is a transitive dependency of it (so its result exists before
+ * any child starts), declares a result, and that result's schema declares the
+ * path.
+ */
+function spawnSourceSchema(
+  where: string,
+  field: string,
+  src: SpawnSource,
+  selfId: string,
+  known: Map<string, PhaseDef>,
+  ancestors: Set<string>,
+): ResultSchema {
+  const source = known.get(src.phase);
+  if (!source) {
+    throw new PipelineValidationError(
+      `${where}: ${field}.phase names unknown phase "${src.phase}"`,
+    );
+  }
+  if (src.phase === selfId) {
+    throw new PipelineValidationError(`${where}: ${field}.phase cannot name its own phase`);
+  }
+  if (!ancestors.has(src.phase)) {
+    throw new PipelineValidationError(
+      `${where}: ${field}.phase names "${src.phase}", which is not a dependency of this phase; add it to needs so its result exists before any child starts`,
+    );
+  }
+  if (!source.result) {
+    throw new PipelineValidationError(
+      `${where}: ${field}.phase names "${src.phase}", which declares no result; a spawn phase reads only a validated result`,
+    );
+  }
+  const schema = schemaAt(source.result.schema, src.path);
+  if (!schema) {
+    throw new PipelineValidationError(
+      `${where}: ${field}.path ${printSpawnPath(src.path)} is not declared by phase "${src.phase}"'s result schema`,
+    );
+  }
+  return schema;
+}
+
+/**
+ * A spawn phase reads only what its graph is guaranteed to produce.
+ *
+ * Its task list is an array of objects at `items.path` in the result of a
+ * phase that must finish first, each task with `key` a required string,
+ * `dependsOn` an array of strings and `title` a string, as that result's
+ * schema declares; each `include` names a path such a result declares, of any
+ * type. At runtime the list is held to exactly this (`readSpawnItems`) with
+ * the result that carries it, so a bad list fails the phase that produced it.
+ *
+ * A spawn phase also may not sit between an implementation phase and its
+ * verifier: a remediation re-runs exactly those phases
+ * (`realizationPhases`, `engine/realization.ts`) to re-verify an
+ * implementation, and re-running children is not what it means.
+ */
+function validateSpawnPhases(phases: PhaseDef[]): void {
+  const spawning = phases.filter((p): p is PhaseDef & { spawn: SpawnPolicy } => !!p.spawn);
+  if (spawning.length === 0) return;
+  const needs = resolveNeeds(phases);
+  const known = new Map(phases.map((p) => [p.id, p]));
+  for (const phase of spawning) {
+    const { spawn } = phase;
+    const where = `phase "${phase.id}"`;
+    const src = spawn.items.phase;
+    const ancestors = transitiveNeeds(needs, phase.id);
+    const list = spawnSourceSchema(where, "spawn.items", spawn.items, phase.id, known, ancestors);
+    const task = list.type === "array" ? list.items : undefined;
+    if (task?.type !== "object") {
+      throw new PipelineValidationError(
+        `${where}: spawn.items.path ${printSpawnPath(spawn.items.path)} must be an array of objects in phase "${src}"'s result schema (it is ${describeSchema(list)})`,
+      );
+    }
+    const property = (name: string): ResultSchema | undefined => task.properties?.[name];
+    if (property(spawn.key)?.type !== "string" || !task.required?.includes(spawn.key)) {
+      throw new PipelineValidationError(
+        `${where}: spawn.key "${spawn.key}" must be a required string property of each task in phase "${src}"'s result schema`,
+      );
+    }
+    if (spawn.dependsOn !== undefined) {
+      const deps = property(spawn.dependsOn);
+      if (deps?.type !== "array" || deps.items?.type !== "string") {
+        throw new PipelineValidationError(
+          `${where}: spawn.dependsOn "${spawn.dependsOn}" must be declared as an array of strings on each task in phase "${src}"'s result schema`,
+        );
+      }
+    }
+    if (spawn.title !== undefined && property(spawn.title)?.type !== "string") {
+      throw new PipelineValidationError(
+        `${where}: spawn.title "${spawn.title}" must be declared as a string property of each task in phase "${src}"'s result schema`,
+      );
+    }
+    for (const [name, source] of Object.entries(spawn.include ?? {})) {
+      spawnSourceSchema(where, `spawn.include.${name}`, source, phase.id, known, ancestors);
+    }
+  }
+  for (const verifier of phases) {
+    const implId = verifier.acceptanceVerification?.implementationPhase;
+    if (implId === undefined) continue;
+    const verifierNeeds = transitiveNeeds(needs, verifier.id);
+    const between = spawning.find(
+      (p) => verifierNeeds.has(p.id) && transitiveNeeds(needs, p.id).has(implId),
+    );
+    if (between) {
+      throw new PipelineValidationError(
+        `phase "${between.id}": a spawn phase cannot sit between implementation phase "${implId}" and its acceptance verifier "${verifier.id}"; a remediation re-verifies an implementation, it does not re-run children`,
+      );
+    }
+  }
+}
+
 /**
  * `changeContext.fromPhase` names a change-intent phase of *this* pipeline
  * that is guaranteed to have run — and been approved — first (Phase 7 §23).
@@ -1877,17 +2389,6 @@ function validateRealizationPhases(phases: PhaseDef[]): void {
 function validateChangeContextSelectors(phases: PhaseDef[]): void {
   const needs = resolveNeeds(phases);
   const known = new Map(phases.map((p) => [p.id, p]));
-  const ancestorsOf = (id: string): Set<string> => {
-    const seen = new Set<string>();
-    const queue = [...(needs.get(id) ?? [])];
-    while (queue.length) {
-      const next = queue.shift()!;
-      if (seen.has(next)) continue;
-      seen.add(next);
-      queue.push(...(needs.get(next) ?? []));
-    }
-    return seen;
-  };
   for (const phase of phases) {
     const spec = phase.changeContext;
     if (!spec) continue;
@@ -1908,9 +2409,47 @@ function validateChangeContextSelectors(phases: PhaseDef[]): void {
         `${where}: changeContext.fromPhase names "${spec.fromPhase}", which is not a changeIntent phase and so produces no ChangeProposal`,
       );
     }
-    if (!ancestorsOf(phase.id).has(spec.fromPhase)) {
+    if (!transitiveNeeds(needs, phase.id).has(spec.fromPhase)) {
       throw new PipelineValidationError(
         `${where}: changeContext.fromPhase names "${spec.fromPhase}", which is not a dependency of this phase; add it to needs so it is guaranteed to have been accepted first`,
+      );
+    }
+  }
+}
+
+/**
+ * `childrenContext.fromPhase` names a spawn phase of *this* pipeline that is
+ * guaranteed to have settled first (DL-A2b): it exists, it is not the phase
+ * itself, it declares `spawn`, and it is a transitive dependency — a spawn
+ * phase that merely sits beside this one could still be starting children
+ * while this phase reads them.
+ */
+function validateChildrenContextSelectors(phases: PhaseDef[]): void {
+  const needs = resolveNeeds(phases);
+  const known = new Map(phases.map((p) => [p.id, p]));
+  for (const phase of phases) {
+    const spec = phase.childrenContext;
+    if (!spec) continue;
+    const where = `phase "${phase.id}"`;
+    const source = known.get(spec.fromPhase);
+    if (!source) {
+      throw new PipelineValidationError(
+        `${where}: childrenContext.fromPhase names unknown phase "${spec.fromPhase}"`,
+      );
+    }
+    if (spec.fromPhase === phase.id) {
+      throw new PipelineValidationError(
+        `${where}: childrenContext.fromPhase cannot name its own phase`,
+      );
+    }
+    if (!source.spawn) {
+      throw new PipelineValidationError(
+        `${where}: childrenContext.fromPhase names "${spec.fromPhase}", which is not a spawn phase and so starts no children`,
+      );
+    }
+    if (!transitiveNeeds(needs, phase.id).has(spec.fromPhase)) {
+      throw new PipelineValidationError(
+        `${where}: childrenContext.fromPhase names "${spec.fromPhase}", which is not a dependency of this phase; add it to needs so its children have settled first`,
       );
     }
   }
@@ -1935,18 +2474,6 @@ function validateChangeContextSelectors(phases: PhaseDef[]): void {
 function validateProducedByPhaseSelectors(phases: PhaseDef[]): void {
   const needs = resolveNeeds(phases);
   const known = new Set(phases.map((p) => p.id));
-  /** Every phase that must finish before `id`, transitively. */
-  const ancestorsOf = (id: string): Set<string> => {
-    const seen = new Set<string>();
-    const queue = [...(needs.get(id) ?? [])];
-    while (queue.length) {
-      const next = queue.shift()!;
-      if (seen.has(next)) continue;
-      seen.add(next);
-      queue.push(...(needs.get(next) ?? []));
-    }
-    return seen;
-  };
   for (const phase of phases) {
     const specs: Array<{ where: string; spec: KnowledgeContextSpec }> = [];
     if (phase.knowledgeContext) {
@@ -1961,7 +2488,7 @@ function validateProducedByPhaseSelectors(phases: PhaseDef[]): void {
       }
     }
     if (specs.length === 0) continue;
-    const ancestors = ancestorsOf(phase.id);
+    const ancestors = transitiveNeeds(needs, phase.id);
     for (const { where, spec } of specs) {
       for (const sel of spec.fromPhases ?? []) {
         if (!known.has(sel.phaseId)) {
@@ -2102,6 +2629,73 @@ async function assertAfterTriggerValid(id: string, trigger: Trigger): Promise<vo
   }
 }
 
+/**
+ * Why `target` cannot be spawned, or null. Shared by both directions, so a
+ * parent's save and its target's save never disagree about what a valid
+ * target is: started only by its parent (or a webhook), and one level deep.
+ */
+function spawnTargetProblem(target: Pick<PipelineDefinition, "trigger" | "phases">): string | null {
+  if (target.trigger && target.trigger.kind !== "webhook") {
+    return `has a "${target.trigger.kind}" trigger; a spawned pipeline is started by its parent, so its trigger must be none or a webhook`;
+  }
+  const nested = target.phases.find((p) => p.spawn);
+  return nested
+    ? `has a spawn phase of its own ("${nested.id}"); spawn phases nest one level deep`
+    : null;
+}
+
+/**
+ * The saved pipeline's spawn phases name valid targets: another pipeline that
+ * exists and that {@link spawnTargetProblem} finds nothing wrong with.
+ *
+ * Checks only `createPipeline`/`updatePipeline` can make, because only they
+ * hold every other definition. Unlike {@link assertAfterTriggerValid} they run
+ * under the store lock, against the list the save is about to write.
+ */
+export function assertSpawnTargetsValid(
+  saved: Pick<PipelineDefinition, "id" | "phases">,
+  others: readonly PipelineDefinition[],
+): void {
+  for (const phase of saved.phases) {
+    const spawn = phase.spawn;
+    if (!spawn) continue;
+    const where = `phase "${phase.id}": spawn.pipelineId`;
+    if (spawn.pipelineId === saved.id) {
+      throw new PipelineValidationError(`${where}: a pipeline cannot spawn itself`);
+    }
+    const target = others.find((d) => d.id === spawn.pipelineId);
+    if (!target) {
+      throw new PipelineValidationError(`${where} names an unknown pipeline: ${spawn.pipelineId}`);
+    }
+    const problem = spawnTargetProblem(target);
+    if (problem) {
+      throw new PipelineValidationError(`${where} names "${target.name}", which ${problem}`);
+    }
+  }
+}
+
+/**
+ * The other direction: a pipeline another pipeline spawns must stay a valid
+ * target when it is itself saved, so it may gain neither a schedule or `after`
+ * trigger nor a spawn phase. Validation, not the running-instances edit guard
+ * in `app.ts`: `?force=1` does not bypass it.
+ */
+export function assertValidAsSpawnTarget(
+  saved: Pick<PipelineDefinition, "id" | "trigger" | "phases">,
+  others: readonly PipelineDefinition[],
+): void {
+  const problem = spawnTargetProblem(saved);
+  if (!problem) return;
+  for (const parent of others) {
+    const phase = parent.phases.find((p) => p.spawn?.pipelineId === saved.id);
+    if (phase) {
+      throw new PipelineValidationError(
+        `"${parent.name}" spawns this pipeline from phase "${phase.id}", and this pipeline ${problem}`,
+      );
+    }
+  }
+}
+
 export async function createPipeline(
   input: PipelineInput,
   now: Date,
@@ -2135,6 +2729,10 @@ export async function createPipeline(
   };
   return withStoreLock(async () => {
     const list = await readPipelines();
+    // Under the lock, against the list this save changes: a concurrent edit of
+    // the target cannot slip in between the check and the write.
+    assertSpawnTargetsValid(def, list);
+    assertValidAsSpawnTarget(def, list);
     list.push(def);
     await writePipelines(list);
     return def;
@@ -2220,6 +2818,11 @@ export async function updatePipeline(
     // for the config folder and the phases and profiles it must fit.
     assertCandidatesRunnable(merged.phases, merged.workspace);
     assertClaudeConfigDirFits(merged);
+    // Only when the patch touches what each check reads: renaming a parent, or
+    // toggling `enabled`, still saves after its target was deleted.
+    const others = list.filter((d) => d.id !== id);
+    if ("phases" in patch) assertSpawnTargetsValid(merged, others);
+    if ("phases" in patch || "trigger" in patch) assertValidAsSpawnTarget(merged, others);
     list[idx] = merged;
     await writePipelines(list);
     return merged;

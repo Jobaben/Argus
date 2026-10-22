@@ -58,6 +58,103 @@ All notable changes to Argus are documented here. The format follows
   transcript in `<folder>/projects/` after the pipeline is edited or deleted.
   Validated at save time; other runtimes record that it does not apply.
   Changing it while an instance runs is an execution edit (`409`).
+- **Command checks know the work they judge.** A `command` check used to run
+  with no `ARGUS_*` identity, so a script had to derive its instance from the
+  worktree path. It now runs with `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`,
+  `ARGUS_PHASE_ATTEMPT` (from 0), `ARGUS_ARTIFACT_DIR` and, when the work had
+  a worktree, `ARGUS_WORKSPACE`; a candidate's checks get its own folder and
+  tree. When the instance was started with a payload (a webhook body, a
+  chain's source), `ARGUS_TRIGGER_PAYLOAD_FILE` names a JSON copy of it at
+  `~/.claude/argus/invocations/<instanceId>/trigger-payload.json`, rewritten
+  before each verification run whenever its bytes differ and pruned with the
+  instance.
+  Agent steps now get `ARGUS_PHASE_ATTEMPT` too. Check fields are still never
+  interpolated. Both new names are reserved: a saved `env.set` that names
+  `ARGUS_PHASE_ATTEMPT` or `ARGUS_TRIGGER_PAYLOAD_FILE` is refused on its next
+  save; until then, its saved value still wins.
+- **`approveWhen`: a gate a polled command can open.** Only a person or a
+  Verdict score could open a gate, and nothing could fail a phase waiting at
+  one. A gated phase can now declare
+  `approveWhen: { kind: "command", run, cwd?, label?, everySeconds, timeoutSeconds?, failOnExit? }`.
+  While the phase waits at its gate, Argus runs the command in the phase's
+  worktree on the scheduler tick, with the phase's environment policy and the
+  attempt's `ARGUS_*` inputs, one poll at a time per attempt and no more often
+  than `everySeconds` (30–86400). Exit 0 approves the gate as a person's approval
+  would, recorded as a gate decision with mechanism `approval-condition`,
+  channel and principal `approval-poll`, and the exit code, the last 500
+  characters of output and the timing as its basis. An exit equal to
+  `failOnExit` fails the phase under the new class `approval-condition`, which
+  is never retried; a person can still revise it. Anything else, a timeout
+  included, keeps the gate waiting. The journal records
+  `phase.approval-condition` when the result changes. Refused on ungated
+  phases and on phases that commit knowledge. The command runs where the
+  agent worked, so keep its script outside that tree and name it by absolute
+  path: an agent that can edit the script can open its own gate. A person can
+  approve, revise or abort at any time, and `autoApprove` may sit beside it.
+  The H1 experiment counts these gates with the `autoApprove` ones, and never
+  takes their approvals as an operator's label.
+- **Spawn phases: one child instance per task, joined.** A phase can declare
+  `spawn` instead of steps: it starts one instance of another pipeline per task
+  in an earlier phase's result, in `dependsOn` order, one at a time, and
+  succeeds once every child has succeeded, publishing a children summary. Each
+  child's id is saved on the parent before it starts, so a restart never
+  starts a task twice; the child gets the task, `spawn.include` values and
+  `spawn.base` in its trigger payload (`trigger: "spawned"`, `parent`), and
+  its worktrees are cut from that base, which Argus does not fetch. A task
+  list Argus could not run fails the phase that produced it before its gate,
+  classed `signal`. A failed or aborted child stops new starts and blocks its
+  dependents; once the running children finish, the spawn phase waits for you
+  (`pause: "children"`): approve it to accept the rest, revise it to re-run
+  every task that did not succeed, revise one child, or abort. Aborting the
+  parent aborts its children (`parent-aborted`), and no `after` chain fires
+  for them. New children wait while the spend budget's hard stop is on, a
+  child is kept as long as its parent's record exists, the parent reads
+  `running` while a child waits at its own gate, `argus tail --until-idle`
+  returns, and `argus tail` names a child by its task key.
+  `GET /api/pipelines/:id/instances?parent=<id>` lists one parent's children;
+  the gate review of a spawn phase carries `children`; approve and revise
+  answer `409 parent-decided` on a child its parent no longer waits for (an
+  automated decision on one is refused too), and approve answers
+  `400 answers-not-accepted` to answers at a `children` pause and
+  `409 children-running` while a re-run child is live; these replies carry a
+  `code`. Editing a pipeline a live parent still spawns is held like an edit
+  under its own live instances (`409 instances-running`, `?force=1`), whose
+  `instances` entries now carry `pipelineId`. The pipeline form edits a spawn
+  phase too (see "Spawn phases on the board" below).
+- **Children manifest: a later phase reads its children.** A phase that
+  declares `childrenContext: { fromPhase }`, naming a spawn phase it depends
+  on, gets a read-only JSON manifest at `ARGUS_CHILDREN_FILE`: every task, its
+  child's phases, results, verification, gate decisions with their notes, runs
+  and cost, any child a fresh one replaced, and the instance's own phases,
+  decisions and cost. It never names who made a decision. Argus builds it once
+  per attempt, writes it for each run, and re-checks it when the run completes
+  (`change-context-integrity`). Each child's artifact folder is offered as an
+  optional read channel (at most 100 per run), so a step under a capability
+  profile can open it; the invocation record names the file (`childrenFile`)
+  and its hash. A saved `env.set` that names `ARGUS_CHILDREN_FILE` is refused
+  on its next save.
+- **Spawn phases on the board.** A spawn phase used to show on the Command
+  Center as a phase with no steps, and its `children` pause as a plain gate
+  whose drawer listed no task. Now its node in the phase graph carries a spawn
+  glyph and its tasks' done-of-total, violet while a child waits for you at its
+  own gate. Its focus panel lists every task with its state and where it
+  stands, a **Review** into a waiting or failed child's gate while the phase
+  still waits for its tasks, and a **Show** that scrolls to a working child. A
+  spawned child's section starts with a chip naming its task and parent, and
+  the board names it `Task loop [b]`, as `argus tail` does. At a `children`
+  pause **Needs you** says **Tasks need a decision**, and the review drawer
+  lists the tasks and offers **Accept the rest** (naming what it drops),
+  **Re-run the rest** (the note is optional) and **Stop**, which asks first; a
+  `409 parent-decided` or `409 children-running` refusal says what it means,
+  and a child its parent stopped waiting for can be stopped from the drawer at
+  its gate. The pipeline form switches a phase to **Spawns children**: no
+  steps, a child-pipeline select and the rest of `spawn` as JSON, with the
+  phases it can read from listed. The Pipelines list marks a spawned latest
+  instance and names the pipelines that spawn one; Stop, Delete and a held
+  edit say what they do to spawned children. Only the graph's glyph and count,
+  the focus panel's task-count chip, a child's name and the **Needs you** line
+  load with the board; the rest loads with the drawer or the Pipelines page,
+  or in a chunk of its own, so the first paint stays within its budget.
 
 ### Changed
 

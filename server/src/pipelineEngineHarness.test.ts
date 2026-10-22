@@ -4,7 +4,12 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } fro
 import { spawn as nodeSpawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { retryNote, failureClassOfRecord, revisionNotes } from "./pipelineEngine.js";
+import {
+  childrenContextInstruction,
+  retryNote,
+  failureClassOfRecord,
+  revisionNotes,
+} from "./pipelineEngine.js";
 import { REVISION_NOTES_MAX_CHARS } from "./engine/constants.js";
 import { phaseArtifactDir } from "./harness/invocation.js";
 import { paths } from "./claudeHome.js";
@@ -420,6 +425,9 @@ test("the prompt names the channel paths and ends with the revision note, on a q
     );
     // What the agent is handed, not only what the record says.
     assert.equal(call.prepared.plan.stdin, prompt);
+    // The revised attempt, in the Argus layer and in the child's environment.
+    assert.equal(call.env.ARGUS_PHASE_ATTEMPT, "1", "a revise starts attempt 1");
+    assert.equal(call.prepared.env.ARGUS_PHASE_ATTEMPT, "1", "and the agent sees it");
   }
   await e.abort(inst!.id);
   await e.drain();
@@ -1182,6 +1190,60 @@ test("revisionNotes: past the bound keeps the oldest and the newest, and names t
   for (let i = 0; i < 6; i++) {
     assert.ok(full?.includes(`- After attempt ${i}: ${String(i).repeat(1990)}`), String(i));
   }
+});
+
+// ── 15b. childrenContextInstruction (pure) ──────────────────────────────────
+
+/** The two fields of a children manifest the instruction reads. */
+function childrenOf(
+  status: "succeeded" | "skipped" | "awaiting-approval",
+  states: ("succeeded" | "failed" | "blocked")[],
+) {
+  return {
+    spawnPhase: {
+      id: "tasks",
+      name: "Tasks",
+      status,
+      attempt: 0,
+      childPipelineId: states.length ? "child" : null,
+      counts: {},
+    },
+    tasks: states.map((state, index) => ({ index, key: `t${index}`, dependsOn: [], state })),
+  };
+}
+
+test("childrenContextInstruction: nothing without a manifest or a path", () => {
+  assert.equal(childrenContextInstruction(null, "/r/children/children-manifest.json"), "");
+  assert.equal(childrenContextInstruction(childrenOf("succeeded", ["succeeded"]), null), "");
+});
+
+test("childrenContextInstruction: names the spawn phase, the tasks by state, the file and its variable", () => {
+  const file = path.join("/r", "children", "children-manifest.json");
+  const text = childrenContextInstruction(
+    childrenOf("awaiting-approval", ["succeeded", "failed", "succeeded"]),
+    file,
+  );
+  assert.ok(text.startsWith("\n\nChildren of this instance."), text);
+  assert.ok(
+    text.includes(
+      'The spawn phase "tasks" ran 3 tasks as child instances (2 succeeded, 1 failed).',
+    ),
+    text,
+  );
+  assert.ok(text.includes(file), "the path");
+  assert.ok(text.includes("ARGUS_CHILDREN_FILE"), "and the variable");
+  assert.ok(text.includes("Do not modify it or anything in a child's folder."), "read only");
+  assert.ok(
+    childrenContextInstruction(childrenOf("succeeded", ["succeeded"]), file).includes(
+      "ran 1 task as child instances (1 succeeded)",
+    ),
+    "one task",
+  );
+});
+
+test("childrenContextInstruction: a spawn phase that started nothing says so", () => {
+  const text = childrenContextInstruction(childrenOf("skipped", []), "/r/m.json");
+  assert.ok(text.includes('The spawn phase "tasks" started no children (it is skipped).'), text);
 });
 
 // ── 15. retryNote / failureClassOfRecord (pure) ──────────────────────────────

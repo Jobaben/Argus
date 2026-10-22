@@ -39,6 +39,8 @@ const fakeEngine: Engine = {
   abort: async () => ({ ok: true, code: 200 }),
   withStartsHeld: (_pipelineId, work) => work(),
   reconcile: async () => {},
+  pollGates: async () => {},
+  stopPolls: () => {},
   adopt: async () => {},
   drain: async () => {},
 };

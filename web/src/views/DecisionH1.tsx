@@ -56,7 +56,7 @@ function formatTotals(
 
 const POPULATION_LABEL: Record<H1Population, string> = {
   manual: "Manual gates",
-  "auto-approve-declared": "Gates declaring autoApprove",
+  "auto-approve-declared": "Gates declaring autoApprove or approveWhen",
 };
 
 const populationLabel = (p: H1Population): string => POPULATION_LABEL[p] ?? p;

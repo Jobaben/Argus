@@ -473,10 +473,11 @@ instance already in flight; a schedule hook returns `409 { runId }`.
 
 The request body, if any, must be JSON and no larger than 64 KiB (`413`
 otherwise, before it is parsed). For a pipeline, it becomes the new instance's
-`triggerPayload` and the instance's `trigger` reads `"webhook"`. A schedule has
-nowhere to carry a payload — its hook just fires the schedule's own prompt,
-exactly like `POST /api/schedules/:id/run`, with `trigger: "webhook"` on the
-resulting run.
+`triggerPayload` (which the instance's `command` checks read as a file at
+`ARGUS_TRIGGER_PAYLOAD_FILE`) and the instance's `trigger` reads `"webhook"`. A
+schedule has nowhere to carry a payload — its hook just fires the schedule's
+own prompt, exactly like `POST /api/schedules/:id/run`, with
+`trigger: "webhook"` on the resulting run.
 
 Unlike every other mutating route, the two hook routes are **exempt from the
 Origin/CSRF check** (a webhook sender is a server, not a browser a CSRF page
@@ -506,12 +507,26 @@ instances) records which targets have already fired for which source
 instance, so a tick that runs twice — or a restart mid-tick — cannot double-fire
 a chain. Only instances that ended **after** the target's own `updatedAt` are
 considered, so saving a new `after` trigger never reaches into history and
-fires off something that finished before the trigger existed.
+fires off something that finished before the trigger existed. An instance
+aborted because its pipeline was deleted or its parent was aborted
+(`abortCause: "pipeline-deleted"` or `"parent-aborted"`) fires no chain.
 
 A chained pipeline instance carries `trigger: "chained"`, `chainedFrom:
 "<source instance id>"`, and `triggerPayload: { sourceInstanceId,
-sourcePipelineId, status }`. A chained schedule run carries `trigger:
-"chained"` and fires its ordinary prompt, exactly like a normal scheduled run.
+sourcePipelineId, status }`, which its `command` checks read at
+`ARGUS_TRIGGER_PAYLOAD_FILE` like a webhook body. A chained schedule run
+carries `trigger: "chained"` and fires its ordinary prompt, exactly like a
+normal scheduled run.
+
+**Spawn targets.** A pipeline another pipeline's spawn phase starts (its
+`spawn.pipelineId`, HARNESS.md [§20](HARNESS.md#20-spawn-phases)) must have no
+trigger or a `webhook` one: a schedule or `after` trigger would start it
+without a parent. Saving either pipeline otherwise is a `400`, which
+`?force=1` does not bypass. Each child carries `trigger: "spawned"`, `parent`
+and a `SpawnTriggerPayload` as its `triggerPayload` (see
+[Instance fields](#instance-fields)), held to the same 64 KiB as a webhook
+body; its `command` checks read it at `ARGUS_TRIGGER_PAYLOAD_FILE` too. A child
+is started whether or not the target is `enabled`.
 
 ### `POST /api/launch`
 
@@ -1449,6 +1464,144 @@ duplicate ids, self-edges, edges to phases that do not exist, duplicate edges,
 cycles (the message names the phases in the cycle), and a graph where no phase
 can start. `produces` must match `[A-Za-z0-9_-]{1,40}`.
 
+**Spawn phases.** A phase that declares `spawn` runs no steps of its own: it
+starts one instance of another pipeline (a _child_) per task in an earlier
+phase's validated result, in `dependsOn` order, and succeeds once every child
+has succeeded (HARNESS.md [§20](HARNESS.md#20-spawn-phases)). The task list
+comes from a phase the spawn phase transitively `needs`:
+
+```jsonc
+{
+  "phases": [
+    {
+      "id": "plan",
+      "name": "Plan",
+      "cwd": "/repo",
+      "gated": true, // a bad task list fails plan before this gate
+      "steps": [{ "name": "plan", "prompt": "Split the spec into tasks." }],
+      "retry": { "attempts": 2, "retryOn": ["spawn", "exit-code", "unverified", "signal"] },
+      "result": {
+        "artifact": "plan",
+        "schema": {
+          "type": "object",
+          "required": ["tasks"],
+          "properties": {
+            "spec": { "type": "string" },
+            "tasks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["id"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "title": { "type": "string" },
+                  "after": { "type": "array", "items": { "type": "string" } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      "id": "tasks",
+      "name": "Tasks",
+      "cwd": "/repo", // must exist, although nothing runs there
+      "needs": ["plan"],
+      "produces": "tasks-summary", // the children summary, once every child succeeded
+      "spawn": {
+        "pipelineId": "<task pipeline id>", // the pipeline every child runs
+        "items": { "phase": "plan", "path": ["tasks"] }, // an array of objects
+        "key": "id", // a required string on each task
+        "dependsOn": "after", // optional: the keys a task waits for
+        "title": "title", // optional
+        "maxParallel": 1, // optional: default 1, and 1 is the most until reliability WS13
+        "maxItems": 20, // optional: default 20, at most 50
+        "base": "origin/main", // optional: every child's worktrees are cut from it
+        "include": { "spec": { "phase": "plan", "path": ["spec"] } }, // optional, up to 16
+      },
+    },
+  ],
+}
+```
+
+A spawn phase may declare only `id`, `name`, `cwd`, `needs`, `produces` and
+`spawn`; it is stored with `steps: []` and `gated: false` and accepts those two
+back, so a `GET` → `PUT` round trip saves. Anything else is a `400`. The
+messages, verbatim (`<i>` is the phase's position, `<id>` its id). Each
+`spawn.items` message is also given for every `spawn.include.<name>`, under that
+name, and the `spawn.key` property message for `spawn.dependsOn` and
+`spawn.title`; `<path>` is dotted, or `the whole result` for `[]`:
+
+```text
+phase <i>: a spawn phase runs no agent of its own, so it cannot declare <field>; put it on the spawned pipeline's phases
+phase <i>: a spawn phase has no steps; its work runs in the spawned pipeline's instances
+phase <i>: a spawn phase cannot be gated; it waits for you by itself when a child fails, and each task is reviewed at its child's own gates
+
+phase <i>: spawn must be an object
+phase <i>: spawn has unknown key "<key>"
+phase <i>: spawn.pipelineId must name the pipeline each child runs
+phase <i>: spawn.items must be an object { phase, path }
+phase <i>: spawn.items has unknown key "<key>"
+phase <i>: spawn.items.phase must name a phase
+phase <i>: spawn.items.path must be a list of property names ([] for the whole result)
+phase <i>: spawn.items.path is capped at 8 segments
+phase <i>: spawn.key must name a task property
+phase <i>: spawn.dependsOn cannot be the key property "<key>"
+phase <i>: spawn.title cannot be the dependsOn property "<title>"
+phase <i>: spawn.maxParallel must be a whole number of at least 1
+phase <i>: spawn.maxParallel is capped at 1 until parallel Claude sessions are safe (reliability WS13); children run one at a time
+phase <i>: spawn.maxItems must be an integer 1-50
+phase <i>: spawn.base must be a non-empty string
+phase <i>: spawn.base "<ref>" is not a valid git ref (no whitespace, no leading "-")
+phase <i>: spawn.include must be an object of named { phase, path } sources
+phase <i>: spawn.include is capped at 16 names
+phase <i>: spawn.include name "<name>" must be 1-40 letters, digits, - or _
+
+phase "<id>": spawn.items.phase names unknown phase "<phase>"
+phase "<id>": spawn.items.phase cannot name its own phase
+phase "<id>": spawn.items.phase names "<phase>", which is not a dependency of this phase; add it to needs so its result exists before any child starts
+phase "<id>": spawn.items.phase names "<phase>", which declares no result; a spawn phase reads only a validated result
+phase "<id>": spawn.items.path <path> is not declared by phase "<phase>"'s result schema
+phase "<id>": spawn.items.path <path> must be an array of objects in phase "<phase>"'s result schema (it is <what it is>)
+phase "<id>": spawn.key "<key>" must be a required string property of each task in phase "<phase>"'s result schema
+phase "<id>": spawn.dependsOn "<name>" must be declared as an array of strings on each task in phase "<phase>"'s result schema
+phase "<id>": spawn.title "<name>" must be declared as a string property of each task in phase "<phase>"'s result schema
+phase "<id>": a spawn phase cannot sit between implementation phase "<impl>" and its acceptance verifier "<verifier>"; a remediation re-verifies an implementation, it does not re-run children
+
+phase "<id>": spawn.pipelineId: a pipeline cannot spawn itself
+phase "<id>": spawn.pipelineId names an unknown pipeline: <pipelineId>
+phase "<id>": spawn.pipelineId names "<name>", which has a "<kind>" trigger; a spawned pipeline is started by its parent, so its trigger must be none or a webhook
+phase "<id>": spawn.pipelineId names "<name>", which has a spawn phase of its own ("<phase>"); spawn phases nest one level deep
+```
+
+The target check runs the other way too: saving a pipeline that another
+pipeline spawns with a schedule or `after` trigger, or with a spawn phase, is
+refused with `"<parent name>" spawns this pipeline from phase "<id>", and this
+pipeline` followed by the same `has a "<kind>" trigger; …` or `has a spawn
+phase of its own …` ending. All of these are validation, so `?force=1` does
+not bypass them.
+
+**Reading the children.** A later phase may declare
+`childrenContext: { fromPhase }`, naming a spawn phase it depends on. Every
+step of that phase then gets a read-only manifest of the spawn phase's
+children at `ARGUS_CHILDREN_FILE`, and each child's artifact folder as an
+optional read channel
+([HARNESS.md § The parent's view of its children](HARNESS.md#the-parents-view-of-its-children)).
+A spawn phase cannot declare it. The messages, verbatim:
+
+```text
+phase <i>: a spawn phase cannot declare childrenContext; put it on a later phase of this pipeline that needs this one
+phase <i>: childrenContext must be an object { fromPhase }
+phase <i>: childrenContext has unknown key "<key>"
+phase <i>: childrenContext.fromPhase must name a phase
+
+phase "<id>": childrenContext.fromPhase names unknown phase "<phase>"
+phase "<id>": childrenContext.fromPhase cannot name its own phase
+phase "<id>": childrenContext.fromPhase names "<phase>", which is not a spawn phase and so starts no children
+phase "<id>": childrenContext.fromPhase names "<phase>", which is not a dependency of this phase; add it to needs so its children have settled first
+```
+
 ### Execution semantics
 
 - A fan-out starts every newly-ready phase together; a **fan-in waits for every
@@ -1463,7 +1616,24 @@ can start. `produces` must match `[A-Za-z0-9_-]{1,40}`.
 - `POST /api/instances/:id/revise` re-runs only the revised phase and stops
   exactly the revised attempt's still-running runs — captured when the decision
   is linked to the instance; sibling branches are never stopped.
-  `POST /api/instances/:id/abort` stops everything.
+  `POST /api/instances/:id/abort` stops everything, a spawn phase's children
+  included.
+- A spawn phase starts its children in task order as the tasks they depend on
+  succeed, at most `maxParallel` live at once, and stays `running` while they
+  run or wait at their own gates. A child that fails or is aborted stops new
+  starts and blocks the tasks that depend on it; once no child is live, the
+  spawn phase waits for a person (`pause: "children"`): `approve` accepts the
+  tasks that succeeded, `revise` re-runs every task that did not, and `abort`
+  stops the parent and its children. A child can be revised on its own, like
+  any instance, while its parent waits for it.
+- A spawn phase's task list is checked when the phase that produces it submits
+  its result. A list Argus could not run (missing, not a list, empty, over
+  `maxItems`, a task that is not an object, lacks its key or repeats one, is
+  over 16 KiB as JSON, or depends on itself, on a key not in the list or
+  through a cycle) fails that phase under `signal`, before its checks and its
+  gate, with a reason starting
+  `the task list for spawn phase "<id>" is not usable:`. `signal` is retried
+  only when the phase's `retry.retryOn` names it.
 - Both `approve` and `revise` accept an optional `phaseId` naming which paused
   phase is meant. Absent, the single paused phase is meant — a bare `POST` is
   still a valid approval. Naming a phase that is not paused is a `409`.
@@ -1553,7 +1723,8 @@ pipeline's, and absent means `required`. Unknown keys are a `400`.
 Three optional fields record how a gate was passed.
 `PipelineInstance.gateDecisionIds?: string[]` lists the gate decisions the
 instance links, in order — a decision is linked before any of its effects start.
-`PhaseProgress.pause?: "gate" | "needs-input"` says why a phase is waiting; a
+`PhaseProgress.pause?: "gate" | "needs-input" | "children"` says why a phase is
+waiting (`children`: a spawn phase whose children stopped short, below); a
 pause recorded before pause causes existed has none.
 
 `PipelineInstance.pendingGateOperation?: { decisionId, decision, phaseId | null,
@@ -1572,6 +1743,51 @@ editing or deleting the pipeline cannot change what a running instance does;
 the live definition is read only to _start_ one. An instance written before the
 field existed has none and runs against the live definition, as it always did.
 
+**Spawn phases** (HARNESS.md [§20](HARNESS.md#20-spawn-phases)).
+`PhaseProgress.children?: PhaseChildren` is a spawn phase's task list, absent
+until the phase first starts and on every other phase:
+`{ pipelineId, source: { phaseId, attempt }, maxParallel, tasks: SpawnTask[] }`,
+frozen when the list is built and kept across a revise. A task's position in
+`tasks` is its index everywhere. Each `SpawnTask` is
+`{ key, title?, dependsOn?, state, instanceId?, previousInstanceIds?,
+waitingPhaseId?, reason?, deferred?, reviveDecisionId? }`:
+
+- `title` is clipped to 60 characters (the child gets the task whole), and
+  `dependsOn` lists **positions** in `tasks`, not keys, absent when there are
+  none;
+- `state` is `pending`, `planned` (the child's id is saved, its start owed),
+  `reviving` (a revive of the failed child is owed, for the parent's decision
+  `reviveDecisionId`), `running`, `awaiting-approval` (the child waits at the
+  gate of its phase `waitingPhaseId`), `succeeded`, `failed`, `aborted` or
+  `blocked` (a task it depends on, directly or not, failed or was aborted);
+- `instanceId` is the current child, minted before it starts and kept through
+  a revive; `previousInstanceIds` the children a fresh one replaced, oldest
+  first;
+- `reason` (at most 200 characters) says why a task `failed` or was `aborted`,
+  and `deferred: { reason, at }` why its start or revive waits (a busy target
+  pipeline, the spend budget, a failed preflight, a record Argus cannot read).
+
+The spawn phase's `payload` is a `SpawnChildrenSummary`,
+`{ pipelineId, tasks: [{ key, title?, state, instanceId? }], counts, notSucceeded }`
+(`counts` by state, a state with no task absent): published under `produces`
+when every child succeeded, and held while the phase waits at `children`,
+where `notSucceeded` lists the keys approving it drops. A task list Argus could
+not run fails the phase that produced it under `signal` (see
+[Execution semantics](#execution-semantics)).
+
+A spawned child carries `trigger: "spawned"`, `parent?: InstanceParentRef`
+(`{ instanceId, pipelineId, phaseId, index, key }`: the parent, its spawn
+phase, and the task's position and key) and, as its `triggerPayload`, a
+`SpawnTriggerPayload`: `{ task, key, base?, include?, parent }`, where `task`
+is exactly what the parent's result held and `include` holds `spawn.include`'s
+values (`null` for a path the result does not hold); it is at most 64 KiB.
+`PipelineInstance.workspaceBase?: string` is the ref its worktrees are cut from
+instead of its definition's `workspace.base`: the spawn phase's `base`, never
+fetched. `PipelineInstance.abortCause?: "pipeline-deleted" | "parent-aborted"`
+says why an instance was aborted when no person chose to stop it:
+`parent-aborted` marks a child stopped with its parent, or because its parent
+no longer waits for it. Neither fires an `after` chain.
+
 ### Gate decisions
 
 `GET /api/instances/:id/gate-decisions` returns the durable record of who, or
@@ -1587,14 +1803,15 @@ instance reads it is **not** admin-gated.
       "instanceId": "…",
       "pipelineId": "…",
       "decision": "approve", // approve | revise | abort
-      "mechanism": "operator", // operator | verdict-auto-approve | unspecified
-      "channel": "http", // http | omnibar | verdict-watcher | in-process
+      "mechanism": "operator", // operator | verdict-auto-approve | approval-condition | parent-decision | unspecified
+      "channel": "http", // http | omnibar | verdict-watcher | approval-poll | in-process
       "principal": { "kind": "session", "username": "ana", "role": "admin" },
       "phases": [
         { "phaseId": "plan", "attempt": 0, "status": "awaiting-approval", "runIds": ["…"] },
       ],
       "answersProvided": true, // optional
       "note": "…", // optional: a revise note, clipped to 2000 chars
+      "parentDecisionId": "GD-…", // optional: mechanism parent-decision only
       "recordedAt": "2026-09-29T09:00:00.000Z",
       "effect": "applied", // applied | incomplete | not-applied | unknown
     },
@@ -1604,13 +1821,15 @@ instance reads it is **not** admin-gated.
 ```
 
 `principal` is `{ kind: "session", username, role }`,
-`{ kind: "system", component: "verdict-watcher" }` or `{ kind: "unknown" }`. An
-automated approval additionally carries `verdicts`: the exact basis it rested
+`{ kind: "system", component: "verdict-watcher" }`,
+`{ kind: "system", component: "approval-poll" }`,
+`{ kind: "system", component: "spawn" }` or `{ kind: "unknown" }`. A
+Verdict auto-approval additionally carries `verdicts`: the exact basis it rested
 on, one entry per verdict — `runId`, `stepName`, `verdictId`, `at`, `score`,
 `bar`, `runtime`, `requestedModel`, `reportedModel`, `promptVersion` and
 `rubricDigest`.
 
-When the phase's rubric declares a trajectory, the automated approval also
+When the phase's rubric declares a trajectory, a Verdict auto-approval also
 carries `trajectoryVerdicts`: the trajectory judgment each relevant run was
 approved on, one entry per run, apart from `verdicts` — `runId`, `stepName`,
 `verdictId`, `at`, `score`, `bar` (both `null` when the rubric declares only a
@@ -1618,6 +1837,23 @@ check), `held` (always empty: an approval is never recorded over a held signal),
 `signalsVersion`, `runtime`, `requestedModel`, `reportedModel`, `promptVersion`
 and `rubricDigest` (the trajectory digest). The field is absent when the rubric
 declares no trajectory. See [Auto-approving gates](#auto-approving-gates).
+
+An approval by an [approval condition](#approval-conditions)
+(`mechanism: "approval-condition"`) carries `condition` instead: what the poll
+observed — `{ kind: "command", label, exitCode, output, startedAt, durationMs }`,
+where `exitCode` is always `0` and `output` is at most the last 500 characters
+of the command's combined stdout and stderr.
+
+A decision Argus carries out on a spawned child for its parent
+([Spawn phases over HTTP](#spawn-phases-over-http)) has mechanism
+`parent-decision`, channel `in-process` and principal
+`{ kind: "system", component: "spawn" }`. `parentDecisionId` names the decision
+on the parent it carries out: a revise of the parent's spawn phase revives the
+failed child with a revise carrying the parent's `note`, which the child's next
+attempt reads like any revise note, and the parent's abort aborts the child. A
+child aborted by reconcile's sweep, because its parent no longer waits for it,
+has no `parentDecisionId`: that acts on the parent's state, not on one
+decision.
 
 `effect` has four values:
 
@@ -1638,6 +1874,81 @@ Records live in `~/.claude/argus/gate-decisions.jsonl`. It is append-only; each
 record is written and fsynced **before** the transition it describes, and it is
 never pruned. The order every decision follows is under
 [Execution semantics](#execution-semantics).
+
+### Approval conditions
+
+A gated phase may declare `approveWhen`, a command Argus polls while the phase
+waits at its gate (HARNESS.md
+[§ Approval conditions](HARNESS.md#approval-conditions)):
+
+```jsonc
+"approveWhen": {
+  "kind": "command",
+  "run": "node /home/you/argus-checks/pr-merged.mjs",
+  "label": "pull request merged", // optional; default "command: " and the first 71 characters of run
+  "everySeconds": 300,
+  "timeoutSeconds": 60, // optional, default 60
+  "failOnExit": 3, // optional
+}
+```
+
+Saving a pipeline (`POST`, `PUT` or `PATCH`) validates it, and every error is a
+`400` (`phase <i>` is the phase's index):
+
+- `phase <i>: approveWhen must be an object`;
+- `phase <i>: approveWhen has unknown key "<key>"`;
+- `phase <i>: approveWhen.kind must be command`;
+- `phase <i>: approveWhen.run must be a non-empty string up to 4000 chars`;
+- `phase <i>: approveWhen.cwd must be a non-empty string`;
+- `phase <i>: approveWhen.label must be a non-empty string up to 120 chars`;
+- `phase <i>: approveWhen.everySeconds must be an integer 30-86400` (required);
+- `phase <i>: approveWhen.timeoutSeconds must be an integer 1-600`;
+- `phase <i>: approveWhen.failOnExit must be an integer 1-255`;
+- `phase <i>: approveWhen only means something on a gated phase`;
+- on a phase that commits knowledge by configuration (the reasons listed under
+  [Declaring a rubric](#declaring-a-rubric)):
+
+  ```
+  phase <i> ("<id>"): approveWhen cannot open a gate that commits knowledge (<reasons>). A person must approve this gate. Remove approveWhen from this phase.
+  ```
+
+Defaults are never stored: the definition reads back exactly as it was sent.
+Editing `approveWhen` on a pipeline with live instances is the usual
+`409 instances-running` without `?force=1`, and an instance keeps polling the
+condition its own definition snapshot declares.
+
+While the phase waits at a `gate` pause, the scheduler tick runs the command in
+the phase's worktree (its `cwd` without one), under the phase's environment
+policy and with the inputs a command check gets, the trigger payload file
+included. At most one poll per phase attempt runs at a time, no sooner than
+`everySeconds` after the previous one started.
+
+- **Exit 0** approves the gate, recorded as a [gate decision](#gate-decisions)
+  with mechanism `approval-condition`, channel `approval-poll` and its
+  `condition` basis, and the next phases start.
+- **An exit equal to `failOnExit`** fails the phase with
+  `failureClass: "approval-condition"` and a `reason` of the form
+  `approval condition "<label>" exited <code>: <last line printed>`. It is never
+  retried, and no gate decision is recorded; a person can revise it.
+- **Anything else** — another exit code, a timeout, a kill, a command that could
+  not start — keeps the gate waiting.
+
+The command runs in the tree the phase's agent has just edited, so keep the
+script, and every program it starts, outside that tree, name the script by
+absolute path (on Windows the interpreter too), and start those programs from a
+folder outside the tree: an agent that can edit the script, or plant a program
+the script finds first, can open its own gate (HARNESS.md
+[§ Approval conditions](HARNESS.md#approval-conditions)).
+
+A person's approve, revise and abort are unaffected and may come first. The
+engine decides a poll's result again under the instance lock, and a result for a
+phase that has moved since is refused, as is one on a spawned child its parent
+no longer waits for. There is no route for it: a refusal is logged and written
+to the journal (`phase.approval-condition`), never returned to anyone. A gate
+whose attempt staged knowledge, a `needs-input` pause, a spawn phase's
+`children` pause, a pause of unknown cause and an instance whose pipeline was
+deleted are not polled. `approveWhen` may sit beside `autoApprove`; whichever
+qualifies first opens the gate.
 
 ### Decision experiments (H2)
 
@@ -1681,8 +1992,9 @@ read.
   - the statement that agreement with operator behaviour is not correctness;
   - the definitions and configs;
   - gate exclusions;
-  - a census and pending counts per population (`manual`,
-    `auto-approve-declared`);
+  - a census and pending counts per population (`manual`, and
+    `auto-approve-declared`: gates whose phase declares `autoApprove` or
+    `approveWhen`);
   - deterministic and Verdict baseline rows — the Verdict baseline is
     `auto-approval-qualification`, with one row set per version recorded
     (v1, or v2 which adds the trajectory requirement, with signals from a complete
@@ -1843,6 +2155,9 @@ flags, and a complete worked pipeline: [docs/HARNESS.md](HARNESS.md).
 | `claudeConfigDir`  | pipeline              | string                                                                                                       | The Claude config folder every Claude Code step loads instead of the operator's `~/.claude` (`CLAUDE_CONFIG_DIR`); other runtimes record that it does not apply. An absolute path to an existing directory that a permission rule can name (no comma or newline, not a UNC share), stored resolved. Refused when it is or contains the operator's Claude home, when it contains Argus's work root, when a phase `cwd` or an `additionalDirectories` entry is inside it, and when any level sets `capabilities.env.set.CLAUDE_CONFIG_DIR`. `null` in a `PATCH` clears it. See HARNESS.md §3b.                                                                                                                                                                                                                      |
 | `timeoutSeconds`   | phase, step           | integer                                                                                                      | 1–86400. A step's own value overrides its phase's; absent on both = no limit.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `checks`           | phase                 | `PhaseCheck[]`                                                                                               | Up to 50 entries. Run once every step of the phase has reported success; a failing check fails the phase under the `verification` class.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `approveWhen`      | phase                 | `ApprovalCondition`                                                                                          | Gated phases only; refused on a phase that commits knowledge. `kind: "command"`; `run` 1–4000 chars; `cwd?`; `label?` ≤120 chars (default `command: ` and the first 71 characters of `run`); `everySeconds` 30–86400; `timeoutSeconds?` 1–600 (default 60); `failOnExit?` 1–255. See [Approval conditions](#approval-conditions).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `spawn`            | phase                 | `SpawnPolicy`                                                                                                | A **spawn phase** (HARNESS.md §20): one child instance of `pipelineId` per task. Declares only `id`, `name`, `cwd`, `needs`, `produces` and `spawn`; stored with `steps: []` (the only phase whose `steps` may be empty) and `gated: false`. `pipelineId`: another pipeline, trigger none or webhook, no spawn phase. `items: { phase, path }`: an array of objects at `path` (≤8 names) in a transitive dependency's declared result; `key` a required string on each task, `dependsOn?` an array of strings, `title?` a string. `maxParallel?` 1 (the most until WS13); `maxItems?` 1–50, default 20; `base?` a git ref; `include?` ≤16 names (`[A-Za-z0-9_-]{1,40}`) → `{ phase, path }`, any type. See [Phase fields](#phase-fields).                                                                         |
+| `childrenContext`  | phase                 | `{ fromPhase: string }`                                                                                      | Gives every step of the phase a read-only children manifest (`ARGUS_CHILDREN_FILE`, HARNESS.md §20) of the spawn phase `fromPhase`, and each child's artifact folder as an optional read channel. `fromPhase` must name a spawn phase of this pipeline that is a transitive `needs` dependency, both checked when the pipeline is saved; a spawn phase cannot declare it. Built once per attempt and re-hashed when a run completes (`change-context-integrity`).                                                                                                                                                                                                                                                                                                                                                 |
 | `ruleVerification` | phase                 | `{ kinds?: ClaimKind[]; holds?: "agent-evidence" \| "deterministic-check"; note?: string }`                  | Turns the phase into a **business-rule verification phase** (KNOWLEDGE-LEDGER.md §15). The rules it answers for are exactly the ones its `knowledgeContext` supplied — there is no second selection mechanism. `kinds` defaults to `["business-rule"]`; `holds` defaults to `"agent-evidence"` and `"deterministic-check"` additionally requires a `holds` outcome to cite a check of this phase that passed. Its steps get the verification instructions and a required `ARGUS_RULE_VERIFICATION_FILE` channel; every supplied rule must receive exactly one outcome or the step fails under `rule-verification`.                                                                                                                                                                                                |
 | `knowledgeDelta`   | phase                 | `"optional" \| "required"`                                                                                   | Default `"optional"`. `"required"` makes the KnowledgeDelta channel (`ARGUS_KNOWLEDGE_DELTA_FILE`) a launch precondition: a runtime that cannot make it writable is refused under strict enforcement. Emitting a delta stays optional either way. See HARNESS.md §3a.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `knowledgeContext` | phase, step           | `{ claims?: Selector[]; fromPhases?: PhaseProducedSelector[] }`                                              | At least one of the two. `claims`: 1–64 selectors, each `"ID"` (active revision), `"ID:vN"` (exact) or `{ id, revision: N \| "active" }`; normalized to the object form, each claim id at most once. `fromPhases`: 1–8 entries, each `"phaseId"` or `{ phaseId, kinds?: ClaimKind[] }`, resolving to the claims that phase of _this instance_ committed through its accepted KnowledgeDelta; the phase must exist and be a transitive `needs` dependency (checked at save). `claims` is resolved first and wins on a claim-id collision; the total is capped at 64. A step's spec replaces its phase's. Resolution happens at launch, and an unknown claim, an unresolvable revision or a `fromPhases` phase that is not `succeeded`/`skipped` is a `configuration` failure. See KNOWLEDGE-LEDGER.md §13, §14.10. |
@@ -1866,22 +2181,22 @@ flags, and a complete worked pipeline: [docs/HARNESS.md](HARNESS.md).
 
 `EnvPolicy`:
 
-| Key              | Type                     | Validation                                                                                                                                                                                                                                                                                                     |
-| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inherit`        | `"all"\|"minimal"`       | default `"all"`                                                                                                                                                                                                                                                                                                |
-| `allow` / `deny` | `string[]`               | each an env-var name, optionally with one trailing `*`                                                                                                                                                                                                                                                         |
-| `set`            | `Record<string, string>` | keys must be valid env-var names and may not name a reserved Argus control variable (`ARGUS_TOKEN`, `ARGUS_WEBHOOK_URL`, `ARGUS_SIGNAL_*`, `ARGUS_RUN_ID`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RESULT_FILE`, `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_STEP_NAME`, `ARGUS_RUNTIME`) |
+| Key              | Type                     | Validation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inherit`        | `"all"\|"minimal"`       | default `"all"`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `allow` / `deny` | `string[]`               | each an env-var name, optionally with one trailing `*`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `set`            | `Record<string, string>` | keys must be valid env-var names and may not name a reserved Argus control variable: Argus's secrets (`ARGUS_TOKEN`, `ARGUS_WEBHOOK_URL`) or a per-invocation identifier (`ARGUS_SIGNAL_TOKEN`, `ARGUS_SIGNAL_URL`, `ARGUS_RESULT_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_PHASE_ATTEMPT`, `ARGUS_RUN_ID`, `ARGUS_STEP_NAME`, `ARGUS_WORKSPACE`, `ARGUS_RUNTIME`, `ARGUS_MEMORY_DIR`, `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_KNOWLEDGE_CONTEXT_FILE`, `ARGUS_RULE_VERIFICATION_FILE`, `ARGUS_CHANGE_REQUEST_FILE`, `ARGUS_CHANGE_PROPOSAL_FILE`, `ARGUS_CHANGE_CONTEXT_FILE`, `ARGUS_REVISION_NOTES_FILE`, `ARGUS_CHILDREN_FILE`, `ARGUS_TRIGGER_PAYLOAD_FILE`; HARNESS.md §4) |
 
 `PhaseCheck` (discriminated on `kind`; each kind accepts only its own fields
 plus the common `label`, ≤120 chars):
 
-| Kind            | Fields                               | Validation                                                                               |
-| --------------- | ------------------------------------ | ---------------------------------------------------------------------------------------- |
-| `command`       | `run`, `cwd?`, `timeoutSeconds?`     | `run` ≤4000 chars; `timeoutSeconds` 1–86400                                              |
-| `artifact`      | `path`, `minBytes?`                  | `path` relative, no `..` segment, no absolute path; `minBytes` a non-negative integer    |
-| `file`          | `path`, `minBytes?`                  | same as `artifact`, resolved against the phase's `cwd` instead of its artifact directory |
-| `changed-files` | `allow?`, `deny?`, `requireChanges?` | `allow`/`deny` lists of non-empty globs; `requireChanges` a boolean                      |
-| `trajectory`    | `thresholds`, `requireTranscript?`   | see below                                                                                |
+| Kind            | Fields                               | Validation                                                                                                                                                                                                                                                        |
+| --------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`       | `run`, `cwd?`, `timeoutSeconds?`     | `run` ≤4000 chars; `timeoutSeconds` 1–86400. Runs with the work's identity and, when the instance has a payload, `ARGUS_TRIGGER_PAYLOAD_FILE` ([HARNESS.md § What a command check is told](HARNESS.md#what-a-command-check-is-told)); `run` is never interpolated |
+| `artifact`      | `path`, `minBytes?`                  | `path` relative, no `..` segment, no absolute path; `minBytes` a non-negative integer                                                                                                                                                                             |
+| `file`          | `path`, `minBytes?`                  | same as `artifact`, resolved against the phase's `cwd` instead of its artifact directory                                                                                                                                                                          |
+| `changed-files` | `allow?`, `deny?`, `requireChanges?` | `allow`/`deny` lists of non-empty globs; `requireChanges` a boolean                                                                                                                                                                                               |
+| `trajectory`    | `thresholds`, `requireTranscript?`   | see below                                                                                                                                                                                                                                                         |
 
 A `trajectory` check is deterministic (no model) and compares the signal counts
 of the attempt's relevant runs (HARNESS §19) to `thresholds`:
@@ -1944,9 +2259,12 @@ A failed phase's `payload` (free-form otherwise) carries a `failureClass` —
 how the failure was classed for the retry policy. It is one of `"spawn"`,
 `"exit-code"`, `"signal"`, `"timeout"`, `"verification"`, `"knowledge-delta"`,
 `"knowledge-context-integrity"`, `"rule-verification"`, `"change-proposal"`,
-`"change-context-integrity"`, `"acceptance-verification"`, `"unverified"` or
-`"configuration"`. `"configuration"` is never retried; every other class is
-retried only when named in the phase's `retry.retryOn`, whose default is
+`"change-context-integrity"`, `"acceptance-verification"`, `"unverified"`,
+`"configuration"` or `"approval-condition"`. `"configuration"` and
+`"approval-condition"` (a gate's `approveWhen` command exited with its
+`failOnExit` code — see [Approval conditions](#approval-conditions)) are never
+retried, and `retryOn` cannot name them; every other class is retried only when
+named in the phase's `retry.retryOn`, whose default is
 `["spawn", "exit-code", "unverified"]`. `"unverified"` is a completion Argus
 could not accept on the agent's own word (no `ARGUS_OUTCOME` marker under a
 `required` completion policy, conflicting markers, or a stop-hook reading that
@@ -1986,7 +2304,9 @@ values) — and what the runtime couldn't enforce of it, the config files
 materialized for the invocation, the artifact directory, every Argus-owned
 invocation channel it was offered (`channels[]`: env var, path, access,
 whether the launch depended on it, and `granted` / `unavailable` /
-`unmanaged` — HARNESS.md §3a), the pipeline's Claude config folder when the
+`unmanaged` — HARNESS.md §3a), the children manifest it was given
+(`childrenFile`, on a phase that declares `childrenContext`; its hash is in
+`suppliedInputs`), the pipeline's Claude config folder when the
 CLI loaded one (`claudeConfigDir`, HARNESS.md §3b), the deadline, and
 the repository state (`git rev-parse HEAD`) it started against. Returns the
 `AgentInvocationRecord`, or `404` when the run predates invocation records or
@@ -2018,7 +2338,15 @@ it. This is what the Command Center's review drawer renders.
   "ruleVerification": { "selected": 3, "holds": 1, "violated": 1, "unverifiable": 1, "requiresReview": true },
   "discovery": { "candidates": 2, "newRules": 1, "revisions": 0, "assumptions": 1,
                  "facts": 0, "constraints": 0, "conclusions": 0,
-                 "evidence": 3, "warnings": 0, "requiresReview": true }
+                 "evidence": 3, "warnings": 0, "requiresReview": true },
+  "children": { "pipelineId": "…", "source": { "phaseId": "plan", "attempt": 0 },
+                "maxParallel": 1, "notSucceeded": ["auth"],
+                "tasks": [ { "key": "auth", "state": "failed", "instanceId": "…",
+                             "reason": "phase \"implement\" failed: …",
+                             "child": { "status": "failed",
+                                        "decisionPhase": { "phaseId": "implement",
+                                          "phaseName": "Implement", "attempt": 1,
+                                          "status": "failed" } } } ] }
 }
 ```
 
@@ -2061,6 +2389,18 @@ the filesystem-dependent warnings (a source path that no longer exists), which
 the standalone `/deltas/:id/preview` route cannot compute. Absent when no step
 of the attempt proposed knowledge. `discovery` is the counts, present only on
 a phase that declared `discovery`.
+
+`children` (`PhaseChildrenReview`) is present only on a spawn phase whose task
+list was built: the phase's own record of every task
+([Instance fields](#instance-fields)), each with `child` — the child's
+`status` now and its `decisionPhase`, the phase a person would act on (the one
+waiting at its gate, else its failed one: `{ phaseId, phaseName, attempt,
+status }`) — read per request, and `notSucceeded`, the keys of the tasks that
+did not succeed: what approving at a `children` pause drops and what revising
+the spawn phase re-runs. A task with no child yet, or whose child's record is
+gone, has no `child`. A spawn phase is reviewable only while it waits at
+`children` or has failed; while its children run, the instance itself shows
+the tasks.
 
 ### `GET /api/instances/:id/phases/:phaseId/artifact?path=<relative>`
 
@@ -2178,7 +2518,14 @@ fail. `404` when the id is invalid or neither the instance nor a log exists.
       "phaseId": "repair",
       "detail": "not selected by an upstream route"
     },
-    { "at": "…", "kind": "route.failure", "phaseId": "evaluate", "detail": "…" }
+    { "at": "…", "kind": "route.failure", "phaseId": "evaluate", "detail": "…" },
+    {
+      "at": "…",
+      "kind": "phase.approval-condition",
+      "phaseId": "review",
+      "attempt": 0,
+      "detail": "pull request merged: waiting: exit 1"
+    }
   ]
 }
 ```
@@ -2202,7 +2549,28 @@ whose process was still alive after a restart and was delivered again;
 `step.orphan-stopped` marks a still-alive run whose step was already decided,
 stopped on recovery (HARNESS §18); `phase.verifying` /
 `phase.verified` bracket Argus's own checks running over a phase's work, once
-every step is in.
+every step is in; `phase.approval-condition` marks a new result of a gate's
+[approval condition](#approval-conditions), its detail starting with the
+condition's label and a colon (`<label>: `): the first wait (`waiting: exit 1`,
+`waiting: timed out after 60s`), an approval
+(`exit 0 in <N>ms: approved the gate`), a failure
+(`exit 3: failed the phase`, beside the phase's own `phase.failed` entry) or a
+refused result (`exit 0, not applied: <reason>`). It is written only when the
+result changes, so once per change per server process. A gate whose attempt
+staged knowledge is not polled; it gets one entry per attempt and server
+process, without the label:
+`not polled: this gate commits knowledge (<reasons>) and needs a person`.
+
+A parent's journal records its spawn phases (HARNESS.md
+[§20](HARNESS.md#20-spawn-phases)): `children.started` (the task list was
+built), `child.planned` (`<key> → <child id>`), `child.started` (created, or
+found already started), `child.deferred` (a start or revive waits, with why),
+`child.refused` (refused for good; the task failed), `child.revived` and
+`child.revive-refused` (a failed child revised, or refusing it, for a revise of
+the spawn phase), `child.aborted` (stopped with its parent, or because the
+parent no longer waits for it), `children.held` and `children.released` (the
+spend budget's hold began or lifted), `children.joined` (every task succeeded)
+and `children.halted` (the phase waits for a person at `children`).
 
 ## Sentinel
 
@@ -2408,7 +2776,8 @@ phase <i> ("<id>"): autoApprove cannot open a gate that commits knowledge (<reas
 
 `<reasons>` are drawn from `discovery`, `rule-verification`, `change-intent`,
 `acceptance-verification`, `implementation` and `knowledge-delta-required`.
-There is no opt-in bypass.
+There is no opt-in bypass. The same rule refuses `approveWhen`, a gate a polled
+command opens, on those phases ([Approval conditions](#approval-conditions)).
 
 ### `GET /api/runs/:id/verdict`
 
@@ -2634,8 +3003,10 @@ these holds:
 - the attempt actually staged knowledge: a KnowledgeDelta (including the
   optional one any step may write), a rule verification, a change proposal, an
   acceptance verification, a pending commit, or a realization link;
-- the pause is not a `gate` pause — a `needs-input` pause, or a pause recorded
-  before pause causes existed.
+- the pause is not a `gate` pause — a `needs-input` pause, a spawn phase's
+  `children` pause, or a pause recorded before pause causes existed;
+- the instance is a spawned child its parent no longer waits for
+  (`409 parent-decided`, [Spawn phases over HTTP](#spawn-phases-over-http)).
 
 A legacy definition keeps the `autoApprove` field on disk, but it is inert. When
 the watcher withholds approval from a gate that commits knowledge, it writes
@@ -2967,30 +3338,30 @@ session — it cannot execute anything.
 
 ## Pipelines (v0.3)
 
-| Method + path                                           | Effect                                                                                                                                                                                                                                                                                                                                     |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GET /api/pipelines`                                    | list pipeline definitions                                                                                                                                                                                                                                                                                                                  |
-| `POST /api/pipelines`                                   | create a definition (validated) — **admin**                                                                                                                                                                                                                                                                                                |
-| `PUT /api/pipelines/:id`                                | replace a definition — **admin**; `409 { code: "instances-running", instances }` when the edit changes what runs (`phases`, `model`, `reasoningEffort`, `runtime`, `capabilities`, `claudeConfigDir`, `workspace`, `memory`) while an instance is running or awaiting approval — `?force=1` saves regardless                               |
-| `PATCH /api/pipelines/:id`                              | update some fields (`enabled`, `trigger`, …) — **admin**; the same `409` rule applies to the execution fields                                                                                                                                                                                                                              |
-| `DELETE /api/pipelines/:id`                             | delete a definition — **admin**; first aborts its running and gate-waiting instances (with `abortCause: "pipeline-deleted"`, so they fire no `after` chain; starts of the pipeline wait meanwhile) → `{ ok, aborted: [ids] }`, or `409 { code: "instance-not-stopped", instanceId, aborted }` (definition kept) when one cannot be stopped |
-| `POST /api/pipelines/:id/start`                         | start an instance manually → `202`, or `409` on overlap — **admin**                                                                                                                                                                                                                                                                        |
-| `GET /api/pipelines/:id/instances`                      | instances for a pipeline (newest first)                                                                                                                                                                                                                                                                                                    |
-| `GET /api/pipelines/:id/reliability?days=30`            | first-attempt pass rate, lucky passes, stalls and cost/duration per phase over a trailing window (`days` clamped to 1–365); `404` for an unknown pipeline                                                                                                                                                                                  |
-| `GET /api/pipelines/:id/tune`                           | newest settings-tuning report for a pipeline, or why none can run                                                                                                                                                                                                                                                                          |
-| `POST /api/pipelines/:id/tune`                          | start one tuning pass per phase → `202` with a `running` report; `409` while one runs — **admin**                                                                                                                                                                                                                                          |
-| `GET /api/overview`                                     | command-center rows: `{ definition, latest, cost, active }` per pipeline, attention-first; a deleted pipeline with live instances adds an entry with `orphaned: true` (its `definition` is the instance's snapshot, or a stand-in with no phases)                                                                                          |
-| `GET /api/instances/:id`                                | full pipeline instance                                                                                                                                                                                                                                                                                                                     |
-| `POST /api/instances/:id/signal`                        | ingest a signal `{ phaseId, runId, type, token, payload?, result?, resultError?, completion? }`; `403` when the token is not the named run's own; `202` when the signal is genuine but ignored (see below)                                                                                                                                 |
-| `GET /api/instances/:id/phases/:phaseId/review`         | what a paused phase left for a human: payload, result, checks, artifact listing, and the attempt's candidate knowledge; `409` unless waiting or failed                                                                                                                                                                                     |
-| `GET /api/instances/:id/phases/:phaseId/artifact?path=` | one artifact's text (clipped at 512 KiB) or metadata; `400` on a path that escapes the directory                                                                                                                                                                                                                                           |
-| `GET /api/instances/:id/transitions/integrity`          | compare the instance's transition log with the saved instance → `TransitionIntegrityReport`; `404` for an unknown or invalid id; diagnostic only                                                                                                                                                                                           |
-| `GET /api/instances/:id/gate-decisions`                 | the recorded gate decisions (approve / revise / abort) and how each was made, plus gated phases with no decision on record; `404` when neither the instance nor any record exists                                                                                                                                                          |
-| `POST /api/instances/:id/approve`                       | advance past a gate (optional `{ answers, phaseId, attempt }`) — **admin**                                                                                                                                                                                                                                                                 |
-| `POST /api/instances/:id/revise`                        | re-run the paused phase with the human's note (optional `{ note, phaseId, attempt }`; the note is clipped to 2000 chars, and every later attempt gets all the phase's notes) — **admin**                                                                                                                                                   |
-| `POST /api/instances/:id/abort`                         | abort the instance — **admin**                                                                                                                                                                                                                                                                                                             |
-| `GET /api/setup`                                        | prerequisite status `{ ok, prereqs[] }`                                                                                                                                                                                                                                                                                                    |
-| `POST /api/setup/apply`                                 | install fixable prerequisites, then re-check → `{ ok, prereqs[] }`                                                                                                                                                                                                                                                                         |
+| Method + path                                           | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/pipelines`                                    | list pipeline definitions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `POST /api/pipelines`                                   | create a definition (validated) — **admin**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `PUT /api/pipelines/:id`                                | replace a definition — **admin**; `409 { code: "instances-running", instances }` when the edit changes what runs (`phases`, `model`, `reasoningEffort`, `runtime`, `capabilities`, `claudeConfigDir`, `workspace`, `memory`) while an instance is running or awaiting approval, or while a live instance of another pipeline has a spawn phase that targets this one and has not succeeded or been skipped (each `instances` entry is `{ id, status, pipelineId }`, the pipeline's own first) — `?force=1` saves regardless. A pipeline a spawn phase targets keeps a trigger of none or a webhook and gains no spawn phase: a `400` that `?force=1` does not bypass |
+| `PATCH /api/pipelines/:id`                              | update some fields (`enabled`, `trigger`, …) — **admin**; the same `409` and `400` rules apply                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `DELETE /api/pipelines/:id`                             | delete a definition — **admin**; first aborts its running and gate-waiting instances (with `abortCause: "pipeline-deleted"`, so they fire no `after` chain; starts of the pipeline wait meanwhile) → `{ ok, aborted: [ids] }`, or `409 { code: "instance-not-stopped", instanceId, aborted }` (definition kept) when one cannot be stopped. Children a spawn phase started are among them, and each parent pauses at `children` once its running children finish; an aborted parent aborts its own children (`parent-aborted`)                                                                                                                                       |
+| `POST /api/pipelines/:id/start`                         | start an instance manually → `202`, or `409` on overlap — **admin**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `GET /api/pipelines/:id/instances`                      | instances for a pipeline (newest first); `?parent=<instanceId>` keeps only the children that instance spawned (an unknown id is an empty list)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `GET /api/pipelines/:id/reliability?days=30`            | first-attempt pass rate, lucky passes, stalls and cost/duration per phase over a trailing window (`days` clamped to 1–365); `404` for an unknown pipeline                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `GET /api/pipelines/:id/tune`                           | newest settings-tuning report for a pipeline, or why none can run                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `POST /api/pipelines/:id/tune`                          | start one tuning pass per phase → `202` with a `running` report; `409` while one runs — **admin**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `GET /api/overview`                                     | command-center rows: `{ definition, latest, cost, active }` per pipeline, attention-first; a deleted pipeline with live instances adds an entry with `orphaned: true` (its `definition` is the instance's snapshot, or a stand-in with no phases)                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `GET /api/instances/:id`                                | full pipeline instance                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `POST /api/instances/:id/signal`                        | ingest a signal `{ phaseId, runId, type, token, payload?, result?, resultError?, completion? }`; `403` when the token is not the named run's own; `202` when the signal is genuine but ignored (see below)                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `GET /api/instances/:id/phases/:phaseId/review`         | what a paused phase left for a human: payload, result, checks, artifact listing, and the attempt's candidate knowledge; on a spawn phase, `children`; `409` unless waiting or failed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `GET /api/instances/:id/phases/:phaseId/artifact?path=` | one artifact's text (clipped at 512 KiB) or metadata; `400` on a path that escapes the directory                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `GET /api/instances/:id/transitions/integrity`          | compare the instance's transition log with the saved instance → `TransitionIntegrityReport`; `404` for an unknown or invalid id; diagnostic only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `GET /api/instances/:id/gate-decisions`                 | the recorded gate decisions (approve / revise / abort) and how each was made, plus gated phases with no decision on record; `404` when neither the instance nor any record exists                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `POST /api/instances/:id/approve`                       | advance past a gate (optional `{ answers, phaseId, attempt }`) — **admin**; at a spawn phase's `children` pause, accept the tasks that succeeded: `400 { code: "answers-not-accepted" }` with `answers`, `409 { code: "children-running" }` while a child a person re-ran is live again or still being revised; `409 { code: "parent-decided" }` on a spawned child its parent no longer waits for                                                                                                                                                                                                                                                                   |
+| `POST /api/instances/:id/revise`                        | re-run the paused phase with the human's note (optional `{ note, phaseId, attempt }`; the note is clipped to 2000 chars, and every later attempt gets all the phase's notes) — **admin**; on a spawn phase paused at `children`, re-run every task that did not succeed; `409 { code: "parent-decided" }` as for approve                                                                                                                                                                                                                                                                                                                                             |
+| `POST /api/instances/:id/abort`                         | abort the instance — **admin**; a spawned child can always be aborted, and aborting a parent aborts its children (`abortCause: "parent-aborted"`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `GET /api/setup`                                        | prerequisite status `{ ok, prereqs[] }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `POST /api/setup/apply`                                 | install fixable prerequisites, then re-check → `{ ok, prereqs[] }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 WS frame `{ "type": "pipelines:changed" }` is pushed on any pipeline mutation.
 
@@ -3006,6 +3377,50 @@ prices contribute tokens while `usd` remains null.
 A definition, a phase (`phases[]`) and a step (`phases[].steps[]`) may each
 carry `runtime`; see [Naming a runtime](#naming-a-runtime) for the resolution
 order. One pipeline can therefore mix runtimes phase by phase.
+
+### Spawn phases over HTTP
+
+A spawn phase ([Phase fields](#phase-fields), HARNESS.md
+[§20](HARNESS.md#20-spawn-phases)) adds no route: its children are ordinary
+instances of the task pipeline, decided through the routes above.
+
+- **Listing a parent's children.** The parent's
+  `phases[].children.tasks[].instanceId` names the current child of each task
+  (`GET /api/instances/:id`). `GET /api/pipelines/<task pipeline id>/instances?parent=<parent id>`
+  returns the children themselves, newest first, replaced ones included; it is
+  a read, open like the other instance reads.
+- **Deciding at a `children` pause.**
+  `GET /api/instances/<parent id>/phases/<spawn phase id>/review` carries
+  `children`. Then, on the parent, `POST …/approve` with `{ phaseId }` accepts
+  the tasks that succeeded (the phases after the spawn phase start, with the
+  summary as its payload); `POST …/revise` with `{ phaseId, note? }` re-runs
+  every task that did not succeed (a failed child is revised in place with the
+  note; an aborted or blocked task, or one whose start was refused, waits
+  again and gets a fresh child when it is ready); `POST …/abort` stops the
+  parent and its children. To re-run one task instead, revise that child's
+  failed phase, which the task's `child.decisionPhase` names, on the child: the
+  spawn phase resumes once the child runs again.
+- **Deciding on a child.** Approve and revise of a child, and an automated
+  decision on one (a Verdict auto-approval, an approval condition's result),
+  need its parent to still wait for it: the parent is live,
+  its spawn phase runs or waits at `children`, and the task still names that
+  child. Otherwise they are `409 { code: "parent-decided" }`, because the
+  child's outcome would count for nothing. A parent record Argus cannot read
+  is a plain `409` (try again); a parent record that is gone leaves the child's
+  decisions to you. Abort is never refused for this.
+- **Editing and deleting a task pipeline.** An execution edit is held with
+  `409 instances-running` while a live parent can still start children of it
+  (the parent's entry in `instances` carries its own `pipelineId`); `?force=1`
+  saves it, and every later child runs the edit. `DELETE` aborts its children
+  with its other instances, a start a parent still owed fails its task, and
+  each parent pauses at `children` once none of its children is live.
+- **Retention.** A child is kept past its pipeline's window of 50 instances
+  while its parent's record exists or cannot be read.
+
+Approve, revise and abort reply with a `GateActionReply`: `{ ok: true }`, or
+`{ ok: false, error, code? }`, where `code` is set only for the refusals a
+client acts on (`GateActionRefusal`): `parent-decided` (409),
+`answers-not-accepted` (400) and `children-running` (409).
 
 ### Reliability
 
@@ -3145,17 +3560,20 @@ log retains the delivery failure instead of silently hiding it.
 Argus surfaces missing prerequisites (including this hook) via `GET /api/setup`;
 the web UI's setup banner installs the fixable ones with `POST /api/setup/apply`.
 
-| Env var                        | Meaning                                                                                                                                          |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ARGUS_STEP_NAME`              | label of the running step, injected into the run's environment                                                                                   |
-| `ARGUS_RESULT_FILE`            | where a result-producing step writes its decision JSON                                                                                           |
-| `ARGUS_KNOWLEDGE_DELTA_FILE`   | where a step may write a KnowledgeDelta (see KNOWLEDGE-LEDGER.md §12)                                                                            |
-| `ARGUS_RULE_VERIFICATION_FILE` | where a `ruleVerification` phase's step writes its conformance report (KNOWLEDGE-LEDGER.md §15)                                                  |
-| `ARGUS_CHANGE_REQUEST_FILE`    | the requested change and the current conformance of the rules a `changeIntent` phase's step must classify; read-only (KNOWLEDGE-LEDGER.md §16.4) |
-| `ARGUS_CHANGE_PROPOSAL_FILE`   | where a `changeIntent` phase's step writes its ChangeProposal (KNOWLEDGE-LEDGER.md §16.5)                                                        |
-| `ARGUS_CHANGE_CONTEXT_FILE`    | the accepted ChangeProposal a `changeContext` phase's step implements, as exact canonical refs; read-only (KNOWLEDGE-LEDGER.md §16.11)           |
-| `ARGUS_REVISION_NOTES_FILE`    | every revise note of the step's phase in full, oldest first; set only when they did not all fit the prompt; read-only (HARNESS.md §13)           |
-| `ARGUS_MAX_CONCURRENT_RUNS`    | cap on concurrent `claude -p` processes (default 4)                                                                                              |
+| Env var                        | Meaning                                                                                                                                                                                                                                                                |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ARGUS_STEP_NAME`              | label of the running step, injected into the run's environment                                                                                                                                                                                                         |
+| `ARGUS_RESULT_FILE`            | where a result-producing step writes its decision JSON                                                                                                                                                                                                                 |
+| `ARGUS_KNOWLEDGE_DELTA_FILE`   | where a step may write a KnowledgeDelta (see KNOWLEDGE-LEDGER.md §12)                                                                                                                                                                                                  |
+| `ARGUS_RULE_VERIFICATION_FILE` | where a `ruleVerification` phase's step writes its conformance report (KNOWLEDGE-LEDGER.md §15)                                                                                                                                                                        |
+| `ARGUS_CHANGE_REQUEST_FILE`    | the requested change and the current conformance of the rules a `changeIntent` phase's step must classify; read-only (KNOWLEDGE-LEDGER.md §16.4)                                                                                                                       |
+| `ARGUS_CHANGE_PROPOSAL_FILE`   | where a `changeIntent` phase's step writes its ChangeProposal (KNOWLEDGE-LEDGER.md §16.5)                                                                                                                                                                              |
+| `ARGUS_CHANGE_CONTEXT_FILE`    | the accepted ChangeProposal a `changeContext` phase's step implements, as exact canonical refs; read-only (KNOWLEDGE-LEDGER.md §16.11)                                                                                                                                 |
+| `ARGUS_REVISION_NOTES_FILE`    | every revise note of the step's phase in full, oldest first; set only when they did not all fit the prompt; read-only (HARNESS.md §13)                                                                                                                                 |
+| `ARGUS_CHILDREN_FILE`          | the children manifest of a `childrenContext` phase's step: every task of the spawn phase and its child's phases, results, verification, gate decisions, runs and cost, and the instance's own; each child's artifact folder is named in it; read-only (HARNESS.md §20) |
+| `ARGUS_PHASE_ATTEMPT`          | the 0-based attempt of the phase, on every step, `command` check and [approval poll](#approval-conditions) (HARNESS.md §6)                                                                                                                                             |
+| `ARGUS_TRIGGER_PAYLOAD_FILE`   | a JSON copy of the instance's `triggerPayload`, for `command` checks and [approval polls](#approval-conditions), never steps; unset when it has none; restored before every verification run and every poll (HARNESS.md §6)                                            |
+| `ARGUS_MAX_CONCURRENT_RUNS`    | cap on concurrent `claude -p` processes (default 4)                                                                                                                                                                                                                    |
 
 ## Knowledge Ledger
 

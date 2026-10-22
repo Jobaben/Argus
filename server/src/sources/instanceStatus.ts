@@ -7,10 +7,14 @@
  * spellings that must agree. They are asked here, never inline, so a new path
  * cannot answer one of them differently (`engine/instanceStatus.test.ts`).
  *
+ * A spawn phase stays `running` while its children run, so its parent's
+ * status never says that a child waits at a gate of its own: `inFlight` reads
+ * the phase's tasks to tell a parent that only waits on people apart.
+ *
  * Not in `engine/`: the transitions, the sources, the scheduler and the
  * federation summary ask the same questions and may not import the engine.
  */
-import type { InstanceStatus, PipelineInstance } from "./pipelineTypes.js";
+import type { InstanceStatus, PipelineInstance, SpawnTaskState } from "./pipelineTypes.js";
 
 type Phased = Pick<PipelineInstance, "phases">;
 
@@ -41,17 +45,40 @@ export function pendingRetry(inst: Phased): boolean {
 }
 
 /**
- * Something moves without waiting on a human: no gate pauses the instance, a
- * phase is running beside one, or a retry is scheduled. An instance paused
- * only at its gates is live but not in flight.
+ * A spawn phase's task whose child is started or owed a start, and not
+ * finished: it holds one of the phase's `maxParallel` slots. Spelled here and
+ * not in `sources/children.ts`, which imports this module: `dag.ts` imports
+ * this module too, and `children.ts` imports `dag.ts`.
+ */
+export function isLiveTask(state: SpawnTaskState): boolean {
+  return (
+    state === "planned" ||
+    state === "reviving" ||
+    state === "running" ||
+    state === "awaiting-approval"
+  );
+}
+
+/** A running spawn phase that waits only on people: it has live tasks, and
+ *  each one is a child waiting at a gate of its own. */
+function waitsOnChildGates(phase: PipelineInstance["phases"][number]): boolean {
+  const live = (phase.children?.tasks ?? []).filter((t) => isLiveTask(t.state));
+  return live.length > 0 && live.every((t) => t.state === "awaiting-approval");
+}
+
+/**
+ * Something moves without waiting on a human: a phase is running (a spawn
+ * phase counts only while one of its live children is not waiting at its own
+ * gate), a retry is scheduled, or, with no phase running, no gate pauses the
+ * instance. An instance paused only at its gates, or only at its children's,
+ * is live but not in flight.
  */
 export function inFlight(inst: Pick<PipelineInstance, "status" | "phases">): boolean {
   if (!resumable(inst.status)) return false;
-  return (
-    appliesResults(inst.status) ||
-    inst.phases.some((p) => p.status === "running") ||
-    pendingRetry(inst)
-  );
+  if (pendingRetry(inst)) return true;
+  const running = inst.phases.filter((p) => p.status === "running");
+  if (running.length > 0) return running.some((p) => !waitsOnChildGates(p));
+  return appliesResults(inst.status);
 }
 
 /**

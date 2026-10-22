@@ -1,6 +1,6 @@
 # Plan: Delivery loop with per-task autonomy
 
-**Written:** 2026-10-21, against `main` = `15a6fd5` (build `1.0.0-15a6fd5`). **Handoff:** [`handoff.md`](handoff.md) (same folder).
+**Written:** 2026-10-21, against `main` = `15a6fd5` (build `1.0.0-15a6fd5`). **Updated:** 2026-10-22: DL-A2, DL-A3 and DL-A4 are built and committed on `claude/cool-goldberg-325t64`, not merged and not released (see [Order](#order)). **Handoff:** [`handoff.md`](handoff.md) (same folder).
 
 This plan closes every gap between the delivery-loop pipeline and the pod working model it implements ("AI-Augmented Product Pods", v1.0). It has three tracks: Argus features first (**DL-A**), then the pipeline (**DL-P**), and the working model itself (**DL-M**). Pilot-specific details (repository, instance, names) are kept out of this repository, in the pipeline's own notes.
 
@@ -57,7 +57,7 @@ A seven-step loop: Discover, Define, Plan, Build, Verify, Ship, Learn. Four huma
 | 2026-10-21 | **The flow:** the person starts the loop; the pipeline specifies, plans, fans the work out, opens PRs from the fanned-out work, ships after all PRs are approved, then runs Learn over the whole instance and improves the pipeline for the next iteration. |
 | 2026-10-21 | **Argus first, then the pipeline.** Close every gap in this plan.                                                                                                                                                                                           |
 
-Everything else in this plan is a proposed default, listed under [Open decisions](#open-decisions-defaults-proposed-the-user-confirms).
+Everything else in this plan is a proposed default, listed under [Open decisions](#open-decisions-defaults-proposed-the-user-confirms). On 2026-10-21 you asked to proceed with everything, so DL-A2 to DL-A4 were built on the proposed defaults of D1–D4, D12 and D13. They stay yours to change; nothing built so far settles D5–D11.
 
 ## Target design
 
@@ -118,27 +118,29 @@ Claude Code permission rules are not a sandbox (HARNESS.md §10). What holds a t
 
 Status legend: ⬜ not started · 🟡 in progress · 🔵 staged for review · ✅ merged · ⏸ blocked
 
-| Status | #             | Workstream                                                                   | Branch / home                                 | Why here                                                                  | Depends on                                              |
-| ------ | ------------- | ---------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------- |
-| 🟡     | DL-A0         | Close out the setup-folder feature (#94): Windows done gate, probes, release | – (probes on this machine; `argus release`)   | Merged but not verified on Windows; the pipeline moves onto it            | – (can run alongside)                                   |
-| ✅     | DL-A1         | Revise notes accumulate                                                      | `fix/revise-notes-accumulate`                 | Gates are the human control in this model; a lost note is a lost decision | –                                                       |
-| ⬜     | DL-A2a        | Spawn phases                                                                 | `feat/spawn-phases`                           | The core gap: one lane, branch and PR per task                            | –                                                       |
-| ⬜     | DL-A2b        | The parent's view of its children                                            | `feat/spawn-children-context`                 | Learn over the whole instance                                             | DL-A2a                                                  |
-| ⬜     | DL-A2c        | Spawn phases on the board                                                    | `feat/spawn-board`                            | Seeing children, deciding at the `children` pause                         | DL-A2a (contracts)                                      |
-| ⬜     | DL-A4 + DL-A3 | Task inputs for checks, then gates a polled command approves                 | `feat/approval-conditions`                    | G1 and G3 advance on a merge; task-scope checks                           | –                                                       |
-| ⬜     | WS13          | (reliability) the `.claude.json` race                                        | `fix/claude-config-race`                      | Before any `maxParallel` above 1                                          | DL-A0 (where `.claude.json` lives under a setup folder) |
-| ⬜     | DL-P0         | Hygiene on the current pipeline                                              | API (admin session)                           | Only if the current pipeline runs before DL-P4                            | –                                                       |
-| ⬜     | DL-P1         | A versioned home for the pipeline                                            | a new private repository                      | Learn needs somewhere to propose pipeline changes                         | D9                                                      |
-| ⬜     | DL-P2         | Autonomy policy v2 and lane profiles                                         | pipeline home                                 | Levels as profiles; no clamp                                              | DL-P1; D6, D7                                           |
-| ⬜     | DL-P3         | The task-loop pipeline (child)                                               | pipeline home                                 | One task, agent, branch and PR                                            | DL-A2a, DL-A3, DL-A4 released; DL-P1, DL-P2             |
-| ⬜     | DL-P4         | Rework the delivery-loop pipeline (parent)                                   | pipeline home                                 | Spec PR, Plan per task, the `tasks` spawn phase, Ship after the join      | DL-A2a, DL-A3 released; DL-P3                           |
-| ⬜     | DL-P5         | Learn over the whole instance                                                | pipeline home                                 | Two proposal PRs                                                          | DL-A2b released; DL-P4                                  |
-| ⬜     | DL-P6         | G4 evidence: feature flag and monitoring                                     | pilot repository and pipeline home            | G4 decided on data                                                        | D11                                                     |
-| ⬜     | DL-P7         | The Agent Ops Review report                                                  | pipeline home and an Argus schedule           | Metrics for promotions and demotions                                      | DL-P1                                                   |
-| ⬜     | DL-M1         | Working model v1.1                                                           | the published working model; the setup folder | The document and the agents must say the same                             | your go                                                 |
-| ⬜     | DL-V          | The pilot re-run                                                             | –                                             | End-to-end verification; counts towards the soak                          | everything above                                        |
+| Status | #             | Workstream                                                                   | Branch / home                                        | Why here                                                                  | Depends on                                              |
+| ------ | ------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------- |
+| 🟡     | DL-A0         | Close out the setup-folder feature (#94): Windows done gate, probes, release | – (probes on this machine; `argus release`)          | Merged but not verified on Windows; the pipeline moves onto it            | – (can run alongside)                                   |
+| ✅     | DL-A1         | Revise notes accumulate                                                      | `fix/revise-notes-accumulate`                        | Gates are the human control in this model; a lost note is a lost decision | –                                                       |
+| 🔵     | DL-A2a        | Spawn phases                                                                 | `claude/cool-goldberg-325t64` (`46cdb73`)            | The core gap: one lane, branch and PR per task                            | –                                                       |
+| 🔵     | DL-A2b        | The parent's view of its children                                            | `claude/cool-goldberg-325t64` (`94e4e6e`)            | Learn over the whole instance                                             | DL-A2a                                                  |
+| 🔵     | DL-A2c        | Spawn phases on the board                                                    | `claude/cool-goldberg-325t64` (`01c3a53`)            | Seeing children, deciding at the `children` pause                         | DL-A2a (contracts)                                      |
+| 🔵     | DL-A4 + DL-A3 | Task inputs for checks, then gates a polled command approves                 | `claude/cool-goldberg-325t64` (`9355865`, `ee56f8a`) | G1 and G3 advance on a merge; task-scope checks                           | –                                                       |
+| ⬜     | WS13          | (reliability) the `.claude.json` race                                        | `fix/claude-config-race`                             | Before any `maxParallel` above 1                                          | DL-A0 (where `.claude.json` lives under a setup folder) |
+| ⬜     | DL-P0         | Hygiene on the current pipeline                                              | API (admin session)                                  | Only if the current pipeline runs before DL-P4                            | –                                                       |
+| ⬜     | DL-P1         | A versioned home for the pipeline                                            | a new private repository                             | Learn needs somewhere to propose pipeline changes                         | D9                                                      |
+| ⬜     | DL-P2         | Autonomy policy v2 and lane profiles                                         | pipeline home                                        | Levels as profiles; no clamp                                              | DL-P1; D6, D7                                           |
+| ⬜     | DL-P3         | The task-loop pipeline (child)                                               | pipeline home                                        | One task, agent, branch and PR                                            | DL-A2a, DL-A3, DL-A4 released; DL-P1, DL-P2             |
+| ⬜     | DL-P4         | Rework the delivery-loop pipeline (parent)                                   | pipeline home                                        | Spec PR, Plan per task, the `tasks` spawn phase, Ship after the join      | DL-A2a, DL-A3 released; DL-P3                           |
+| ⬜     | DL-P5         | Learn over the whole instance                                                | pipeline home                                        | Two proposal PRs                                                          | DL-A2b released; DL-P4                                  |
+| ⬜     | DL-P6         | G4 evidence: feature flag and monitoring                                     | pilot repository and pipeline home                   | G4 decided on data                                                        | D11                                                     |
+| ⬜     | DL-P7         | The Agent Ops Review report                                                  | pipeline home and an Argus schedule                  | Metrics for promotions and demotions                                      | DL-P1                                                   |
+| ⬜     | DL-M1         | Working model v1.1                                                           | the published working model; the setup folder        | The document and the agents must say the same                             | your go                                                 |
+| ⬜     | DL-V          | The pilot re-run                                                             | –                                                    | End-to-end verification; counts towards the soak                          | everything above                                        |
 
 Release after each merged DL-A workstream, as the reliability plan does. DL-A1, DL-A2a and DL-A4 + DL-A3 are independent and can be built in any order; this table's order is the proposed one (D13).
+
+**How DL-A2 to DL-A4 were built (2026-10-22).** A cloud session built them. It could not leave work staged on one branch per workstream, so each workstream is one commit on `claude/cool-goldberg-325t64`, on top of DL-A1 (`0017d3f`), in this order: DL-A4 `9355865`, DL-A3 `ee56f8a`, DL-A2a `46cdb73`, DL-A2b `94e4e6e`, DL-A2c `01c3a53`. A last commit, `6075d3b`, adds an offline end-to-end test of the loop and the fixes from a review of the whole branch. Each commit passed the done gate on Linux and a review whose findings independent checks confirmed before they were fixed. 🔵 here means committed on that branch: not merged to `main`, not released, and not run on Windows.
 
 ## Argus workstreams
 
@@ -239,7 +241,7 @@ Release after each merged DL-A workstream, as the reliability plan does. DL-A1, 
 
 ### DL-A2 — Spawn phases: one child instance per task, joined
 
-**Status:** ⬜ · **Branches:** `feat/spawn-phases` (DL-A2a, size L) first; then `feat/spawn-children-context` (DL-A2b, M) and `feat/spawn-board` (DL-A2c, M), which can run in parallel. Designed against `15a6fd5` by a read-only pass; line anchors are at that commit.
+**Status:** 🔵 Committed on 2026-10-22 on `claude/cool-goldberg-325t64`: DL-A2a `46cdb73`, DL-A2b `94e4e6e`, DL-A2c `01c3a53` (see the outcome at the end of this section). Not merged, not released; Windows is ready for verification · **Branches (as planned):** `feat/spawn-phases` (DL-A2a, size L) first; then `feat/spawn-children-context` (DL-A2b, M) and `feat/spawn-board` (DL-A2c, M), which can run in parallel. Designed against `15a6fd5` by a read-only pass; line anchors are at that commit.
 
 **Verified facts that shape it**
 
@@ -336,9 +338,27 @@ Release after each merged DL-A workstream, as the reliability plan does. DL-A1, 
 
 **Open, with defaults:** O1 is D4. O2: spawning holds while over budget (yes). O3: the child's `prepare` fetches; an engine fetch can come after WS5. O4: zero tasks fail Plan, until WS8 adds `no-work`. O5: rewinding to Plan is deferred. O6: a spawn target's trigger is null or a webhook.
 
+**Outcome (2026-10-22).** Built as designed, with O1–O6 at their defaults. Decisions taken while building:
+
+- The task record is compact, so 50 tasks fit one transition record (16 KiB): `dependsOn` holds positions, a key is at most 64 characters (`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`) and the stored title is clipped to 60. The child's payload carries the whole task.
+- A duplicate dependency is dropped; a task that depends on itself is a cycle and is refused.
+- Refused at save: a spawn phase between an implementation phase and its acceptance verifier, and `approveWhen` or `autoApprove` on a spawn phase.
+- The target's `overlapPolicy: "skip"` is honoured: a busy target holds the child's start. The recipe tells authors to set the task pipeline to `allow`.
+- Approve, revise and every automated decision (a Verdict, an approval condition) refuse a child whose parent no longer waits for it (`409 parent-decided`). Abort never does. Two more reply codes: `400 answers-not-accepted` and `409 children-running`, carried as `code`.
+- DL-A2b: the manifest is an explicit projection (no principal, channel, token, definition or prompt). At most 100 child folders are offered per run. A manifest that cannot be built fails the phase as `configuration`.
+- DL-A2c: the pipeline form authors a spawn phase (a child-pipeline select and the rest of `spawn` as JSON). The first-paint payload is 127.3 of 128 kB.
+- `server/src/deliveryLoopE2e.test.ts` runs a miniature of [DL-V](#end-to-end-verification) offline: three tasks, children in dependency order, a task-scope check reading its task through DL-A4, each child's PR gate opened by an approval poll, the join, Ship once, and Learn reading the manifest; also an abandoned PR and two scope-check refusals.
+
+Follow-ups, not done:
+
+- A parent's revive or cascade abort of a child is recorded with transition source `operator` in the child's transition log. Its gate decision does say mechanism `parent-decision` and principal `spawn`.
+- An approval poll on a stray child keeps running until reconcile's sweep aborts the child. Each refusal is journalled once.
+- The `argus-tail` skill's waiting row does not mention the `children` pause.
+- The `spawn` icon is not on the design system's remote icon card, and the screenshots are not updated.
+
 ### DL-A4 and DL-A3 — Task inputs for checks, then gates a polled command can approve
 
-**Status:** ⬜ · **Branch:** `feat/approval-conditions`, with DL-A4 as the first commit and DL-A3 after it, because DL-A3 uses DL-A4's inputs · **Size:** S (DL-A4, half a day) + M (DL-A3, 2–3 days).
+**Status:** 🔵 Committed on 2026-10-22 on `claude/cool-goldberg-325t64`: DL-A4 `9355865`, then DL-A3 `ee56f8a` (see the outcome at the end of this section). Not merged, not released; Windows is ready for verification · **Branch (as planned):** `feat/approval-conditions`, with DL-A4 as the first commit and DL-A3 after it, because DL-A3 uses DL-A4's inputs · **Size:** S (DL-A4, half a day) + M (DL-A3, 2–3 days).
 
 #### DL-A4 — Per-instance inputs for command checks
 
@@ -463,6 +483,17 @@ Release after each merged DL-A workstream, as the reliability plan does. DL-A1, 
 - Nothing records what opened the gate.
 - `--until-idle` never exits.
 - Its environment has no instance identity.
+
+#### Outcome (2026-10-22)
+
+- **DL-A4** is built as designed. Agent steps get `ARGUS_PHASE_ATTEMPT` too, so one script reads the same names in both places. They do not get `ARGUS_TRIGGER_PAYLOAD_FILE`: it is not a read channel, and agents already get the payload through `{{trigger.payload}}`. The payload copy is written for a phase with a command check and for every poll.
+- **DL-A3** is built as designed, plus:
+  - a new failure class, `approval-condition`, which is never retried;
+  - `runCommand` in `harness/verification.ts`, which says how a command ended and can be cut short;
+  - `Engine.stopPolls()`, which cuts polls in flight at shutdown;
+  - H1 counts `approveWhen` gates in the declared-automation population.
+- The PR-merge recipe binds the pull request to the worktree's branch, its HEAD and the branch it must merge into. It starts `git` and `az` from outside the agent's worktree, so a program the agent leaves there is never run.
+- Follow-ups, not done: a `trigger-payload` read channel for agent steps; a board marker for polled gates (deferred by this plan).
 
 ## Pipeline workstreams
 
@@ -625,7 +656,8 @@ Found while designing DL-A1–DL-A4. None is part of this plan's scope. The firs
 - **Instance retention ignores liveness** (`server/src/sources/instances.ts:168-187`): past 50 per pipeline, a live instance can be pruned. DL-A2 pins children, but nothing else is pinned.
 - **An owed launch after a retry drops the retry note.** `engine/failure.ts:258-268` saves before `startPhases`.
 - **A trimmed placeholder's pointer is not a channel** (`sources/dag.ts:521-528`). A profile that scopes `Read` cannot open it; a bare `Read` rule can, since the pilot run read other phases' folders that way.
-- **Three per-invocation identifiers are missing** from `harness/childEnv.ts:47-79`: `ARGUS_IMPLEMENTATION_SCOPE_FILE`, `ARGUS_REMEDIATION_CONTEXT_FILE` and `ARGUS_ACCEPTANCE_VERIFICATION_FILE`.
+- **Three per-invocation identifiers are missing** from `harness/childEnv.ts` (`ARGUS_PER_INVOCATION_IDENTIFIERS`): `ARGUS_IMPLEMENTATION_SCOPE_FILE`, `ARGUS_REMEDIATION_CONTEXT_FILE` and `ARGUS_ACCEPTANCE_VERIFICATION_FILE`. Confirmed on 2026-10-22 while building DL-A4; still open.
+- **HARNESS.md section 5 says a pipeline run's invocation records are pruned per run,** but pipeline step runs are never pruned. Found while building DL-A2b; not confirmed.
 - **No gate-open time is recorded.** A `phase.paused` journal entry would give DL-P7's review-wait metric exactly, without a new route. Until then, DL-P7 approximates it.
 
 ## Not doing unless you ask
@@ -653,3 +685,5 @@ Found while designing DL-A1–DL-A4. None is part of this plan's scope. The firs
 10. The setup folder works live (from DL-A0): each step's transcript opens in Argus; the operator's own `CLAUDE.md` stays out; the folder's and the repository's instructions reach a subagent; `GET /api/runs/:id/invocation` shows `claudeConfigDir`, the three deny rules and the per-run `settings.json` with `claudeMdExcludes`.
 
 Until it has run, report it as "ready for verification", never as done.
+
+An offline miniature of items 1 to 8 (fake agents, no provider, a marker file standing in for the merge) runs in `server/src/deliveryLoopE2e.test.ts`. It shows the Argus side works; it is not the pilot re-run.

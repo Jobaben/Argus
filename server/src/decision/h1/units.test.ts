@@ -123,6 +123,14 @@ test("eligibility: a phase that declares autoApprove is the auto-approve-declare
   assert.deepEqual(e, { ok: true, relevantRuns: ["run-a"], population: "auto-approve-declared" });
 });
 
+test("eligibility: a phase that declares approveWhen is the same population as autoApprove", () => {
+  const inst = gateInstance({
+    phaseDef: { approveWhen: { kind: "command", run: "exit 1", everySeconds: 60 } } as never,
+  });
+  const e = gateEligibility(inst, item, inst.definition, noRecords);
+  assert.deepEqual(e, { ok: true, relevantRuns: ["run-a"], population: "auto-approve-declared" });
+});
+
 test("eligibility: every way an attempt stops being an item names its reason", () => {
   const reason = (
     inst: PipelineInstance | null,
@@ -137,6 +145,7 @@ test("eligibility: every way an attempt stops being an item names its reason", (
   assert.equal(reason(gateInstance(), noRecords, { ...item, attempt: 1 }), "attempt-moved");
   assert.equal(reason(gateInstance({ phase: { status: "succeeded" } })), "phase-succeeded");
   assert.equal(reason(gateInstance({ phase: { pause: "needs-input" } })), "needs-input");
+  assert.equal(reason(gateInstance({ phase: { pause: "children" } })), "children");
   assert.equal(reason(gateInstance({ phase: { pause: undefined } })), "unknown-pause");
   const pending = gateInstance();
   pending.pendingGateOperation = {
@@ -254,11 +263,34 @@ test("settle: automated and unattributed mechanisms are not operator actions", (
   assert.equal(a.kind, "unlabeled");
   assert.equal((a as { reason: string }).reason, "automated-approval");
 
+  const condition = newWorld();
+  condition.act("inst-1", "approve", { mechanism: "approval-condition", channel: "approval-poll" });
+  const c = settleIn(condition);
+  assert.equal(c.kind, "unlabeled", "an approval condition's approval is no label");
+  assert.equal((c as { reason: string }).reason, "automated-approval");
+
   const unspecified = newWorld();
   unspecified.act("inst-1", "approve", { mechanism: "unspecified" });
   const u = settleIn(unspecified);
   assert.equal(u.kind, "unlabeled");
   assert.equal((u as { reason: string }).reason, "unattributed");
+});
+
+test("settle: a spawn parent's abort of a child at its gate is its own reason, never unattributed", () => {
+  // The cascade names the parent's decision; the sweep acts on the parent's
+  // state and names none (engine/children.ts).
+  for (const parentDecisionId of ["GD-parent", undefined]) {
+    const world = newWorld();
+    world.act("inst-1", "abort", {
+      mechanism: "parent-decision",
+      channel: "in-process",
+      principal: { kind: "system", component: "spawn" },
+      ...(parentDecisionId ? { parentDecisionId } : {}),
+    });
+    const s = settleIn(world);
+    assert.equal(s.kind, "unlabeled", String(parentDecisionId));
+    assert.equal((s as { reason: string }).reason, "parent-decision", String(parentDecisionId));
+  }
 });
 
 test("settle: two applied records for one attempt conflict", () => {

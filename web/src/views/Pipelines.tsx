@@ -62,11 +62,15 @@ interface PipelineLive {
 
 const NEVER_RUN: PipelineLive = { badge: "idle", activeIds: [], latest: null, review: null };
 
-/** What else a Delete does, when instances are running under the pipeline. */
-function deleteDetail(running: number): string | undefined {
-  if (running === 0) return undefined;
+/** What else a Delete does: to the instances running under the pipeline, and
+ *  to the pipelines whose spawn phases start it. */
+function deleteDetail(running: number, spawned: boolean): string | undefined {
   const which = running === 1 ? "running instance" : `${running} running instances`;
-  return `Its ${which} will be stopped first, and in-progress work discarded.`;
+  const parts = [
+    running > 0 && `Its ${which} will be stopped first, and in-progress work discarded.`,
+    spawned && "Pipelines that spawn it stop starting new ones and wait for you.",
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
 /** Stop's question and verb, for one running instance or several. */
@@ -79,17 +83,50 @@ function stopQuestion(name: string, running: number): Pick<Question, "title" | "
     : { title: `Stop running pipeline “${name}”?`, confirm: "Stop pipeline" };
 }
 
-/** What is said before saving an edit over live instances; the caller adds the
- *  verb. Not red: the save discards nothing, it only waits for the next start. */
-function editWhileRunning(name: string, count: number): Omit<Question, "confirm"> {
-  const which = count === 1 ? "1 instance is" : `${count} instances are`;
-  const they = count === 1 ? "It keeps" : "They keep";
+/**
+ * What is said before saving an edit over live instances; the caller adds the
+ * verb. Not red: the save discards nothing, it only waits for the next start.
+ *
+ * The refusal lists the pipeline's own live instances and the live parents of
+ * other pipelines whose spawn phases will start more of it (DL-A2). The two
+ * differ: its own instances keep the definition they started with, while the
+ * children a parent starts from here on run the edit.
+ */
+function editWhileRunning(
+  name: string,
+  id: string,
+  instances: { pipelineId?: string }[],
+): Omit<Question, "confirm"> {
+  const own = instances.filter((i) => !i.pipelineId || i.pipelineId === id).length;
+  const spawners = instances.length - own;
+  const spawning = "of another pipeline will start more instances of";
+  if (own === 0) {
+    return {
+      title: `${spawners === 1 ? "A live instance" : `${spawners} live instances`} ${spawning} “${name}”.`,
+      detail: "Those would run this edit.",
+      tone: "secondary",
+    };
+  }
+  const which = own === 1 ? "1 instance is" : `${own} instances are`;
+  const they = own === 1 ? "It keeps" : "They keep";
   return {
     title: `${which} running under “${name}”.`,
-    detail: `${they} the definition it started with, so this edit only applies to the next start.`,
+    detail:
+      `${they} the definition it started with, so this edit only applies to the next start.` +
+      (spawners > 0
+        ? " Live instances of another pipeline will also start more of it, and those would run this edit."
+        : ""),
     tone: "secondary",
   };
 }
+
+/** The latest instance's trigger, when it is worth a chip: how it started, if
+ *  not by hand or on the pipeline's own schedule. */
+const TRIGGER_TITLE = {
+  webhook: "The latest instance was fired by a webhook POST",
+  chained: "The latest instance was chained after another pipeline's instance",
+  spawned: "The latest instance was started by another pipeline's spawn phase",
+} as const;
 
 /** The same deep link the Command Center hands out for a gate. */
 function reviewOf(row: OverviewRow | undefined, gate: OverviewGate | undefined) {
@@ -200,6 +237,7 @@ function cardTone(badge: DsStatus): string {
 function PipelineCard({
   def,
   live,
+  spawnedBy,
   admin,
   error,
   editRef,
@@ -212,6 +250,8 @@ function PipelineCard({
 }: {
   def: PipelineDefinition;
   live: PipelineLive;
+  /** The pipelines whose spawn phases start this one, by name. */
+  spawnedBy: string[];
   /** Edit/run controls only render for an authenticated admin. */
   admin: boolean;
   /** The last action on this card that the server refused, said here rather
@@ -250,15 +290,11 @@ function PipelineCard({
         {runtimeLabel(def.runtime) || def.runtime}
       </span>
     ),
-    (live.latest?.trigger === "webhook" || live.latest?.trigger === "chained") && (
+    live.latest?.trigger && live.latest.trigger in TRIGGER_TITLE && (
       <span
         key="trigger"
         className={chipClass()}
-        title={
-          live.latest.trigger === "webhook"
-            ? "The latest instance was fired by a webhook POST"
-            : "The latest instance was chained after another pipeline's instance"
-        }
+        title={TRIGGER_TITLE[live.latest.trigger as keyof typeof TRIGGER_TITLE]}
       >
         {live.latest.trigger}
       </span>
@@ -313,6 +349,13 @@ function PipelineCard({
                 cost && (
                   <span key="cost" title="Spend of the latest run, all attempts">
                     {cost}
+                  </span>
+                ),
+                // Its trigger reads "Manual", which is not how a spawn target
+                // usually starts.
+                spawnedBy.length > 0 && (
+                  <span key="spawnedBy" title="A spawn phase of these pipelines starts it">
+                    spawned by {spawnedBy.join(", ")}
                   </span>
                 ),
               ]}
@@ -417,7 +460,7 @@ function PipelineCard({
               ? confirm.question(
                   {
                     title: `Delete pipeline “${def.name}”?`,
-                    detail: deleteDetail(live.activeIds.length),
+                    detail: deleteDetail(live.activeIds.length, spawnedBy.length > 0),
                     confirm: "Delete pipeline",
                     cancel: "Keep",
                     icon: "trash",
@@ -428,7 +471,9 @@ function PipelineCard({
                 ? confirm.question(
                     {
                       ...stopQuestion(def.name, live.activeIds.length),
-                      detail: "In-progress work will be discarded.",
+                      detail: def.phases.some((p) => p.spawn)
+                        ? "In-progress work will be discarded, and the instances they spawned are stopped too."
+                        : "In-progress work will be discarded.",
                       cancel: "Keep running",
                       icon: "stop",
                     },
@@ -683,6 +728,17 @@ export default function Pipelines() {
   } = usePipelines();
   const { overview, abort } = useOverview();
   const auth = useAuth();
+  // Which pipelines spawn each one: a spawn target's card names them.
+  const spawnedBy = useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    for (const p of pipelines) {
+      for (const phase of p.phases) {
+        const target = phase.spawn?.pipelineId;
+        if (target) m.set(target, (m.get(target) ?? new Set()).add(p.name));
+      }
+    }
+    return m;
+  }, [pipelines]);
   const { isAdmin } = auth;
   const liveByPipeline = useMemo(() => {
     const m = new Map<string, PipelineLive>();
@@ -752,7 +808,7 @@ export default function Pipelines() {
       await update(def.id, input);
     } catch (e) {
       if (!(e instanceof InstancesRunningError)) throw e;
-      const question = editWhileRunning(def.name, e.instances.length);
+      const question = editWhileRunning(def.name, def.id, e.instances);
       if (!(await ask({ ...question, confirm: "Apply anyway" }))) return;
       await update(def.id, input, { force: true });
     }
@@ -949,7 +1005,7 @@ export default function Pipelines() {
                             // so the author is told the edit will not reach them
                             // before it saves. Declining leaves the form open with
                             // the edit intact.
-                            const question = editWhileRunning(p.name, e.instances.length);
+                            const question = editWhileRunning(p.name, p.id, e.instances);
                             const yes = await ask({
                               ...question,
                               confirm: "Save anyway",
@@ -967,6 +1023,7 @@ export default function Pipelines() {
                       key={p.id}
                       def={p}
                       live={liveByPipeline.get(p.id) ?? NEVER_RUN}
+                      spawnedBy={[...(spawnedBy.get(p.id) ?? [])]}
                       admin={isAdmin}
                       error={actionError?.pipelineId === p.id ? actionError.message : null}
                       editRef={(el) => {

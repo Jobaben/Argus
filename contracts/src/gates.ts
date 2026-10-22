@@ -13,7 +13,8 @@
  * mistaken for the others:
  *
  * - **mechanism** — what produced the decision: an operator's request, or an
- *   automated rule (a Verdict score clearing an author's bar);
+ *   automated rule (a Verdict score clearing an author's bar, or an approval
+ *   condition's command);
  * - **channel** — how the request reached the engine;
  * - **principal** — who, as far as the server itself established it. Never a
  *   value a client supplied: the HTTP route reads it from the authenticated
@@ -31,18 +32,27 @@ export type GateDecisionKind = "approve" | "revise" | "abort";
  * - `operator` — an admin-authenticated request (HTTP, CLI via HTTP, Omnibar).
  * - `verdict-auto-approve` — the Verdict watcher, because every judged step of
  *   the attempt cleared the phase's `autoApprove` bar.
+ * - `approval-condition` — a gated phase's `approveWhen` command exited 0
+ *   while the phase waited at its gate (DL-A3).
+ * - `parent-decision` — Argus carrying out a decision on this instance's parent
+ *   (`parentDecisionId`): a revise of the parent's spawn phase revives this
+ *   failed child; an abort of the parent aborts this child; a child its parent
+ *   no longer waits for is swept. Not an operator action on this instance.
  * - `unspecified` — an in-process caller that did not say (tests, embedders).
  *   Recorded as such rather than guessed.
  */
-export type GateDecisionMechanism = "operator" | "verdict-auto-approve" | "unspecified";
+export type GateDecisionMechanism =
+  "operator" | "verdict-auto-approve" | "approval-condition" | "parent-decision" | "unspecified";
 
-export type GateDecisionChannel = "http" | "omnibar" | "verdict-watcher" | "in-process";
+export type GateDecisionChannel =
+  "http" | "omnibar" | "verdict-watcher" | "approval-poll" | "in-process";
 
 export type GateDecisionPrincipal =
   /** The authenticated session the request carried, resolved server-side. */
   | { kind: "session"; username: string; role: string }
-  /** An Argus component acting on its own rule. */
-  | { kind: "system"; component: "verdict-watcher" }
+  /** An Argus component acting on its own rule (`spawn`: a parent's spawn
+   *  phase acting on its children). */
+  | { kind: "system"; component: "verdict-watcher" | "approval-poll" | "spawn" }
   /** Nothing was established. Never upgraded to a guess. */
   | { kind: "unknown" };
 
@@ -85,6 +95,23 @@ export interface GateDecisionTrajectoryBasis {
   rubricDigest: string;
 }
 
+/** What an approval condition observed when it opened a gate (DL-A3) —
+ *  copied, so the record explains the approval after the instance is pruned. */
+export interface GateDecisionConditionBasis {
+  kind: "command";
+  /** `approveWhen.label`, else `command: ` and the first 71 characters of
+   *  `run`, as a command check's label. */
+  label: string;
+  /** The command's exit code: always 0 on an approval. */
+  exitCode: number;
+  /** At most the last 500 characters of its combined stdout and stderr. The
+   *  record is never pruned, so a condition should print only what explains it. */
+  output: string;
+  /** When the command started, and how long it ran. */
+  startedAt: string;
+  durationMs: number;
+}
+
 export interface GateDecisionPhaseRef {
   phaseId: string;
   attempt: number;
@@ -108,19 +135,27 @@ export interface GateDecision {
    * revise; every non-terminal phase for abort.
    */
   phases: GateDecisionPhaseRef[];
-  /** Automated approvals only. */
+  /** Verdict auto-approvals only. */
   verdicts?: GateDecisionVerdictBasis[];
   /**
-   * Automated approvals of a phase whose rubric declares a trajectory: the
+   * Verdict auto-approvals of a phase whose rubric declares a trajectory: the
    * trajectory judgment each relevant run was approved on, kept apart from
    * the output basis. Absent when the rubric declares none.
    */
   trajectoryVerdicts?: GateDecisionTrajectoryBasis[];
+  /** Approvals by an approval condition only (`mechanism: "approval-condition"`). */
+  condition?: GateDecisionConditionBasis;
   /** Whether the approval carried answers (stored on the phase, not here). */
   answersProvided?: boolean;
   /** A revise note, clipped to 2,000 characters. Operator-authored: every later
-   *  attempt of the phase reads it from this record, oldest first. */
+   *  attempt of the phase reads it from this record, oldest first. A child
+   *  revived by its parent's revise carries the parent's note, so the child's
+   *  next attempt reads it like any revise note. */
   note?: string;
+  /** Mechanism `parent-decision` only: the decision on the parent instance
+   *  (`PipelineInstance.parent.instanceId`) that this one carries out. Absent
+   *  for the sweep, which acts on the parent's state, not on one decision. */
+  parentDecisionId?: string;
   /** Written before the transition is attempted (write-ahead). */
   recordedAt: string;
 }
@@ -159,9 +194,11 @@ export interface PendingGateOperation {
 /**
  * Why an instance was aborted, when an operator did not choose to stop that
  * instance itself. `pipeline-deleted`: its pipeline was deleted, which stops
- * every live instance first. Such an instance fires no `after` chain.
+ * every live instance first. `parent-aborted`: it is a spawned child and its
+ * parent was aborted, or no longer waits for it. Such an instance fires no
+ * `after` chain.
  */
-export type AbortCause = "pipeline-deleted";
+export type AbortCause = "pipeline-deleted" | "parent-aborted";
 
 /**
  * Whether a decision took effect. Derived from the instance, never trusted

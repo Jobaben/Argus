@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { toOverviewRow as mapRow, toOverviewRows as mapRows } from "./overviewRow";
+import {
+  instanceSectionId,
+  rowTitle,
+  toOverviewRow as mapRow,
+  toOverviewRows as mapRows,
+} from "./overviewRow";
 import type {
   OverviewEntry,
   PhaseProgress,
@@ -687,5 +692,126 @@ describe("toOverviewRow: candidates", () => {
     expect(steps.map((s) => s.candidate?.index)).toEqual([0, 1, 2]);
     expect(steps.map((s) => s.runtime)).toEqual(["claude", "codex", "claude"]);
     expect(row.phases[1].candidates).toEqual({ total: 3, verified: 0, selected: null });
+  });
+});
+
+describe("toOverviewRow: spawn phases", () => {
+  const spawnDef = () =>
+    def({
+      id: "delivery",
+      name: "Delivery loop",
+      phases: [
+        { id: "plan", name: "Plan", cwd: "/", gated: true, steps: [{ name: "s", prompt: "x" }] },
+        {
+          id: "tasks",
+          name: "Tasks",
+          cwd: "/",
+          gated: false,
+          needs: ["plan"],
+          steps: [],
+          spawn: { pipelineId: "child", items: { phase: "plan", path: ["tasks"] }, key: "id" },
+        },
+      ],
+    });
+  const tasks: NonNullable<PhaseProgress["children"]>["tasks"] = [
+    { key: "a", state: "succeeded", instanceId: "c-a" },
+    { key: "b", state: "awaiting-approval", instanceId: "c-b", waitingPhaseId: "pr" },
+    { key: "c", state: "failed", instanceId: "c-c", reason: "tests failed" },
+    { key: "d", state: "aborted", instanceId: "c-d" },
+    { key: "e", state: "blocked", dependsOn: [2] },
+  ];
+  const parent = (spawnPhase: Partial<PhaseProgress>, status: InstanceStatus = "running") => ({
+    ...inst(status, []),
+    id: "p-1",
+    pipelineId: "delivery",
+    pipelineName: "Delivery loop",
+    phases: [
+      {
+        id: "plan",
+        name: "Plan",
+        gated: true,
+        status: "succeeded" as const,
+        steps: [],
+        attempt: 0,
+        payload: null,
+      },
+      {
+        id: "tasks",
+        name: "Tasks",
+        gated: false,
+        status: "running" as const,
+        steps: [],
+        attempt: 0,
+        payload: null,
+        needs: ["plan"],
+        ...spawnPhase,
+      },
+    ],
+  });
+
+  it("counts a spawn phase's tasks on its pill, and leaves other pills without one", () => {
+    const children = {
+      pipelineId: "child",
+      source: { phaseId: "plan", attempt: 0 },
+      maxParallel: 1,
+      tasks,
+    };
+    const row = toOverviewRow({ definition: spawnDef(), latest: parent({ children }) });
+    expect(row.phases[0].spawn).toBeNull();
+    expect(row.phases[1].spawn).toEqual({
+      pipelineId: "child",
+      tasks,
+      succeeded: 1,
+      waiting: 1,
+      halted: 2,
+    });
+    // The recorded tasks, passed through untouched.
+    expect(row.phases[1].spawn?.tasks).toBe(tasks);
+  });
+
+  it("knows a spawn phase from its definition before its task list is built, and never run", () => {
+    const before = toOverviewRow({ definition: spawnDef(), latest: parent({ status: "pending" }) });
+    expect(before.phases[1].spawn).toEqual({
+      pipelineId: "child",
+      tasks: [],
+      succeeded: 0,
+      waiting: 0,
+      halted: 0,
+    });
+    const never = toOverviewRow({ definition: spawnDef(), latest: null });
+    expect(never.phases.map((p) => p.spawn?.pipelineId ?? null)).toEqual([null, "child"]);
+    expect(never.parent).toBeNull();
+  });
+
+  it("marks a children pause on its gate, and only there", () => {
+    const paused = toOverviewRow({
+      definition: spawnDef(),
+      latest: parent({ status: "awaiting-approval", pause: "children" }, "awaiting-approval"),
+    });
+    expect(paused.gates).toEqual([{ phaseId: "tasks", canApprove: true, children: true }]);
+    const gate = toOverviewRow({
+      definition: spawnDef(),
+      latest: parent({ status: "awaiting-approval", pause: "gate" }, "awaiting-approval"),
+    });
+    expect(gate.gates).toEqual([{ phaseId: "tasks", canApprove: true }]);
+    expect(gate.gates[0]).not.toHaveProperty("children");
+  });
+
+  it("carries a spawned child's parent and trigger, and names it after its task", () => {
+    const ref = { instanceId: "p-1", pipelineId: "delivery", phaseId: "tasks", index: 1, key: "b" };
+    const row = toOverviewRow({
+      definition: def({ id: "child", name: "Task loop" }),
+      latest: { ...inst("running", ["running"]), trigger: "spawned", parent: ref },
+    });
+    expect(row.parent).toEqual(ref);
+    expect(row.trigger).toBe("spawned");
+    expect(rowTitle(row)).toBe("Task loop [b]");
+    expect(rowTitle({ name: "Task loop", parent: null })).toBe("Task loop");
+    const plain = toOverviewRow({ definition: def(), latest: inst("running", ["running"]) });
+    expect(plain.parent).toBeNull();
+  });
+
+  it("names an instance's section on the board", () => {
+    expect(instanceSectionId("x")).toBe("instance-x");
   });
 });

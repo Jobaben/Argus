@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import path from "node:path";
 import { RUNTIMES, RUNTIME_IDS } from "./index.js";
 import { CHANNEL_ENV_VARS, invocationChannels } from "../harness/channels.js";
 import type { CapabilityRequest, ChannelOutcome, InvocationChannel } from "./types.js";
@@ -104,14 +105,15 @@ test("CHANNEL_ENV_VARS names every channel's variable, in the list's own order",
     remediationContextFile: "/m/remediation.json",
     acceptanceVerificationFile: "/a/acceptance.json",
     revisionNotesFile: "/n/revision-notes.md",
+    childrenFile: "/k/children-manifest.json",
+    childArtifacts: [{ dir: "/kids/c1", instanceId: "c1", key: "a" }],
     artifactDir: "/art",
     memoryDir: "/mem",
     phaseDef: {},
   });
-  assert.deepEqual(
-    all.map((c) => c.envVar),
-    [...CHANNEL_ENV_VARS],
-  );
+  // A child's artifact folder is named inside the children manifest, so it
+  // shares ARGUS_CHILDREN_FILE, right after the manifest's own channel.
+  assert.deepEqual([...new Set(all.map((c) => c.envVar))], [...CHANNEL_ENV_VARS]);
 });
 
 test("the revision-notes file is an optional read channel in its own folder", () => {
@@ -444,6 +446,233 @@ test("Qwen Code: the context file is reachable unsandboxed and unavailable insid
     assert.equal(
       context?.reason,
       "Qwen Code container sandbox (--sandbox in ARGUS_QWEN_ARGS) does not mount the KnowledgeContext file (ARGUS_KNOWLEDGE_CONTEXT_FILE)",
+    );
+  });
+});
+
+// ── The children channels (DL-A2b) ──────────────────────────────────────────
+//
+// A phase that declares `childrenContext` reads a manifest of an earlier spawn
+// phase's children (required: it is the phase's input) and may open each
+// child's artifact folder (optional: evidence). All of them are Argus → agent.
+
+const MANIFEST = path.join("/inv", "run-1", "children", "children-manifest.json");
+
+test("the children manifest is a required read channel in its own folder", () => {
+  const [manifest] = invocationChannels({
+    resultFile: null,
+    knowledgeDeltaFile: null,
+    childrenFile: MANIFEST,
+    artifactDir: null,
+    memoryDir: null,
+    phaseDef: {},
+  });
+  assert.deepEqual(manifest, {
+    kind: "children-manifest",
+    envVar: "ARGUS_CHILDREN_FILE",
+    path: MANIFEST,
+    dir: path.dirname(MANIFEST),
+    access: "read",
+    required: true,
+    label: "children manifest",
+  });
+});
+
+test("each child's artifact folder is an optional read channel, after the manifest, in input order", () => {
+  const list = invocationChannels({
+    resultFile: null,
+    knowledgeDeltaFile: null,
+    revisionNotesFile: path.join("/inv", "run-1", "notes", "revision-notes.md"),
+    childrenFile: MANIFEST,
+    childArtifacts: [
+      { dir: path.join("/kids", "c1"), instanceId: "c1", key: "a" },
+      { dir: path.join("/kids", "c2"), instanceId: "c2", key: "b" },
+    ],
+    artifactDir: "/art",
+    memoryDir: "/mem",
+    phaseDef: {},
+  });
+  assert.deepEqual(
+    list.map((c) => c.kind),
+    [
+      "revision-notes",
+      "children-manifest",
+      "child-artifacts",
+      "child-artifacts",
+      "artifact-dir",
+      "memory-dir",
+    ],
+    "the fixed order",
+  );
+  const [first, second] = list.filter((c) => c.kind === "child-artifacts");
+  assert.deepEqual(
+    first,
+    {
+      kind: "child-artifacts",
+      envVar: "ARGUS_CHILDREN_FILE",
+      path: path.join("/kids", "c1"),
+      dir: path.join("/kids", "c1"),
+      access: "read",
+      required: false,
+      label: 'artifact folder of child c1 (task "a")',
+    },
+    "a folder is granted as itself, never its parent",
+  );
+  assert.equal(second.path, path.join("/kids", "c2"), "the second child follows the first");
+  // Nothing at all without a children context: the legacy list is unchanged.
+  assert.deepEqual(
+    channels().map((c) => c.kind),
+    ["result", "knowledge-delta", "artifact-dir"],
+  );
+});
+
+/** Two children's folders, Windows-shaped: `toClaudeRulePath` reads the
+ *  path's own shape, so this holds on any host. */
+const WIN_CHILDREN = [
+  { dir: "C:\\Users\\op\\.claude-argus\\artifacts\\child-1", instanceId: "child-1", key: "a" },
+  { dir: "C:\\Users\\op\\.claude-argus\\artifacts\\child-2", instanceId: "child-2", key: "b" },
+];
+
+function planChildren(profile: CapabilityProfile, cwd: string, kids = WIN_CHILDREN) {
+  return RUNTIMES.claude.streamPlan({
+    prompt: "p",
+    sessionId: "s",
+    capabilities: {
+      profile,
+      invocationDir: "C:\\inv",
+      cwd,
+      channels: invocationChannels({
+        resultFile: null,
+        knowledgeDeltaFile: null,
+        childArtifacts: kids,
+        artifactDir: null,
+        memoryDir: null,
+        phaseDef: {},
+      }),
+    },
+  });
+}
+
+const flagList = (args: string[], flag: string): string[] => {
+  const i = args.indexOf(flag);
+  return i > -1 ? args[i + 1].split(",") : [];
+};
+
+test("Claude Code: Windows child folders are admitted with --add-dir and denied for edits by drive-letter rule", () => {
+  const p = planChildren({ filesystem: "workspace-write" }, "C:\\GIT\\repo");
+  assert.deepEqual(
+    p.channels?.map((o) => o.status),
+    ["granted", "granted"],
+    "both folders are reachable",
+  );
+  const added = p.args.filter((_, i) => p.args[i - 1] === "--add-dir");
+  assert.deepEqual(
+    added,
+    WIN_CHILDREN.map((c) => c.dir),
+    "each folder is handed over verbatim",
+  );
+  const denied = flagList(p.args, "--disallowedTools");
+  assert.ok(
+    denied.includes("Edit(//c/Users/op/.claude-argus/artifacts/child-1/**)"),
+    `child-1 is denied for edits (${denied.join(",")})`,
+  );
+  assert.ok(
+    denied.includes("Edit(//c/Users/op/.claude-argus/artifacts/child-2/**)"),
+    `child-2 is denied for edits (${denied.join(",")})`,
+  );
+  assert.equal(
+    flagList(p.args, "--allowedTools").some((rule) => rule.includes("artifacts/child-")),
+    false,
+    "a read channel is never allowed for edits",
+  );
+  assert.deepEqual(p.limitations, [], "nothing it cannot express");
+});
+
+test("Claude Code: a child folder under a read-only-denied root needs no second deny rule, whatever its case", () => {
+  const kids = [
+    { dir: "c:\\users\\OP\\.claude-argus\\artifacts\\child-1", instanceId: "child-1", key: "a" },
+  ];
+  const p = planChildren({ filesystem: "read-only" }, "C:\\Users\\op", kids);
+  assert.equal(p.channels?.[0].status, "granted", "still readable");
+  assert.deepEqual(
+    flagList(p.args, "--disallowedTools"),
+    ["Edit(//c/Users/op/**)", "Bash", "PowerShell"],
+    "the root's own deny rule already covers the folder",
+  );
+});
+
+test("Codex: the manifest and every child folder are readable under every sandbox and never writable roots", () => {
+  const list = invocationChannels({
+    resultFile: null,
+    knowledgeDeltaFile: "/home/op/.claude/argus/knowledge-deltas/run-1/delta.json",
+    childrenFile: "/home/op/.claude/argus/invocations/run-1/children/children-manifest.json",
+    childArtifacts: [
+      { dir: "/home/op/.claude-argus/artifacts/child-1", instanceId: "child-1", key: "a" },
+      { dir: "/home/op/.claude-argus/artifacts/child-2", instanceId: "child-2", key: "b" },
+    ],
+    artifactDir: null,
+    memoryDir: null,
+    phaseDef: {},
+  });
+  for (const filesystem of MODES) {
+    const p = RUNTIMES.codex.streamPlan({
+      prompt: "p",
+      capabilities: {
+        profile: { filesystem },
+        invocationDir: "/inv",
+        cwd: "/work",
+        channels: list,
+      },
+    });
+    const children = (p.channels ?? []).filter((o) => o.channel.access === "read");
+    assert.deepEqual(
+      children.map((o) => [o.channel.kind, o.status]),
+      [
+        ["children-manifest", "granted"],
+        ["child-artifacts", "granted"],
+        ["child-artifacts", "granted"],
+      ],
+      filesystem,
+    );
+    const ci = p.args.indexOf("-c");
+    const roots = ci > -1 ? p.args[ci + 1] : "";
+    assert.equal(roots.includes("/children"), false, `${filesystem}: the manifest is not writable`);
+    assert.equal(roots.includes("artifacts/child-"), false, `${filesystem}: nor any child folder`);
+    if (filesystem === "workspace-write") {
+      assert.ok(roots.includes("knowledge-deltas/run-1"), "the write channel still is");
+    }
+  }
+});
+
+test("Qwen Code: inside the container sandbox every children channel is unavailable, naming ARGUS_CHILDREN_FILE", () => {
+  withEnv({ ARGUS_QWEN_ARGS: "--sandbox" }, () => {
+    const p = RUNTIMES.qwen.streamPlan({
+      prompt: "p",
+      capabilities: {
+        profile: {},
+        invocationDir: "/inv",
+        cwd: "/work",
+        channels: invocationChannels({
+          resultFile: null,
+          knowledgeDeltaFile: null,
+          childrenFile: MANIFEST,
+          childArtifacts: [{ dir: path.join("/kids", "c1"), instanceId: "c1", key: "a" }],
+          artifactDir: null,
+          memoryDir: null,
+          phaseDef: {},
+        }),
+      },
+    });
+    assert.deepEqual(
+      p.channels?.map((o) => o.status),
+      ["unavailable", "unavailable"],
+    );
+    for (const o of p.channels ?? []) {
+      assert.match(o.reason ?? "", /\(ARGUS_CHILDREN_FILE\)$/, o.channel.label);
+    }
+    assert.equal(
+      p.channels?.[1].reason,
+      'Qwen Code container sandbox (--sandbox in ARGUS_QWEN_ARGS) does not mount the artifact folder of child c1 (task "a") (ARGUS_CHILDREN_FILE)',
     );
   });
 });

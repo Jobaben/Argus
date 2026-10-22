@@ -421,9 +421,10 @@ describe("DecisionH1Section", () => {
     const pending = screen.getByText("Pending gates (total)").closest("dl") as HTMLElement;
     expect(within(pending).getByText("7")).toBeTruthy();
     expect(within(pending).getByText("Manual gates").nextSibling?.textContent).toBe("6");
-    expect(within(pending).getByText("Gates declaring autoApprove").nextSibling?.textContent).toBe(
-      "1",
-    );
+    expect(
+      within(pending).getByText("Gates declaring autoApprove or approveWhen").nextSibling
+        ?.textContent,
+    ).toBe("1");
     expect(screen.getByText(/Pending gates are counted, not shown/)).toBeTruthy();
   });
 

@@ -95,7 +95,16 @@ export function evaluatePredicate(result: unknown, predicate: RoutePredicate): b
   }
 }
 
-function resolvePath(value: unknown, path: string[]): { found: boolean; value: unknown } {
+/**
+ * The value at a path of property names, stepping only through plain objects:
+ * an array (or anything else) part way down is `found: false`; `[]` is the
+ * value itself; an array at the end is returned. Route predicates and a spawn
+ * phase's sources (`sources/children.ts`) read results through it.
+ */
+export function resolvePath(
+  value: unknown,
+  path: readonly string[],
+): { found: boolean; value: unknown } {
   let current = value;
   for (const segment of path) {
     if (

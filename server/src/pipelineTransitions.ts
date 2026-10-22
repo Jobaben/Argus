@@ -10,12 +10,25 @@ import {
   skippablePhases,
 } from "./sources/dag.js";
 import { RouteEvaluationError, evaluateRoutes, validateResult } from "./sources/routing.js";
-import { isTerminal, liveStatus } from "./sources/instanceStatus.js";
+import { isLiveTask, isTerminal, liveStatus, resumable } from "./sources/instanceStatus.js";
+import {
+  SPAWN_REASON_MAX_CHARS,
+  blockedTasks,
+  childrenOutcome,
+  clipText,
+  nextSpawns,
+  spawnItemsError,
+  summarizeChildren,
+  taskStateFor,
+  type ChildObservation,
+} from "./sources/children.js";
 import type {
   AgentRuntimeId,
   CandidateOutcome,
   CandidatePolicy,
   DependencyEdge,
+  InstanceParentRef,
+  PhaseChildren,
   PhaseFailureClass,
   PhaseKnowledgeCommit,
   PhaseProgress,
@@ -25,6 +38,7 @@ import type {
   RetryableClass,
   RetryPolicy,
   RouteDecision,
+  SpawnTask,
   StepCompletion,
   StepProgress,
   StepStatus,
@@ -257,6 +271,11 @@ function resolvePhaseResult(
       }`,
     };
   }
+  // A result a spawn phase reads is a task list: one Argus could not spawn
+  // from fails this phase here, before its gate, so nobody approves a plan
+  // that could not run. The engine classes it `signal`, like every result failure.
+  const taskList = spawnItemsError(def, phase.id, submitted[0].result);
+  if (taskList) return { ok: false, reason: taskList };
   return { ok: true, value: submitted[0].result };
 }
 
@@ -440,9 +459,16 @@ export function initInstance(
   trigger: PipelineInstance["trigger"],
   ids: { instanceId: string; token: string },
   nowISO: string,
-  /** Set for `trigger: "webhook"` (the request body) or `"chained"` (the
-   *  source instance's outcome) — absent for `"manual"`/`"scheduled"`. */
-  firing?: { triggerPayload?: unknown; chainedFrom?: string },
+  /** Set for `trigger: "webhook"` (the request body), `"chained"` (the source
+   *  instance's outcome) or `"spawned"` (the task, its `parent` and the
+   *  `workspaceBase` its worktrees are cut from) — absent for
+   *  `"manual"`/`"scheduled"`. */
+  firing?: {
+    triggerPayload?: unknown;
+    chainedFrom?: string;
+    parent?: InstanceParentRef;
+    workspaceBase?: string;
+  },
 ): TransitionResult {
   if (def.phases.length === 0) throw new Error("pipeline has no phases");
   const needs = resolveNeeds(def.phases);
@@ -467,6 +493,8 @@ export function initInstance(
     trigger,
     ...(firing?.triggerPayload !== undefined ? { triggerPayload: firing.triggerPayload } : {}),
     ...(firing?.chainedFrom !== undefined ? { chainedFrom: firing.chainedFrom } : {}),
+    ...(firing?.parent !== undefined ? { parent: firing.parent } : {}),
+    ...(firing?.workspaceBase !== undefined ? { workspaceBase: firing.workspaceBase } : {}),
     signalToken: ids.token,
     // Every run of this instance gets its own token; the instance-wide one
     // above is kept only so the record keeps its shape, and is never accepted.
@@ -1282,6 +1310,40 @@ export function applyUnlaunchable(
   ]);
 }
 
+/**
+ * Fail a phase waiting at its gate because its approval condition said so
+ * (`approveWhen.failOnExit`, DL-A3). Classed `approval-condition`, which no
+ * `retryOn` can name, so it is never retried; a person can still revise it.
+ * Only the exact attempt still waiting at a `gate` pause is taken — anything
+ * else (a revise, an approval or an abort got there first) is left alone.
+ */
+export function applyConditionFailed(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phaseId: string,
+  attempt: number,
+  reason: string,
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (
+    !phase ||
+    phase.status !== "awaiting-approval" ||
+    phase.pause !== "gate" ||
+    phase.attempt !== attempt
+  ) {
+    return { instance: inst, startPhases: [] };
+  }
+  // `pause` stays "gate" (it means "is, or last was"); a revise clears it.
+  phase.status = "failed";
+  phase.payload = withFailureClass(withReason(phase.payload, reason), "approval-condition");
+  // A gate pause has none left; kept so the invariant never depends on it.
+  failLeftoverSteps(phase);
+  return withEvents(settle(def, inst, nowISO), [
+    transitionEvent("condition-failed", { phaseId, attempt, detail: reason }),
+  ]);
+}
+
 /** The phase a human action targets: the named one, else the single paused one. */
 export function pausedPhase(inst: PipelineInstance, phaseId?: string): PhaseProgress | undefined {
   if (phaseId) return inst.phases.find((p) => p.id === phaseId);
@@ -1302,7 +1364,10 @@ export function applyApprove(
   if (!phase || phase.status !== "awaiting-approval") {
     throw new Error("instance is not awaiting approval");
   }
-  if (answers !== undefined) phase.payload = answers;
+  // A `children` pause takes no answers (the engine refuses them with 400 before
+  // anything is recorded); its payload is the summary approving publishes.
+  // Ignored rather than thrown here, so a recovered operation can never wedge.
+  if (answers !== undefined && phase.pause !== "children") phase.payload = answers;
   // Approval is the gate's acceptance condition; the staged knowledge commits
   // only now, never when the agent finished or the checks passed.
   return withEvents(succeedPhase(def, inst, phase, nowISO), [
@@ -1451,12 +1516,380 @@ export function applyAbort(
     for (const s of phase.steps) {
       if (s.status === "running" || s.status === "pending") s.status = "aborted";
     }
+    // A stopped spawn phase's live tasks are stopped too: the engine's cascade
+    // aborts each child (`parent-aborted`), and this record says so meanwhile.
+    for (const task of phase.children?.tasks ?? []) {
+      if (!isLiveTask(task.state)) continue;
+      task.state = "aborted";
+      task.reason = "aborted with its parent";
+      delete task.deferred;
+      delete task.reviveDecisionId;
+      delete task.waitingPhaseId;
+    }
   }
   inst.status = "aborted";
   inst.endedAt = nowISO;
   if (cause) inst.abortCause = cause;
   touch(inst, nowISO);
   return inst;
+}
+
+// ── Spawn phases: one child instance per task, joined ────────────────────────
+//
+// A spawn phase runs no agent. The engine builds its task list, mints an id
+// per ready task, starts each child by that id and reads the children back;
+// every change any of that makes to the parent is one of the transitions
+// below, so the engine never writes a task field. Each takes the spawn phase's
+// `attempt` the engine read and refuses a stale one; a refusal, or a replay of
+// the same input, changes nothing and returns no events, so it records nothing.
+// What the tasks then mean for their phase (blocked, joined, paused, resumed)
+// is decided in one place, `settleChildren`.
+
+/** A task the engine minted an instance id for, under the parent's lock. */
+export interface PlannedChild {
+  index: number;
+  instanceId: string;
+}
+
+function refused(inst: PipelineInstance): TransitionResult {
+  return { instance: inst, startPhases: [] };
+}
+
+/** The spawn phase a child transition is about, if it takes one at `attempt`:
+ *  running, or (for an observation, which is what ends that pause) paused at
+ *  `children`. */
+function openSpawnPhase(
+  inst: PipelineInstance,
+  phaseId: string,
+  attempt: number,
+  allowPaused: boolean,
+): { phase: PhaseProgress; children: PhaseChildren } | null {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase?.children || phase.attempt !== attempt || !resumable(inst.status)) return null;
+  const open =
+    phase.status === "running" ||
+    (allowPaused && phase.status === "awaiting-approval" && phase.pause === "children");
+  return open ? { phase, children: phase.children } : null;
+}
+
+/**
+ * Record a spawn phase's task list, once, built by the engine
+ * (`buildPhaseChildren`). Refused for a phase that is not a running spawn
+ * phase at `attempt`, or that already has its list: a revise re-opens the list
+ * in place (`applyChildRevived`), it never rebuilds it.
+ */
+export function applyChildrenStart(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phaseId: string,
+  attempt: number,
+  children: PhaseChildren,
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  const isSpawn = !!def.phases.find((p) => p.id === phaseId)?.spawn;
+  if (
+    !phase ||
+    !isSpawn ||
+    phase.status !== "running" ||
+    phase.attempt !== attempt ||
+    phase.children ||
+    children.tasks.length === 0
+  ) {
+    return refused(inst);
+  }
+  phase.children = structuredClone(children);
+  touch(inst, nowISO);
+  const n = children.tasks.length;
+  return {
+    instance: inst,
+    startPhases: [],
+    events: [
+      transitionEvent("children-started", {
+        phaseId,
+        attempt,
+        detail: `${n} task${n === 1 ? "" : "s"}`,
+      }),
+    ],
+  };
+}
+
+/**
+ * Record the children the engine just minted ids for. This save is the
+ * commit point of "exactly one child per task": a crash after it starts the
+ * same id again, and the start returns the instance it finds. An entry is taken
+ * only when `nextSpawns` allows its task now and its id is used by no task of
+ * the instance, now or before; the rest are ignored, so a second pass's plan,
+ * or a replay, plans nothing.
+ */
+export function applyChildrenPlan(
+  inst: PipelineInstance,
+  phaseId: string,
+  attempt: number,
+  planned: PlannedChild[],
+  nowISO: string,
+): TransitionResult {
+  const open = openSpawnPhase(inst, phaseId, attempt, false);
+  if (!open) return refused(inst);
+  const allowed = new Set(nextSpawns(open.children));
+  const used = new Set<string>([inst.id]);
+  for (const p of inst.phases) {
+    for (const t of p.children?.tasks ?? []) {
+      if (t.instanceId) used.add(t.instanceId);
+      for (const id of t.previousInstanceIds ?? []) used.add(id);
+    }
+  }
+  const done: string[] = [];
+  for (const entry of planned) {
+    const task = open.children.tasks[entry.index];
+    if (!task || !allowed.has(entry.index) || used.has(entry.instanceId)) continue;
+    task.state = "planned";
+    task.instanceId = entry.instanceId;
+    delete task.deferred;
+    delete task.reason;
+    delete task.waitingPhaseId;
+    allowed.delete(entry.index);
+    used.add(entry.instanceId);
+    done.push(`${task.key} → ${entry.instanceId}`);
+  }
+  if (done.length === 0) return refused(inst);
+  touch(inst, nowISO);
+  return {
+    instance: inst,
+    startPhases: [],
+    events: [transitionEvent("children-planned", { phaseId, attempt, detail: done.join(", ") })],
+  };
+}
+
+/**
+ * What the tasks now imply for their phase: which wait as `blocked`, and
+ * whether the phase joins, pauses for a person, resumes from that pause, or
+ * keeps running. The single place these are decided. `events` are the calling
+ * transition's own and come first; with none and no change, nothing happens.
+ *
+ * The pause comes only once no child is live: running children finish first,
+ * so accepting the rest never leaves a live child under a succeeded phase.
+ */
+function settleChildren(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phase: PhaseProgress,
+  children: PhaseChildren,
+  events: TransitionEvent[],
+  nowISO: string,
+): TransitionResult {
+  const blocked = blockedTasks(children.tasks);
+  children.tasks.forEach((t, i) => {
+    if (t.state !== "pending" && t.state !== "blocked") return;
+    const want: SpawnTask["state"] = blocked.has(i) ? "blocked" : "pending";
+    if (t.state === want) return;
+    events.push(
+      transitionEvent("child-observed", {
+        phaseId: phase.id,
+        attempt: phase.attempt,
+        detail: `${t.key}: ${t.state} → ${want}`,
+      }),
+    );
+    t.state = want;
+  });
+  const outcome = childrenOutcome(children);
+  const paused = phase.status === "awaiting-approval";
+  if (outcome === "succeeded") {
+    // The join, from a running phase or from the pause (a child a person
+    // re-ran directly can be the last to succeed). Never gated (validation),
+    // so this publishes the summary under `produces` and starts the successors.
+    delete phase.pause;
+    phase.payload = summarizeChildren(children);
+    return withEvents(concludePhase(def, inst, phase, nowISO), events);
+  }
+  if (outcome === "halted" && !paused) {
+    phase.status = "awaiting-approval";
+    phase.pause = "children";
+    phase.payload = summarizeChildren(children);
+    return withEvents(settle(def, inst, nowISO), [
+      ...events,
+      transitionEvent("phase-paused", {
+        phaseId: phase.id,
+        attempt: phase.attempt,
+        detail: "children",
+      }),
+    ]);
+  }
+  if (outcome === "live" && paused) {
+    phase.status = "running";
+    delete phase.pause;
+    phase.payload = null;
+    return withEvents(settle(def, inst, nowISO), [
+      ...events,
+      transitionEvent("children-resumed", { phaseId: phase.id, attempt: phase.attempt }),
+    ]);
+  }
+  if (events.length === 0) return refused(inst);
+  if (paused) phase.payload = summarizeChildren(children);
+  touch(inst, nowISO);
+  return { instance: inst, startPhases: [], events };
+}
+
+/**
+ * Mirror children into their parent: one entry per child the engine read.
+ * Taken while the phase runs and while it waits at `children` (a person
+ * re-running a failed child directly is what ends that pause; HARNESS §2's
+ * "results wait for a gate decision" does not apply: an observation is like a
+ * signal). An observation of an id the task no longer names is ignored.
+ */
+export function applyChildrenObserved(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phaseId: string,
+  attempt: number,
+  observed: ChildObservation[],
+  nowISO: string,
+): TransitionResult {
+  const open = openSpawnPhase(inst, phaseId, attempt, true);
+  if (!open) return refused(inst);
+  const events: TransitionEvent[] = [];
+  for (const obs of observed) {
+    const task = open.children.tasks[obs.index];
+    if (!task || task.instanceId !== obs.instanceId) continue;
+    const next = taskStateFor(task, obs);
+    if (!next) continue;
+    events.push(
+      transitionEvent("child-observed", {
+        phaseId,
+        attempt,
+        detail: `${task.key}: ${task.state} → ${next.state}`,
+      }),
+    );
+    task.state = next.state;
+    if (next.waitingPhaseId) task.waitingPhaseId = next.waitingPhaseId;
+    else delete task.waitingPhaseId;
+    if (next.reason) task.reason = next.reason;
+    else delete task.reason;
+    delete task.deferred;
+    if (next.state !== "reviving") delete task.reviveDecisionId;
+  }
+  return settleChildren(def, inst, open.phase, open.children, events, nowISO);
+}
+
+/**
+ * Say why a planned start or an owed revive is waiting (a read error, the
+ * spend budget, a busy target pipeline, a failed preflight). Changes no state.
+ * The same reason again records nothing, so a hold costs no record per tick.
+ */
+export function applyChildDeferred(
+  inst: PipelineInstance,
+  phaseId: string,
+  attempt: number,
+  index: number,
+  instanceId: string,
+  reason: string,
+  nowISO: string,
+): TransitionResult {
+  const open = openSpawnPhase(inst, phaseId, attempt, false);
+  const task = open?.children.tasks[index];
+  if (!open || !task || task.instanceId !== instanceId) return refused(inst);
+  if (task.state !== "planned" && task.state !== "reviving") return refused(inst);
+  const clipped = clipText(reason, SPAWN_REASON_MAX_CHARS);
+  if (task.deferred?.reason === clipped) return refused(inst);
+  task.deferred = { reason: clipped, at: nowISO };
+  touch(inst, nowISO);
+  return {
+    instance: inst,
+    startPhases: [],
+    events: [
+      transitionEvent("child-deferred", { phaseId, attempt, detail: `${task.key}: ${clipped}` }),
+    ],
+  };
+}
+
+/**
+ * A planned start or an owed revive refused for good (the target pipeline is
+ * gone, the payload cannot be built, the child to revive is gone): the task
+ * fails without a child. Its id moves to `previousInstanceIds`, never to be
+ * used again, so a revise of the spawn phase gives the task a fresh child.
+ * Halts the phase like any failure.
+ */
+export function applyChildRefused(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phaseId: string,
+  attempt: number,
+  index: number,
+  instanceId: string,
+  reason: string,
+  nowISO: string,
+): TransitionResult {
+  const open = openSpawnPhase(inst, phaseId, attempt, false);
+  const task = open?.children.tasks[index];
+  if (!open || !task || task.instanceId !== instanceId) return refused(inst);
+  if (task.state !== "planned" && task.state !== "reviving") return refused(inst);
+  const what = task.state === "planned" ? "not started" : "not revived";
+  task.state = "failed";
+  task.previousInstanceIds = [...(task.previousInstanceIds ?? []), instanceId];
+  delete task.instanceId;
+  delete task.deferred;
+  delete task.reviveDecisionId;
+  delete task.waitingPhaseId;
+  task.reason = clipText(`${what}: ${reason}`, SPAWN_REASON_MAX_CHARS);
+  const event = transitionEvent("child-refused", {
+    phaseId,
+    attempt,
+    detail: `${task.key}: ${reason}`,
+  });
+  return settleChildren(def, inst, open.phase, open.children, [event], nowISO);
+}
+
+/**
+ * A revise of the spawn phase re-runs every task that did not succeed: a
+ * failed child is revived in place (its revise is owed, keyed by this
+ * decision), an aborted, refused or never-started task gets a fresh child, and
+ * nothing is blocked any more. Succeeded tasks stay. Applied by the engine
+ * right after `applyRevise`, in the same save, so `attempt` is the new attempt.
+ */
+export function applyChildRevived(
+  inst: PipelineInstance,
+  phaseId: string,
+  attempt: number,
+  decisionId: string,
+  nowISO: string,
+): TransitionResult {
+  const open = openSpawnPhase(inst, phaseId, attempt, false);
+  if (!open) return refused(inst);
+  let revived = 0;
+  let reopened = 0;
+  for (const task of open.children.tasks) {
+    if (task.state === "failed" && task.instanceId) {
+      task.state = "reviving";
+      task.reviveDecisionId = decisionId;
+      revived++;
+    } else if (task.state === "failed" || task.state === "aborted" || task.state === "blocked") {
+      if (task.instanceId) {
+        task.previousInstanceIds = [...(task.previousInstanceIds ?? []), task.instanceId];
+      }
+      delete task.instanceId;
+      task.state = "pending";
+      reopened++;
+    } else {
+      continue;
+    }
+    delete task.reason;
+    delete task.deferred;
+    delete task.waitingPhaseId;
+  }
+  if (revived + reopened === 0) return refused(inst);
+  open.phase.payload = null;
+  touch(inst, nowISO);
+  return {
+    instance: inst,
+    startPhases: [],
+    events: [
+      transitionEvent("child-revived", {
+        phaseId,
+        attempt,
+        detail: `${revived} revived in place, ${reopened} re-opened`,
+      }),
+    ],
+  };
 }
 
 // ── Retry ───────────────────────────────────────────────────────────────────

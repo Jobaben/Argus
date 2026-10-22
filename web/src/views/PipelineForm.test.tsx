@@ -351,7 +351,7 @@ describe("PipelineForm", () => {
     expect(arg.phases[3].needs.sort()).toEqual(["b", "c"]);
   });
 
-  it("drops autoApprove when the gate is unchecked", async () => {
+  it("drops autoApprove and approveWhen when the gate is unchecked", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     const initial = {
@@ -365,6 +365,7 @@ describe("PipelineForm", () => {
           gated: true,
           rubric: { goal: "good docs", criteria: [{ id: "clear", label: "Clear" }] },
           autoApprove: { verdict: 8 },
+          approveWhen: { kind: "command" as const, run: "node merged.js", everySeconds: 300 },
           steps: [{ name: "s", prompt: "p" }],
         },
       ],
@@ -377,8 +378,40 @@ describe("PipelineForm", () => {
     const arg = onSubmit.mock.calls[0][0];
     expect(arg.phases[0].gated).toBe(false);
     expect(arg.phases[0].autoApprove).toBeUndefined();
-    // The rubric itself is still preserved — only the gate-dependent knob goes.
+    expect(arg.phases[0].approveWhen).toBeUndefined();
+    // The rubric itself is still preserved — only the gate-dependent knobs go.
     expect(arg.phases[0].rubric).toBeDefined();
+  });
+
+  it("shows and keeps an approval condition on a gated phase", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const approveWhen = {
+      kind: "command" as const,
+      run: "node merged.js",
+      everySeconds: 300,
+      failOnExit: 3,
+    };
+    const initial = {
+      ...EMPTY_PIPELINE,
+      name: "Gated",
+      phases: [
+        {
+          id: "a",
+          name: "Review",
+          cwd: "/tmp",
+          gated: true,
+          approveWhen,
+          steps: [{ name: "s", prompt: "p" }],
+        },
+      ],
+    };
+    render(<PipelineForm initial={initial} onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+    expect(screen.getByText("approval condition")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /save pipeline/i }));
+
+    expect(onSubmit.mock.calls[0][0].phases[0].approveWhen).toEqual(approveWhen);
   });
 
   it("submits Codex model and effort defaults and step overrides", async () => {

@@ -600,9 +600,10 @@ async function processChains(deps: SchedulerDeps): Promise<void> {
           inst.endedAt !== null &&
           new Date(inst.endedAt).getTime() > updatedAtMs &&
           afterMatches(inst.status, target.on) &&
-          // Stopped because its pipeline was deleted: nothing it chains to
-          // was meant to follow the deletion.
+          // Stopped because its pipeline was deleted, or because its parent
+          // was aborted: nothing it chains to was meant to follow that.
           inst.abortCause !== "pipeline-deleted" &&
+          inst.abortCause !== "parent-aborted" &&
           !alreadyChained(ledger, inst.id, target.id),
       )
       // Oldest first: a burst of source instances that ended while Argus was

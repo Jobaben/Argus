@@ -60,3 +60,22 @@ wrote as if it were empty: the Knowledge Ledger, for one, shows no claims and
 refuses to write a ledger version it does not know. Nothing is deleted, and
 pinning the newer release again shows it. `--use` warns when the target is
 older than the pinned release.
+
+Rolling back can also **drop** a field the older build does not know. A build
+from before approval conditions ignores a phase's `approveWhen`, so its gates
+wait for a person, and saving the pipeline from that build removes the field.
+
+A build from before spawn phases **stalls** them. It has no spawn branch: a
+running spawn phase never moves, its planned children never start, a child's
+saves no longer reach its parent, and a definition with a spawn phase cannot
+be saved there at all (its validator requires a step in every phase). Before
+`argus release --use <older>`, abort every live instance whose pipeline has a
+spawn phase, and wait until its children read `aborted` too: aborting a parent
+aborts them, but only on a build that knows spawn phases.
+
+That older build also **chains** those children. It does not know
+`parent-aborted`, so a pipeline or schedule whose `after` trigger names a task
+pipeline with `on: failed` or `on: any` fires once for each child its parent's
+abort stopped. Disable every such pipeline and schedule before rolling back.
+Enabling one again saves it, and an `after` trigger only chains instances that
+end after it was last saved, so the aborted children never fire it.

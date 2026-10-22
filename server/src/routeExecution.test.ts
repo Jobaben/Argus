@@ -158,7 +158,7 @@ async function complete(
  * writes the run file; a test that read the file the instant the call appeared
  * would be racing an atomic tmp+rename write it has no reason to.
  */
-async function readRunWhenWritten(runId: string, timeoutMs = 2000) {
+async function readRunWhenWritten(runId: string, timeoutMs = 15_000) {
   const start = Date.now();
   for (;;) {
     const record = await readRun(runId);
@@ -181,11 +181,13 @@ const statusOf = (inst: PipelineInstance, id: string) =>
  *
  * A signal handler answers the child before it waits for a concurrency slot, so
  * the phases a decision authorized are spawned just after `onSignal` resolves.
+ * The wait returns as soon as they are; the long bound only absorbs a loaded
+ * Windows CI runner, where a detached launch can take seconds.
  */
 async function waitForCalls(
   rec: { calls: { runId: string }[] },
   count: number,
-  timeoutMs = 2000,
+  timeoutMs = 15_000,
 ): Promise<void> {
   const start = Date.now();
   while (rec.calls.length < count) {

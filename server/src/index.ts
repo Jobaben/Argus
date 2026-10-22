@@ -450,6 +450,10 @@ const scheduler = startScheduler({
   startPipeline: (pipelineId, trigger, firing) => engine.start(pipelineId, trigger, firing),
   onTick: async () => {
     await engine.reconcile();
+    // Approval conditions (DL-A3), right after reconcile so no poll sees a
+    // gate an interrupted decision is still completing. This only queues
+    // them: each poll runs off the tick, under its own timeout.
+    await engine.pollGates();
     await monitorWatcher.check();
     await budgetWatcher.check();
     await watchtowerWatcher.check();
@@ -486,6 +490,9 @@ async function shutdown() {
   await stopWatchingExtensions();
   await stopWatchingSessions();
   await scheduler.stop();
+  // Approval polls in flight are cut and their results discarded; the next
+  // server polls again on its first tick, so a condition must be read-only.
+  engine.stopPolls();
   await tailer.stop();
   // Let deferred launches and verifications land: a half-written instance is
   // what an unclean stop looks like to the next boot's reconcile pass.

@@ -574,6 +574,9 @@ function addNullable(a: number | null, b: number | null): number | null {
  * A disabled or budget-blocked runner skips every remaining phase — running
  * four more passes for four identical refusals burns time for nothing. Any
  * other failure marks that phase and carries on; a re-press is the retry.
+ *
+ * A spawn phase is skipped without a pass: it runs no agent of its own, so it
+ * has no model, effort or limit to tune (its children's pipeline has).
  */
 export async function performPipelineTuning(
   def: PipelineDefinition,
@@ -599,6 +602,12 @@ export async function performPipelineTuning(
   let haltedBy: string | null = null;
   for (let i = 0; i < def.phases.length; i++) {
     const phase = def.phases[i];
+
+    if (phase.spawn) {
+      const error = "a spawn phase runs no agent";
+      await persist(withPhase(i, { status: "skipped", error }, { phasesDone: i + 1 }));
+      continue;
+    }
 
     if (haltedBy) {
       await persist(withPhase(i, { status: "skipped", error: haltedBy }, { phasesDone: i + 1 }));

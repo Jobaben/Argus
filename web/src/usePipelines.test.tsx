@@ -80,7 +80,11 @@ describe("usePipelines", () => {
         json: async () => ({
           error: "1 instance is running",
           code: "instances-running",
-          instances: [{ id: "i1", status: "running" }],
+          instances: [
+            { id: "i1", status: "running" },
+            // A live parent whose spawn phase will start more of it (DL-A2).
+            { id: "p1", status: "running", pipelineId: "parent" },
+          ],
         }),
       } as Response);
     vi.stubGlobal("fetch", fetchMock);
@@ -89,7 +93,10 @@ describe("usePipelines", () => {
     await expect(attempt).rejects.toBeInstanceOf(InstancesRunningError);
     await attempt.catch((e: InstancesRunningError) => {
       expect(e.message).toBe("1 instance is running");
-      expect(e.instances).toEqual([{ id: "i1", status: "running" }]);
+      expect(e.instances).toEqual([
+        { id: "i1", status: "running" },
+        { id: "p1", status: "running", pipelineId: "parent" },
+      ]);
     });
   });
 

@@ -178,6 +178,29 @@ export function isExplicitDag(phases: PhaseDef[]): boolean {
 }
 
 /**
+ * The nodes Kahn's algorithm cannot order (every node on a cycle, and every
+ * node that waits on one), sorted. Empty when the graph is acyclic. A
+ * dependency that is not a key of `needs` counts as satisfied: callers that
+ * care about dangling edges report them first. Shared by the phase graph and a
+ * spawn phase's task list (`sources/children.ts`).
+ */
+export function unorderedNodes(needs: ReadonlyMap<string, readonly string[]>): string[] {
+  // Whatever is left when no node has zero in-degree is on a cycle or behind one.
+  const remaining = new Map(needs);
+  let progressed = true;
+  while (remaining.size > 0 && progressed) {
+    progressed = false;
+    for (const [id, deps] of remaining) {
+      if (deps.every((d) => !remaining.has(d))) {
+        remaining.delete(id);
+        progressed = true;
+      }
+    }
+  }
+  return [...remaining.keys()].sort();
+}
+
+/**
  * Reject a graph that cannot execute, with a message naming the phase.
  *
  * Called from pipeline validation, so a cycle is a `400` at authoring time
@@ -204,21 +227,9 @@ export function validateDag(phases: PhaseDef[]): void {
     }
   }
 
-  // Kahn's algorithm; whatever is left when no node has zero in-degree is a cycle.
-  const remaining = new Map(needs);
-  let progressed = true;
-  while (remaining.size > 0 && progressed) {
-    progressed = false;
-    for (const [id, deps] of remaining) {
-      if (deps.every((d) => !remaining.has(d))) {
-        remaining.delete(id);
-        progressed = true;
-      }
-    }
-  }
-  if (remaining.size > 0) {
-    const names = [...remaining.keys()].sort().join(", ");
-    throw new DagValidationError(`phases form a cycle: ${names}`);
+  const cyclic = unorderedNodes(needs);
+  if (cyclic.length > 0) {
+    throw new DagValidationError(`phases form a cycle: ${cyclic.join(", ")}`);
   }
 
   // Every phase must be reachable from a root, or it can never start. An

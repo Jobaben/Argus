@@ -224,7 +224,11 @@ state. It is one per pipeline instance, under `~/.claude/argus/`: one
 checksummed JSON line per instance save (`schema`, contiguous 1-based `seq`,
 `instanceId`, `at`, `source`, optional `phaseId`/`attempt`/`runId`, `events`,
 either a full `baseline` projection or `changes`, a diagnostic `effects`
-summary, optional `unattributed`, `stateSha256`). It is **not authoritative**: it
+summary, optional `unattributed`, `stateSha256`). A spawn phase adds an
+owed-effect kind, `{ kind: "spawn", phaseId, attempt, action, instanceId? }`
+with `action` one of `plan`, `start` and `revive`, and one status key per
+task, `child:<phaseId>#<i>` (the task's position), beside the `step:` keys a
+transition must account for. It is **not authoritative**: it
 is evidence for replay and integrity diagnosis about how the saved instance got
 where it is (recovery derives effects from the saved instance and run records,
 never from this file), replays to a
@@ -308,14 +312,72 @@ See HARNESS §19 for what the signals mean and what they cannot see.
 
 One append-only JSON line per approve, revise or abort decision (`GateDecision`,
 `contracts/src/gates.ts`), written and fsynced before the transition it
-describes and never pruned. An automated approval carries `verdicts[]`, the
-output judgments it rested on. **`GateDecision.trajectoryVerdicts[]`** is the
+describes and never pruned. A Verdict auto-approval
+(`mechanism: "verdict-auto-approve"`) carries `verdicts[]`, the output
+judgments it rested on. **`GateDecision.trajectoryVerdicts[]`** is the
 matching trajectory basis, present only when the approved phase's rubric
 declares a trajectory: one entry per relevant run with `runId`, `stepName`,
 `verdictId`, `at`, `score` and `bar` (both `null` for a check-only rubric),
 `held` (always empty), `signalsVersion`, the provenance fields and the
 trajectory `rubricDigest`. Entries are built from the stored judgments, not
-from the request.
+from the request. **`GateDecision.condition`** is present only on an approval by
+an approval condition (`mechanism: "approval-condition"`, channel
+`approval-poll`): `{ kind: "command", label, exitCode, output, startedAt,
+durationMs }`, with `exitCode` always `0` and `output` at most the last 500
+characters of the command's combined output (HARNESS §2, "Approval
+conditions"). The line is never pruned, so a condition should print only what
+explains its result. A decision Argus carries out on a spawned child for its
+parent has `mechanism: "parent-decision"`, channel `in-process` and principal
+`{ kind: "system", component: "spawn" }`; **`GateDecision.parentDecisionId`**
+names the parent's decision it carries out (a revise of the parent's spawn
+phase, or its abort), and is absent when reconcile's sweep aborts a child its
+parent no longer waits for (HARNESS §20).
+
+## `argus/invocations/<instanceId>/trigger-payload.json` — trigger payload copy
+
+A JSON copy of the instance's `triggerPayload` (a webhook body, a chained
+start's `{ sourceInstanceId, sourcePipelineId, status }`, or a spawned child's
+`SpawnTriggerPayload`), pretty-printed with
+two-space indentation, for the instance's `command` checks and approval polls
+to read through `ARGUS_TRIGGER_PAYLOAD_FILE`. Argus writes it before each
+verification run of a phase that declares a `command` check, and before each
+approval poll of a gate that declares `approveWhen`, and only when the bytes on
+disk differ, so an edited or deleted copy is put back before the next run or
+poll, never between one run's checks; an instance with no payload (absent or
+`null`) has no file. It sits beside the instance's working-tree baselines
+(`<phaseId>.<attempt>[.c<i>].baseline.json`) and is removed with that folder
+when the instance is pruned. The instance record (`argus/instances/<id>.json`)
+stays the authority: the copy exists so a check never reads the record, which
+also holds the definition snapshot and its `hookToken`. See HARNESS §6, "What a
+command check is told".
+
+## `argus/instances/<instanceId>.json` — parent and children
+
+One JSON file per pipeline instance (`PipelineInstance`,
+`contracts/src/pipelines.ts`), rewritten in place on every save; the saved
+instance is what Argus acts on (HARNESS §18). Its fields are in
+[API.md § Instance fields](API.md#instance-fields); a spawn phase
+(HARNESS §20) adds these:
+
+- **`PhaseProgress.children`** (on the parent's spawn phase):
+  `{ pipelineId, source: { phaseId, attempt }, maxParallel, tasks }`. Each task
+  has `key`, `state` and optionally `title`, `dependsOn`, `instanceId`,
+  `previousInstanceIds`, `waitingPhaseId`, `reason`, `deferred` and
+  `reviveDecisionId`. `dependsOn` holds positions in `tasks`, the title is
+  clipped to 60 characters and `reason` to 200, and the whole list is kept
+  small on purpose: the transition log records it in full, one line at most
+  16 KiB. A child's id is saved here, with the task `planned`, before the
+  child is created.
+- **`parent`** (on a child): `{ instanceId, pipelineId, phaseId, index, key }`,
+  with `trigger: "spawned"` and a `SpawnTriggerPayload` as its
+  `triggerPayload`: `{ task, key, base?, include?, parent }`, the task under
+  `task`.
+- **`workspaceBase`** (on a child): the ref its worktrees are cut from instead
+  of its definition's `workspace.base`.
+
+Retention keeps a pipeline's newest 50 instance files, plus every child whose
+parent's file still exists or cannot be read right now; pruning a parent does
+not prune its children.
 
 ## Phase verification checks — `CheckResult`
 

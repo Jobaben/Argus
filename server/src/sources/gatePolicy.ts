@@ -1,5 +1,6 @@
 import type { Rubric, TrajectorySignalKind, Verdict } from "@argus/contracts";
-import type { PhaseDef, PhaseProgress, StepProgress } from "./pipelineTypes.js";
+import type { ApprovalCondition, PhaseDef, PhaseProgress, StepProgress } from "./pipelineTypes.js";
+import type { CommandEnd } from "../harness/verification.js";
 import { rubricDigest } from "./verdict.js";
 import {
   hasTrajectory,
@@ -27,6 +28,11 @@ import {
  *    check that actually protects legacy definitions saved before (1), and
  *    instances whose definition snapshot predates it;
  * 3. the Verdict watcher, which does not even ask.
+ *
+ * The same definition gates `approveWhen`, a gate a polled command opens
+ * (DL-A3), at the same three places: refused when a definition is saved, not
+ * polled (`approvalConditionEligibility`), and refused at the engine's
+ * condition boundary.
  *
  * Two inputs, and neither is anything an agent declares:
  *
@@ -96,6 +102,71 @@ export function autoApproveRefusal(phaseLabel: string, reasons: readonly string[
     `(${reasons.join(", ")}). A person must approve this gate. Remove autoApprove from this ` +
     `phase; a rubric may stay, and scoring still runs, but approval is manual.`
   );
+}
+
+/** The authoring-time error for `approveWhen` on a gate that commits knowledge. */
+export function approveWhenRefusal(phaseLabel: string, reasons: readonly string[]): string {
+  return (
+    `${phaseLabel}: approveWhen cannot open a gate that commits knowledge ` +
+    `(${reasons.join(", ")}). A person must approve this gate. Remove approveWhen from this phase.`
+  );
+}
+
+/**
+ * Whether an approval poll may run for this phase attempt (DL-A3): it waits
+ * at a known `gate` pause — never a question an agent asked (`needs-input`),
+ * never a spawn phase waiting on its children (`children`), never a pause of
+ * unknown cause — its own definition declares `approveWhen`, and its gate
+ * commits no knowledge, by configuration or by what the attempt staged. Pure;
+ * the engine decides again under the instance lock.
+ */
+export type ApprovalConditionEligibility =
+  | { ok: true; condition: ApprovalCondition }
+  | { ok: false; cause: "pause" | "not-configured" }
+  | { ok: false; cause: "knowledge"; reasons: string[] };
+
+export function approvalConditionEligibility(
+  phase: PhaseProgress,
+  phaseDef: PhaseDef | undefined,
+): ApprovalConditionEligibility {
+  if (phase.status !== "awaiting-approval" || phase.pause !== "gate") {
+    return { ok: false, cause: "pause" };
+  }
+  const condition = phaseDef?.approveWhen;
+  if (!phaseDef || !condition) return { ok: false, cause: "not-configured" };
+  const reasons = [...knowledgeCommitReasons(phaseDef), ...stagedKnowledgeReasons(phase)];
+  if (reasons.length > 0) return { ok: false, cause: "knowledge", reasons };
+  return { ok: true, condition };
+}
+
+/** What one poll's result means for the gate. */
+export type ConditionOutcome =
+  { kind: "approve" } | { kind: "fail"; exitCode: number } | { kind: "wait" };
+
+/**
+ * Only a command that exited on its own speaks: exit 0 approves, an exit
+ * equal to `failOnExit` fails the phase, anything else waits. A timeout, a
+ * kill, a spawn error or a cut poll never counts as an exit code, whatever
+ * code the process left behind.
+ */
+export function conditionOutcome(
+  condition: Pick<ApprovalCondition, "failOnExit">,
+  ran: { end: CommandEnd; exitCode?: number | null },
+): ConditionOutcome {
+  if (ran.end !== "exit" || typeof ran.exitCode !== "number") return { kind: "wait" };
+  if (ran.exitCode === 0) return { kind: "approve" };
+  if (condition.failOnExit !== undefined && ran.exitCode === condition.failOnExit) {
+    return { kind: "fail", exitCode: ran.exitCode };
+  }
+  return { kind: "wait" };
+}
+
+/** The failed phase's reason: the condition, its exit, and the last line it
+ *  printed (at most 300 characters). */
+export function conditionFailureReason(label: string, exitCode: number, output: string): string {
+  const last = output.trim().split(/\r?\n/).pop()?.trim() ?? "";
+  const line = last.length > 300 ? `…${last.slice(-299)}` : last;
+  return `approval condition "${label}" exited ${exitCode}${line ? `: ${line}` : ""}`;
 }
 
 /**
@@ -238,8 +309,9 @@ export function trajectoryBar(phaseDef: PhaseDef): number | null {
  * rule would open the gate:
  *
  * - `ineligible` — not a gate the rule may open: not a `gate` pause
- *   (`cause: "pause"`), or the gate commits knowledge by configuration or by
- *   what the attempt staged (`cause: "knowledge"`);
+ *   (`cause: "pause"`: a question put to a person, or a spawn phase whose
+ *   children stopped short), or the gate commits knowledge by configuration
+ *   or by what the attempt staged (`cause: "knowledge"`);
  * - `not-configured` — the phase declares no `autoApprove` bar, or no rubric;
  * - `insufficient-data` — a relevant step did not succeed, has no run, or has
  *   no current, `ready`, scored verdict with an id under this rubric; or, when
@@ -303,7 +375,9 @@ export function autoApprovalQualification(
           ? `phase is ${phase.status}`
           : phase.pause === "needs-input"
             ? "needs-input pause"
-            : "pause of unknown cause",
+            : phase.pause === "children"
+              ? "children pause"
+              : "pause of unknown cause",
       ],
     };
   }

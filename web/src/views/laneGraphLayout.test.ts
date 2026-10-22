@@ -234,6 +234,13 @@ describe("nodeWidthFor", () => {
     // Step dots for a few steps, one step draws none.
     expect(markerWidth(phase("a", "idle", [], { steps: [1] }))).toBe(0);
     expect(markerWidth(phase("a", "idle", [], { steps: [1, 2, 3] }))).toBeGreaterThan(0);
+    // A spawn phase's glyph, then its done-of-total once there is a list.
+    const glyph = markerWidth(phase("a", "working", [], { spawn: { tasks: [], succeeded: 0 } }));
+    expect(glyph).toBeGreaterThan(0);
+    const tasks = Array.from({ length: 12 }, (_, i) => i);
+    expect(
+      markerWidth(phase("a", "working", [], { spawn: { tasks, succeeded: 10 } })),
+    ).toBeGreaterThan(glyph);
   });
 });
 

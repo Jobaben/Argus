@@ -150,6 +150,7 @@ import { buildSummary } from "./federation/summary.js";
 import { buildFleet } from "./federation/fleet.js";
 import type {
   BuildInfo,
+  GateActionReply,
   GateDecisionPrincipal,
   H1CollectionStatus,
   H2CollectionStatus,
@@ -162,9 +163,10 @@ import { compareIntegrity } from "./transitionLog/fold.js";
 import { buildOverview } from "./sources/overview.js";
 import { buildPalette } from "./sources/palette.js";
 import { buildSituation } from "./sources/insight.js";
-import { PreflightError, type Engine } from "./pipelineEngine.js";
+import { PreflightError, type ActionResult, type Engine } from "./pipelineEngine.js";
 import type { PipelineDefinition, PipelineSignal } from "./sources/pipelineTypes.js";
 import { isTerminal, resumable } from "./sources/instanceStatus.js";
+import { spawnsMoreOf } from "./sources/children.js";
 import type { ActivityEvent } from "./runTailer.js";
 import { defaultSpawn, fireOneOff, fireRun, isAlive } from "./scheduler.js";
 import { LaunchValidationError, validateLaunchInput } from "./sources/launch.js";
@@ -306,12 +308,13 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
   }
 
-  // Shared reply shape for engine gate actions (approve / revise / abort).
-  function engineReply(c: Context, res: { ok: boolean; code: number; error?: string }) {
-    return c.json(
-      res.ok ? { ok: true } : { ok: false, error: res.error },
-      res.code as 200 | 404 | 409,
-    );
+  // Shared reply shape for engine gate actions (approve / revise / abort). A
+  // refusal a client acts on carries its machine-readable `code`.
+  function engineReply(c: Context, res: ActionResult) {
+    const body: GateActionReply = res.ok
+      ? { ok: true }
+      : { ok: false, error: res.error, ...(res.errorCode ? { code: res.errorCode } : {}) };
+    return c.json(body, res.code as 200 | 400 | 404 | 409 | 500);
   }
 
   // Order matters: the request id must exist before anything can log with it,
@@ -1252,6 +1255,32 @@ export function createApp(deps: AppDeps): Hono {
   async function liveInstancesOf(pipelineId: string) {
     return (await readInstances({ pipelineId })).filter((i) => resumable(i.status));
   }
+  /** Live instances of *other* pipelines that will still start instances of
+   *  this one (a spawn phase of the definition they run targets it). Unlike the
+   *  pipeline's own instances, these do not keep this definition: each child
+   *  they start later reads it as it is then. */
+  async function liveSpawnersOf(pipelineId: string) {
+    return (await readInstances()).filter(
+      (i) => i.pipelineId !== pipelineId && resumable(i.status) && spawnsMoreOf(i, pipelineId),
+    );
+  }
+  /** The `409 instances-running` text: why an execution edit is held, and how to save it anyway. */
+  function instancesRunningMessage(name: string, own: number, spawners: number): string {
+    const parts: string[] = [];
+    if (own > 0) {
+      parts.push(
+        `${own} instance${own === 1 ? " is" : "s are"} running under "${name}". ` +
+          "They keep the definition they started with; this edit applies to the next start only.",
+      );
+    }
+    if (spawners > 0) {
+      parts.push(
+        `${spawners} live instance${spawners === 1 ? "" : "s"} of another pipeline will start ` +
+          `more instances of "${name}", and those would run this edit.`,
+      );
+    }
+    return `${parts.join(" ")} Repeat with ?force=1 to save it anyway.`;
+  }
 
   const pipelineUpdateHandler =
     (validate: (v: unknown) => Partial<PipelineInput>) => async (c: Context) => {
@@ -1265,17 +1294,19 @@ export function createApp(deps: AppDeps): Hono {
         if (!current) return c.json({ error: "not found" }, 404);
         const force = ["1", "true"].includes(c.req.query("force") ?? "");
         if (!force && changesExecution(current, patch)) {
-          const live = await liveInstancesOf(id);
-          if (live.length > 0) {
-            const n = live.length;
+          const [live, spawners] = await Promise.all([liveInstancesOf(id), liveSpawnersOf(id)]);
+          if (live.length + spawners.length > 0) {
             return c.json(
               {
-                error:
-                  `${n} instance${n === 1 ? " is" : "s are"} running under "${current.name}". ` +
-                  "They keep the definition they started with; this edit applies to the next " +
-                  "start only. Repeat with ?force=1 to save it anyway.",
+                error: instancesRunningMessage(current.name, live.length, spawners.length),
                 code: "instances-running",
-                instances: live.map((i) => ({ id: i.id, status: i.status })),
+                // The pipeline's own live instances first, then the live parents
+                // that spawn it; `pipelineId` tells them apart.
+                instances: [...live, ...spawners].map((i) => ({
+                  id: i.id,
+                  status: i.status,
+                  pipelineId: i.pipelineId,
+                })),
               },
               409,
             );
@@ -1358,8 +1389,16 @@ export function createApp(deps: AppDeps): Hono {
     }
   });
 
+  // `?parent=<instanceId>`: only the instances that parent spawned. Absent or
+  // empty: every instance of the pipeline, as before. An unknown id is an empty
+  // list, not an error: the parent may have been pruned.
   app.get("/api/pipelines/:id/instances", async (c) =>
-    c.json({ instances: await readInstances({ pipelineId: c.req.param("id") }) }),
+    c.json({
+      instances: await readInstances({
+        pipelineId: c.req.param("id"),
+        parentId: c.req.query("parent") || undefined,
+      }),
+    }),
   );
 
   // First-attempt pass rate, lucky passes and stalls over a trailing window —

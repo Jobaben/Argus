@@ -21,7 +21,8 @@ The pieces this document covers live in `server/src/harness/`:
 - `invocation.ts` — resolves capabilities, asks the runtime to map them onto
   flags/config, applies the environment policy, and writes down what it did.
 - `childEnv.ts` — the one place a child process's environment is assembled.
-- `verification.ts` — Argus's own deterministic checks over a phase's work.
+- `verification.ts` — Argus's own deterministic checks over a phase's work,
+  and the command runner approval polls reuse (§2, Approval conditions).
 - `workspace.ts` — the git worktree a phase's steps run in, when one is
   declared (§11), and one per candidate when a phase runs best-of-N (§12).
 - `memory.ts` — a pipeline's durable, cross-instance notes (§13).
@@ -167,7 +168,8 @@ declared result schema validated (if `result`) missing/unparseable/schema-invali
 deterministic checks run (if `checks`)         a failing CheckResult → "verification"
         │
         ▼
-gate opens (if `gated`) or auto-approves
+gate opens (if `gated`): a person,            the approveWhen command exits with
+auto-approval, or an approval condition       its failOnExit code → "approval-condition"
         │
         ▼
 staged KnowledgeDeltas, rule                 a refused commit → "knowledge-delta",
@@ -261,13 +263,14 @@ not tampering — the file is untouched and integrity passes (KNOWLEDGE-LEDGER.m
 | `knowledge-context-integrity` | The KnowledgeContext Argus materialized for the run no longer hashes to the value recorded at launch — the file was modified, or removed, while the agent ran. The completion is refused and nothing the run proposed becomes canonical. The reason names the run, the expected hash, the hash found and the path; never the contents.                                                                                                                                                                                                                                                                                                          | No — opt in                                             |
 | `rule-verification`           | The run emitted a rule-verification proposal Argus refused — malformed, a rule it was not supplied, a supplied rule left without an outcome (or no file written at all), an outcome with no evidence, an `unverifiable` with no reason, a `check` label the phase does not declare, source evidence that is not a real file inside the repository — or the phase commit was refused (a cited check absent from the report; a `holds` whose check did not pass under `holds: "deterministic-check"`). The refusal names exactly what was missing (KNOWLEDGE-LEDGER.md §15.7).                                                                    | No — opt in                                             |
 | `change-proposal`             | The run emitted a ChangeProposal Argus refused — malformed, no file written at all, a supplied rule left unclassified, a classification that contradicts the semantic delta, a claim both preserved and revised, an acceptance criterion naming a local id the delta does not declare, a business-rule change with no acceptance criteria under a `required` policy, or a separate KnowledgeDelta file written beside it — or the phase commit was refused (a local reference the commit did not create; the ledger moved under the proposal's `expectedRevision`). The refusal names exactly what was missing (KNOWLEDGE-LEDGER.md §16.8).     | No — opt in                                             |
-| `change-context-integrity`    | An Argus-owned **read-only input** the run was given — its ChangeContext, its ImplementationScope, its RemediationContext — no longer hashes to what Argus recorded at launch. The exact counterpart of `knowledge-context-integrity`, and it asks the same question: _did the bytes supplied to this invocation change?_, never _is this still the newest proposal?_. The completion is refused and nothing the run proposed becomes durable (KNOWLEDGE-LEDGER.md §17.8).                                                                                                                                                                      | No — opt in                                             |
+| `change-context-integrity`    | An Argus-owned **read-only input** the run was given — its ChangeContext, its ImplementationScope, its RemediationContext, its children manifest (§20) — no longer hashes to what Argus recorded at launch. The exact counterpart of `knowledge-context-integrity`, and it asks the same question: _did the bytes supplied to this invocation change?_, never _is this still the newest proposal?_. The completion is refused and nothing the run proposed becomes durable (KNOWLEDGE-LEDGER.md §17.8).                                                                                                                                         | No — opt in                                             |
 | `acceptance-verification`     | The run emitted an acceptance-verification proposal Argus refused — malformed, a criterion the accepted proposal does not declare, a required criterion left without an outcome (or no file written at all), an outcome with no evidence, an `unverifiable` with no reason, a `check` label the phase does not declare, a report written against a different accepted change, source evidence that is not a real file inside the repository — or the phase commit was refused (a cited check absent from the report; a `satisfied` citing a check Argus observed failing) (KNOWLEDGE-LEDGER.md §17.7).                                          | No — opt in                                             |
 | `configuration`               | The declared capability profile could not be enforced under strict enforcement, or a change realization's preconditions do not hold (the accepted intent's target revisions are no longer active; the attempt budget is spent) — the step never launched.                                                                                                                                                                                                                                                                                                                                                                                       | **Never** — the definition is what's wrong, not the run |
+| `approval-condition`          | The phase waited at its gate and its `approveWhen` command exited with its `failOnExit` code (for example: the pull request was abandoned). See [Approval conditions](#approval-conditions).                                                                                                                                                                                                                                                                                                                                                                                                                                                    | **Never** — a person revises or aborts                  |
 
 The class is written onto the phase's payload (`withFailureClass`) whenever a
 phase fails, whether or not that failure ends up scheduling a retry — a
-terminal failure with no attempts left still names which of the thirteen classes
+terminal failure with no attempts left still names which of the fourteen classes
 it was, never just "failed".
 
 **A completion signal is authoritative over the exit code that follows it.**
@@ -294,7 +297,8 @@ extending it, so it must now add `"unverified"` to keep retrying a missing
 marker — previously, on the run-record path, an explicit `["exit-code"]` was
 enough. `retryOn` accepts every class the contract's `RetryableClass` names
 (including `unverified`, `change-proposal`, `change-context-integrity` and
-`acceptance-verification`); everything but `configuration` may be named.
+`acceptance-verification`); everything but `configuration` and
+`approval-condition` may be named.
 
 A retried attempt is told why the previous one failed: `retryNote()` appends a
 bounded, class-specific note to the prompt for **every** retryable class, not
@@ -335,10 +339,20 @@ A failed phase with a retry scheduled (`retryAt`) counts as live in
 pending: no `onFailure`, no `instance.ended`, no `after: failed` chain and no
 worktree cleanup. A due retry runs while a sibling waits at its gate.
 
+A spawn phase (§20) stays `running` while its children run or wait at their
+own gates: a child's gate is the child's, and never makes its parent
+`awaiting-approval`. The parent waits only when the spawn phase pauses at
+`children` (a child failed or was aborted, and none is live), and only a person
+opens that pause. Whether an instance is in flight, moving without a person,
+reads the spawn phase's tasks: a parent whose live children all wait at their
+own gates is not, so `argus tail --until-idle` returns.
+
 The questions are named once, in `server/src/sources/instanceStatus.ts`:
 `resumable` (the engine may still act), `isTerminal`, `appliesResults`
 (results apply only while no gate waits), `hasWaitingGate` (asked of the
-phases, for every count and badge), `pendingRetry` and `liveStatus`.
+phases, for every count and badge), `pendingRetry`, `liveStatus`, `inFlight`
+(something moves without a person) and `isLiveTask` (a spawn phase's task
+holds one of its `maxParallel` slots).
 `engine/instanceStatus.test.ts` fails on an inline `running` or
 `awaiting-approval` comparison of an instance's status in the engine or the
 transitions, on a spelled-out terminal check, and on a hand-written live status.
@@ -526,6 +540,110 @@ or process access. Argus does not deliver the token through a file: environment
 delivery is kept because globally installed hooks (Codex, Qwen) may be the older
 version, which reads only `ARGUS_SIGNAL_TOKEN`, and a file alongside an
 environment variable would not reduce exposure.
+
+### Approval conditions
+
+A gated phase can declare a command that Argus polls while the phase waits at
+its gate, so a gate can open when something outside Argus says it may — a
+pull request merged, a deployment went green — without a person watching for
+it (`PhaseDef.approveWhen`, `ApprovalCondition` in `@argus/contracts`;
+`engine/gatePolls.ts`):
+
+```jsonc
+"approveWhen": {
+  "kind": "command",
+  "run": "node /home/you/argus-checks/pr-merged.mjs", // 1–4,000 characters, through the shell
+  "label": "pull request merged",      // optional, ≤120; default: "command: " and the first 71 characters of run
+  "everySeconds": 300,                 // 30–86400, from one poll's start to the next
+  "timeoutSeconds": 60,                // optional, 1–600; default 60
+  "failOnExit": 3                      // optional, 1–255
+}
+```
+
+- **Where it is allowed.** On a gated phase only, and never on a phase whose
+  gate commits knowledge: the same rule that refuses `autoApprove` there
+  (`knowledgeCommitReasons` in `sources/gatePolicy.ts`) refuses `approveWhen`
+  when the definition is saved. The defaults are applied when a poll runs,
+  never stored, so a definition round-trips exactly as it was written.
+- **Where and how it runs.** In the phase's worktree (§11), or its `cwd` when
+  it has none, exactly where its checks run; an optional `approveWhen.cwd` is
+  resolved against that, and an absolute one stands. It runs through the
+  platform shell under the phase's own environment policy, with the inputs a
+  command check gets: `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`,
+  `ARGUS_PHASE_ATTEMPT`, `ARGUS_ARTIFACT_DIR`, `ARGUS_WORKSPACE` and
+  `ARGUS_TRIGGER_PAYLOAD_FILE` (§6, "What a command check is told"; the
+  payload file is written before every poll). Nothing in `approveWhen` is
+  interpolated. The runner is the command checks' own (`runCommand` in
+  `harness/verification.ts`), so a timeout or a shutdown ends the command's
+  whole process tree (§17).
+- **Out of the agent's reach.** A poll runs in the tree the phase's agent has
+  just edited, and its exit 0 opens the gate. Keep the script, and every
+  program it starts, outside that tree, and name the script by absolute path
+  as the example does: a `scripts/pr-merged.mjs` committed to the repository
+  is the agent's to edit, and an edit that makes it exit 0 opens the gate with
+  no person approving and nothing merged. On Windows a program named without
+  a path is looked for in the current directory before `PATH`, whether the
+  shell or the script starts it, so name the interpreter by absolute path too,
+  and have the script start what it runs from a folder outside the tree
+  (`git -C <tree>`, and the provider's CLI with its repository named, as the
+  guide's example does); otherwise a `node.cmd`, `git.exe` or `az.cmd` the
+  agent left in its worktree runs in its place. A worktree is not a jail
+  (§11): an agent that can write outside it can still edit the script itself.
+- **What a result means.** Only a command that exited on its own speaks
+  (`conditionOutcome` in `sources/gatePolicy.ts`):
+  - **exit 0** approves the gate, through the same write-ahead record, link,
+    completion and recovery as a person's approval; the next phases start;
+  - **an exit equal to `failOnExit`** fails the phase under the
+    `approval-condition` class (`applyConditionFailed` in
+    `pipelineTransitions.ts`), which no `retryOn` can name, so it is never
+    retried. A person can still revise it. It is not a gate decision: there
+    is no decision kind for it, and an older build would complete an unknown
+    kind as an approval;
+  - **anything else** keeps the gate waiting: any other exit code, a timeout,
+    a kill, a command that could not start. A timed-out command that traps
+    SIGTERM and exits with the `failOnExit` code still only waits.
+- **What an approval records.** A gate decision with mechanism
+  `approval-condition`, channel `approval-poll` and principal
+  `{ kind: "system", component: "approval-poll" }`, and as its basis
+  (`condition`) the label, the exit code, the last 500 characters of the
+  command's combined output, when it started and how long it ran. The record
+  is never pruned: print one short line that explains the result, never a
+  secret.
+- **Cadence.** Polls are queued on the scheduler tick, right after
+  `reconcile` and never inside it; the tick does not wait for them. At most one
+  poll runs per phase attempt, and the next starts no sooner than
+  `everySeconds` after the previous one started (to within a second), so the
+  resolution is one tick (`ARGUS_SCHED_TICK_MS`, 30 s by default). The first
+  scheduler tick after a restart polls again: nothing about a poll is stored
+  on the instance.
+- **The journal.** `phase.approval-condition`, only when the result changes:
+  the first wait, an approval, a failure, a refusal. A condition that waits for
+  days leaves one entry per server process. Expired credentials for the tool a
+  condition calls make it wait forever, journalled once; look there when a gate
+  that should have opened has not.
+- **What is never polled.** A phase paused for an agent's question
+  (`needs-input`), a spawn phase waiting on its children (`children`, §20; a
+  spawn phase cannot declare `approveWhen` either), a pause recorded before
+  pause causes were, a gate whose attempt staged knowledge (journalled once per
+  attempt as "not polled"), an instance whose pipeline was deleted, and an
+  instance whose gate decision is still being completed.
+- **A person first, and `autoApprove` beside it.** A person can approve,
+  revise or abort at any time; a poll that finishes after the phase moved is
+  refused under the instance lock (`approveOnCondition` and `failOnCondition`
+  in `engine/gates.ts` decide again, on exactly the terms a Verdict
+  auto-approval does) and journalled as "not applied". So is a poll on a
+  spawned child its parent no longer waits for (`409 parent-decided`, §20).
+  `approveWhen` may sit beside `autoApprove`; whichever qualifies first opens
+  the gate.
+- **Read-only and repeatable.** A shutdown cuts a poll in flight and discards
+  its result, and the next server runs it again, so a condition must only
+  read. It never holds a shell open between polls.
+- **Rollback.** A build from before approval conditions ignores `approveWhen`
+  — those gates wait for a person — and drops the field the next time it
+  saves the pipeline.
+
+The [pipelines guide](guides/pipelines.md#open-a-gate-when-its-pull-request-merges)
+has a worked recipe that opens a gate when its pull request merges.
 
 ## 3. Capability profiles
 
@@ -739,26 +857,29 @@ than a hard requirement.
 
 Beyond the working tree, Argus hands every agent process a small set of files
 and directories that _it_ owns — the protocol between the agent and Argus.
-Each is named to the agent by one environment variable, lives outside the
+Each is named to the agent by one environment variable (a child's artifact
+folder by the children manifest that variable names), lives outside the
 repository (under `~/.claude/argus/`), and must stay reachable whatever
 `filesystem` says about the rest of the disk: a read-only researcher still
 writes its report, its decision and its proposal there.
 
-| Channel                 | Env var                              | Direction     | Required access | Launch depends on it when…                                                                                                                                                                                                                                                                                                                |
-| ----------------------- | ------------------------------------ | ------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Result file             | `ARGUS_RESULT_FILE`                  | agent → Argus | write           | the step publishes the phase's `result` (always required then: the routing reads it). `results/<runId>/result.json` — a directory per run, so granting it admits this run's result only                                                                                                                                                   |
-| KnowledgeDelta file     | `ARGUS_KNOWLEDGE_DELTA_FILE`         | agent → Argus | write           | the phase declares `knowledgeDelta: "required"`. Offered to every run; emitting a delta stays optional either way (KNOWLEDGE-LEDGER.md §12.5)                                                                                                                                                                                             |
-| Artifact directory      | `ARGUS_ARTIFACT_DIR`                 | agent → Argus | write when used | the phase declares an `artifact` check. Offered to every run                                                                                                                                                                                                                                                                              |
-| Memory directory        | `ARGUS_MEMORY_DIR`                   | agent ↔ Argus | write           | `memory.enabled` is set (every step's prompt then asks the agent to append to `NOTES.md`)                                                                                                                                                                                                                                                 |
-| KnowledgeContext        | `ARGUS_KNOWLEDGE_CONTEXT_FILE`       | Argus → agent | **read**        | the step (or its phase) declares a `knowledgeContext` — always required then: the step was authored to reason from it. `invocations/<runId>/knowledge-context.json`, per run, `0444`; the agent never writes it, and Argus re-hashes it before accepting the completion (KNOWLEDGE-LEDGER.md §13, §13.11)                                 |
-| Rule verification       | `ARGUS_RULE_VERIFICATION_FILE`       | agent → Argus | write           | the phase declares `ruleVerification` — always required then: the conformance report _is_ the phase's output, not an optional proposal. `rule-verifications/<runId>/verification.json`, a directory per run (KNOWLEDGE-LEDGER.md §15.6)                                                                                                   |
-| Change request          | `ARGUS_CHANGE_REQUEST_FILE`          | Argus → agent | **read**        | the phase declares `changeIntent` — always required then: it is the phase's input. The requested change verbatim plus, per accountable rule, its support and its current implementation conformance. `invocations/<runId>/change-request.json`, per run, `0444` (KNOWLEDGE-LEDGER.md §16.4)                                               |
-| Change proposal         | `ARGUS_CHANGE_PROPOSAL_FILE`         | agent → Argus | write           | the phase declares `changeIntent` — always required then: the proposal _is_ the phase's output. `change-proposals/<runId>/proposal.json`, a directory per run (KNOWLEDGE-LEDGER.md §16.5)                                                                                                                                                 |
-| Change context          | `ARGUS_CHANGE_CONTEXT_FILE`          | Argus → agent | **read**        | the phase declares `changeContext` — always required then: the step was authored to implement that accepted intent. The approved proposal as exact canonical refs, never restated statements. `invocations/<runId>/change-context.json`, per run, `0444`; re-hashed before the completion is accepted (KNOWLEDGE-LEDGER.md §16.11, §17.8) |
-| Implementation scope    | `ARGUS_IMPLEMENTATION_SCOPE_FILE`    | Argus → agent | **read**        | the phase declares `implementation` — always required then: the run was authored to realize that scope. Where the ledger says the change lives, with a closed reason code per target. `invocations/<runId>/implementation-scope.json`, per run, `0444`, re-hashed at completion (KNOWLEDGE-LEDGER.md §17.5)                               |
-| Remediation context     | `ARGUS_REMEDIATION_CONTEXT_FILE`     | Argus → agent | **read**        | the attempt is a remediation (2..n) — always required then. The exact rules and criteria the previous attempt left unmet, from Argus's own accepted results rather than the previous agent's transcript. `invocations/<runId>/remediation-context.json`, per run, `0444`, re-hashed at completion (KNOWLEDGE-LEDGER.md §17.10)            |
-| Acceptance verification | `ARGUS_ACCEPTANCE_VERIFICATION_FILE` | agent → Argus | write           | the phase declares `acceptanceVerification` — always required then: the criterion outcomes _are_ the phase's output. `acceptance-verifications/<runId>/acceptance.json`, a directory per run (KNOWLEDGE-LEDGER.md §17.7)                                                                                                                  |
-| Revision notes          | `ARGUS_REVISION_NOTES_FILE`          | Argus → agent | **read**        | never required. Offered only when the phase's revise notes did not all fit the prompt (§13, _Revision notes_): every note in full, oldest first. `invocations/<runId>/notes/revision-notes.md`, in a folder of its own so the read rule covers nothing else                                                                               |
+| Channel                 | Env var                                       | Direction     | Required access | Launch depends on it when…                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------- | --------------------------------------------- | ------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Result file             | `ARGUS_RESULT_FILE`                           | agent → Argus | write           | the step publishes the phase's `result` (always required then: the routing reads it). `results/<runId>/result.json` — a directory per run, so granting it admits this run's result only                                                                                                                                                                                                      |
+| KnowledgeDelta file     | `ARGUS_KNOWLEDGE_DELTA_FILE`                  | agent → Argus | write           | the phase declares `knowledgeDelta: "required"`. Offered to every run; emitting a delta stays optional either way (KNOWLEDGE-LEDGER.md §12.5)                                                                                                                                                                                                                                                |
+| Artifact directory      | `ARGUS_ARTIFACT_DIR`                          | agent → Argus | write when used | the phase declares an `artifact` check. Offered to every run                                                                                                                                                                                                                                                                                                                                 |
+| Memory directory        | `ARGUS_MEMORY_DIR`                            | agent ↔ Argus | write           | `memory.enabled` is set (every step's prompt then asks the agent to append to `NOTES.md`)                                                                                                                                                                                                                                                                                                    |
+| KnowledgeContext        | `ARGUS_KNOWLEDGE_CONTEXT_FILE`                | Argus → agent | **read**        | the step (or its phase) declares a `knowledgeContext` — always required then: the step was authored to reason from it. `invocations/<runId>/knowledge-context.json`, per run, `0444`; the agent never writes it, and Argus re-hashes it before accepting the completion (KNOWLEDGE-LEDGER.md §13, §13.11)                                                                                    |
+| Rule verification       | `ARGUS_RULE_VERIFICATION_FILE`                | agent → Argus | write           | the phase declares `ruleVerification` — always required then: the conformance report _is_ the phase's output, not an optional proposal. `rule-verifications/<runId>/verification.json`, a directory per run (KNOWLEDGE-LEDGER.md §15.6)                                                                                                                                                      |
+| Change request          | `ARGUS_CHANGE_REQUEST_FILE`                   | Argus → agent | **read**        | the phase declares `changeIntent` — always required then: it is the phase's input. The requested change verbatim plus, per accountable rule, its support and its current implementation conformance. `invocations/<runId>/change-request.json`, per run, `0444` (KNOWLEDGE-LEDGER.md §16.4)                                                                                                  |
+| Change proposal         | `ARGUS_CHANGE_PROPOSAL_FILE`                  | agent → Argus | write           | the phase declares `changeIntent` — always required then: the proposal _is_ the phase's output. `change-proposals/<runId>/proposal.json`, a directory per run (KNOWLEDGE-LEDGER.md §16.5)                                                                                                                                                                                                    |
+| Change context          | `ARGUS_CHANGE_CONTEXT_FILE`                   | Argus → agent | **read**        | the phase declares `changeContext` — always required then: the step was authored to implement that accepted intent. The approved proposal as exact canonical refs, never restated statements. `invocations/<runId>/change-context.json`, per run, `0444`; re-hashed before the completion is accepted (KNOWLEDGE-LEDGER.md §16.11, §17.8)                                                    |
+| Implementation scope    | `ARGUS_IMPLEMENTATION_SCOPE_FILE`             | Argus → agent | **read**        | the phase declares `implementation` — always required then: the run was authored to realize that scope. Where the ledger says the change lives, with a closed reason code per target. `invocations/<runId>/implementation-scope.json`, per run, `0444`, re-hashed at completion (KNOWLEDGE-LEDGER.md §17.5)                                                                                  |
+| Remediation context     | `ARGUS_REMEDIATION_CONTEXT_FILE`              | Argus → agent | **read**        | the attempt is a remediation (2..n) — always required then. The exact rules and criteria the previous attempt left unmet, from Argus's own accepted results rather than the previous agent's transcript. `invocations/<runId>/remediation-context.json`, per run, `0444`, re-hashed at completion (KNOWLEDGE-LEDGER.md §17.10)                                                               |
+| Acceptance verification | `ARGUS_ACCEPTANCE_VERIFICATION_FILE`          | agent → Argus | write           | the phase declares `acceptanceVerification` — always required then: the criterion outcomes _are_ the phase's output. `acceptance-verifications/<runId>/acceptance.json`, a directory per run (KNOWLEDGE-LEDGER.md §17.7)                                                                                                                                                                     |
+| Revision notes          | `ARGUS_REVISION_NOTES_FILE`                   | Argus → agent | **read**        | never required. Offered only when the phase's revise notes did not all fit the prompt (§13, _Revision notes_): every note in full, oldest first. `invocations/<runId>/notes/revision-notes.md`, in a folder of its own so the read rule covers nothing else                                                                                                                                  |
+| Children manifest       | `ARGUS_CHILDREN_FILE`                         | Argus → agent | **read**        | the phase declares `childrenContext` — always required then: it is the phase's input. Every task of the spawn phase and its child's phases, results, verification, gate decisions, runs and cost, and the instance's own (§20, _The parent's view of its children_). `invocations/<runId>/children/children-manifest.json`, per run, `0444`, in a folder of its own; re-hashed at completion |
+| Child artifact folder   | named in the manifest (`ARGUS_CHILDREN_FILE`) | Argus → agent | **read**        | never required: the manifest already carries each child's results, and a folder is evidence. One per child whose folder exists, `artifacts/<childInstanceId>/` (every phase folder of that child), at most 100 per run                                                                                                                                                                       |
 
 The model (`harness/channels.ts`, `InvocationChannel` in `runtimes/types.ts`):
 `prepareInvocation` builds **one** list of channels — kind, env var, path, the
@@ -771,8 +892,9 @@ with a reason. A channel the runtime does not answer for is treated as
 unavailable — a protocol path is never presumed writable. Nothing on the
 runtime side is special-cased by kind: the result file, the delta file and the
 artifact directory are the same thing to an adapter. The one distinction an
-adapter makes is by **access**: a `read` channel (the KnowledgeContext file,
-and the change-context, implementation-scope and remediation-context files)
+adapter makes is by **access**: a `read` channel (the KnowledgeContext file;
+the change-context, implementation-scope, remediation-context and
+revision-notes files; the children manifest and every child's artifact folder)
 must be reachable and, where the runtime can express it, must _not_ be made
 writable — Claude Code adds an `Edit(//<dir>/**)` deny rule beside the
 `--add-dir`; Codex never lists it in `writable_roots`; OpenCode and Qwen Code
@@ -802,7 +924,8 @@ no KnowledgeDelta and no file artifacts, with or without a profile, launches
 exactly as it always did.
 
 For a run with a capability profile, every channel's path also travels in the
-run's own prompt, after Argus's other instructions and before any revision
+run's own prompt (a child's artifact folder through the children manifest,
+whose path is listed), after Argus's other instructions and before any revision
 notes or retry note (`channelInstruction` in `engine/prompts.ts`, appended by
 `launchStep` once the paths are known). A read-only profile denies the shell,
 and with it the only way an agent could read its environment. A run without a
@@ -820,7 +943,7 @@ stays the same for every run.
 | **Codex**       | `read-only` (declared, or via `ARGUS_CODEX_SANDBOX`)               | ❌ no way to admit a write; one limitation per channel                                                         | ✅ readable; the sandbox refuses every write                                                              |
 | **OpenCode**    | any (the profile's `filesystem` is itself unenforceable)           | ✅ `opencode run --auto` runs unsandboxed; nothing stands in the way                                           | ✅ readable (writes cannot be prevented — the profile is unenforceable regardless)                        |
 | **Qwen Code**   | any, no `--sandbox` in `ARGUS_QWEN_ARGS`                           | ✅ `--approval-mode yolo` runs unsandboxed                                                                     | ✅ readable (writes cannot be prevented — as above)                                                       |
-| **Qwen Code**   | `--sandbox` / `-s` in `ARGUS_QWEN_ARGS`                            | ❌ the container mounts the project and the CLI's home, not Argus's data directory                             | ❌ unavailable; the channel is required, so a strict launch is refused                                    |
+| **Qwen Code**   | `--sandbox` / `-s` in `ARGUS_QWEN_ARGS`                            | ❌ the container mounts the project and the CLI's home, not Argus's data directory                             | ❌ unavailable; a required one (not a revision-notes file or a child's folder) refuses a strict launch    |
 
 Where a runtime cannot prevent a write to the context file, the file's `0444`
 mode guards against an accidental overwrite and the invocation record's
@@ -991,7 +1114,7 @@ always applied; there is nothing to "fail to enforce" here).
   `deny` when both match the same name.
 - `set` — values fixed for this invocation only, applied last (after `allow`/
   `deny`, after the runtime's own `plan.env`, after Argus's per-invocation
-  identifiers) — except it can never overwrite a reserved name (below).
+  identifiers) — except that it may not name a reserved name (below).
 
 **Always stripped, under every policy, non-overridable even by an explicit
 `allow` or `set`:**
@@ -1002,10 +1125,21 @@ always applied; there is nothing to "fail to enforce" here).
   freshly-computed values, never be inherited from Argus's own process (which
   would let a nested Argus child impersonate or interfere with the run that
   spawned it): `ARGUS_SIGNAL_TOKEN`, `ARGUS_SIGNAL_URL`, `ARGUS_RESULT_FILE`,
-  `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_INSTANCE_ID`,
-  `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`, `ARGUS_STEP_NAME`, and `ARGUS_RUNTIME` (the
-  hook keys its Stop-payload handling off this one, so a value inherited from a
-  different invocation would misparse the signal).
+  `ARGUS_ARTIFACT_DIR`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`,
+  `ARGUS_PHASE_ATTEMPT`, `ARGUS_RUN_ID`, `ARGUS_STEP_NAME`, `ARGUS_WORKSPACE`,
+  `ARGUS_RUNTIME` (the hook keys its Stop-payload handling off this one, so a
+  value inherited from a different invocation would misparse the signal),
+  `ARGUS_MEMORY_DIR`, `ARGUS_KNOWLEDGE_DELTA_FILE`,
+  `ARGUS_KNOWLEDGE_CONTEXT_FILE`, `ARGUS_RULE_VERIFICATION_FILE`,
+  `ARGUS_CHANGE_REQUEST_FILE`, `ARGUS_CHANGE_PROPOSAL_FILE`,
+  `ARGUS_CHANGE_CONTEXT_FILE`, `ARGUS_REVISION_NOTES_FILE`,
+  `ARGUS_CHILDREN_FILE` and `ARGUS_TRIGGER_PAYLOAD_FILE`
+  (`ARGUS_PER_INVOCATION_IDENTIFIERS` in `harness/childEnv.ts`). A pipeline
+  that names one in `env.set` is refused when it is saved.
+
+The engine builds a `command` check's environment the same way: the phase's
+`inherit`, `allow` and `deny`, then the check's own identity as a layer, then
+the phase's `set` (§6, "What a command check is told").
 
 The invocation record never stores a variable's _value_ — only names
 (`envNames`, sorted; `envStripped`, sorted). Reconstructing what Argus ran
@@ -1028,7 +1162,8 @@ validation ever be bypassed, not a substitute for it.
 
 The directory itself:
 
-- `ARGUS_ARTIFACT_DIR` — set on every step's environment, pointing at
+- `ARGUS_ARTIFACT_DIR` — set on every step's environment, and on the phase's
+  `command` checks (§6), pointing at
   `~/.claude-argus/artifacts/<instanceId>/<phaseId>/`. Argus creates the
   directory, hands it to the runtime as an invocation channel (§3a — admitted
   to the sandbox no matter what `filesystem` says elsewhere, or reported
@@ -1046,11 +1181,15 @@ The directory itself:
   attempt's `checks` or mislead the agent about what it has already done.
 - **Pruned with the instance.** `pruneInstances` removes
   `~/.claude-argus/artifacts/<instanceId>/` (and the instance's working-tree
-  baselines) together with the instance record once it falls outside the
-  per-pipeline retention window (`INSTANCE_KEEP`). Invocation records, by
-  contrast, are pruned per _run_ — with `pruneRuns`'s retention window,
-  because they are keyed by `runId` — so the two can fall out of retention on
-  different schedules.
+  baselines and trigger-payload copy, in
+  `~/.claude/argus/invocations/<instanceId>/`) together with the instance
+  record once it falls outside the per-pipeline retention window
+  (`INSTANCE_KEEP`). Invocation records, by contrast, are pruned per _run_ —
+  with `pruneRuns`'s retention window, because they are keyed by `runId` — so
+  the two can fall out of retention on different schedules. A spawned child
+  (§20) is kept past the window while its parent's record exists, or cannot be
+  read right now: only a parent record that is provably gone releases it.
+  Kept children still count toward the window.
 
 File artifacts are the counterpart of `produces`/`PhaseResult` payload
 artifacts: a payload is a small validated JSON value pasted into a later
@@ -1064,17 +1203,17 @@ declared work actually happened — run once every step of the phase has
 reported success (or been recovered as successful — §2), never before, and
 never derived from the agent's own words.
 
-| Kind            | Fields                                                                                                                        | Limit / semantics                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `command`       | `run` (string, ≤4000 chars), `label?`, `cwd?` (resolved against the phase's `cwd`), `timeoutSeconds?` (1–86400; default 600s) | Runs through the shell in `cwd`; exit `0` passes. Combined stdout+stderr is capped at 16 KiB in memory, and only the last 4000 chars survive into the `CheckResult.output`. Runs under the phase's own resolved `EnvPolicy` (pipeline → phase capabilities — the same merge the phase's steps ran under), not Argus's full environment. At the deadline, POSIX: SIGTERM to the process group, then SIGKILL to the group after a grace period (`killGraceMs`, default 5s), sent even if the leader has already exited; Windows: `taskkill /T /F` on the command's tree (forceful — there is no graceful step), repeated after the grace only while the root shell is still alive. After a further grace, if a descendant still holds the output pipes, Argus releases its end of them and fails the check ("process did not exit") — a command that traps signals or leaves a grandchild behind can never hang verification. See §17. |
-| `artifact`      | `path` (relative, no `..`, no absolute), `label?`, `minBytes?` (≥0, default 1)                                                | Resolved against the phase's `ARGUS_ARTIFACT_DIR`. Uses `lstat`, so it does not follow a symlink: fails if the phase has no artifact directory, the path escapes it, the file is missing, **is a symbolic link**, or it's smaller than `minBytes` — a symlink to some large file elsewhere is never mistaken for the artifact the phase was asked to produce.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `file`          | same fields as `artifact`                                                                                                     | Resolved against the phase's own `cwd` instead of the artifact directory — for a file the agent was supposed to leave in the working tree itself.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `changed-files` | `label?`, `allow?` (globs), `deny?` (globs), `requireChanges?` (boolean)                                                      | See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `trajectory`    | `label?`, `thresholds` (signal → maximum count, 0 to 10,000), `requireTranscript?` (boolean)                                  | Deterministic signals over the relevant runs' transcripts; may report `not-evaluated`. See §19.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Kind            | Fields                                                                                                                        | Limit / semantics                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`       | `run` (string, ≤4000 chars), `label?`, `cwd?` (resolved against the phase's `cwd`), `timeoutSeconds?` (1–86400; default 600s) | Runs through the shell in `cwd`; exit `0` passes. Combined stdout+stderr is capped at 16 KiB in memory, and only the last 4000 chars survive into the `CheckResult.output`. Runs under the phase's own resolved `EnvPolicy` (pipeline → phase capabilities — the same merge the phase's steps ran under), not Argus's full environment, with the work's identity (see "What a command check is told" below). `run` is never interpolated. At the deadline, POSIX: SIGTERM to the process group, then SIGKILL to the group after a grace period (`killGraceMs`, default 5s), sent even if the leader has already exited; Windows: `taskkill /T /F` on the command's tree (forceful — there is no graceful step), repeated after the grace only while the root shell is still alive. After a further grace, if a descendant still holds the output pipes, Argus releases its end of them and fails the check ("process did not exit") — a command that traps signals or leaves a grandchild behind can never hang verification. See §17. |
+| `artifact`      | `path` (relative, no `..`, no absolute), `label?`, `minBytes?` (≥0, default 1)                                                | Resolved against the phase's `ARGUS_ARTIFACT_DIR`. Uses `lstat`, so it does not follow a symlink: fails if the phase has no artifact directory, the path escapes it, the file is missing, **is a symbolic link**, or it's smaller than `minBytes` — a symlink to some large file elsewhere is never mistaken for the artifact the phase was asked to produce.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `file`          | same fields as `artifact`                                                                                                     | Resolved against the phase's own `cwd` instead of the artifact directory — for a file the agent was supposed to leave in the working tree itself.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `changed-files` | `label?`, `allow?` (globs), `deny?` (globs), `requireChanges?` (boolean)                                                      | See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `trajectory`    | `label?`, `thresholds` (signal → maximum count, 0 to 10,000), `requireTranscript?` (boolean)                                  | Deterministic signals over the relevant runs' transcripts; may report `not-evaluated`. See §19.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
-A phase may declare up to 50 checks (`MAX_CHECKS`); they all run, always —
-verification never stops at the first failure, because the full report is the
-evidence a failed phase leaves behind.
+A phase may declare up to 50 checks (`MAX_CHECKS`); they all run, one at a
+time in the order listed, always — verification never stops at the first
+failure, because the full report is the evidence a failed phase leaves behind.
 
 A check's `status` is `passed` or `failed`; only a `trajectory` check can also
 report `not-evaluated` (§19). The report's status is `failed` if and only if some
@@ -1184,6 +1323,78 @@ path with Node's own `path.matchesGlob`, after normalizing to forward slashes
 (so the check behaves the same on Windows and POSIX). A changed path failing
 every `allow` glob (when any are set), or matching any `deny` glob, is
 "offending"; any offending path fails the check.
+
+### What a command check is told
+
+A `command` check runs with the identity of the work it judges, so a script
+can find the instance, its folder, its tree and the task it was started for
+without deriving them from a path (`commandInputLayer` in
+`harness/childEnv.ts`, applied in `engine/verification.ts`):
+
+| Variable                     | Value                                                                                                               |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `ARGUS_INSTANCE_ID`          | The instance.                                                                                                       |
+| `ARGUS_PHASE_ID`             | The phase.                                                                                                          |
+| `ARGUS_PHASE_ATTEMPT`        | The phase attempt the checks judge, counted from 0. Every candidate of an attempt sees the same attempt.            |
+| `ARGUS_ARTIFACT_DIR`         | The artifact directory the checks read (§5); a candidate's own `c<i>` folder for a candidate's checks (§12).        |
+| `ARGUS_WORKSPACE`            | The worktree the work happened in (§11); a candidate's own tree for a candidate's checks. Unset when there is none. |
+| `ARGUS_TRIGGER_PAYLOAD_FILE` | A JSON copy of the instance's `triggerPayload`. Unset when the instance has none (absent or `null`).                |
+
+`ARGUS_WORKSPACE` names the worktree, not the check's `cwd`: a phase without a
+worktree runs its checks in its own `cwd`, and they get no `ARGUS_WORKSPACE`,
+exactly like its steps.
+
+- **The payload file.** The copy is
+  `~/.claude/argus/invocations/<instanceId>/trigger-payload.json`, beside the
+  instance's working-tree baselines and outside the worktree and the artifact
+  folder (`ensureTriggerPayloadFile` in `sources/instances.ts`). It is written
+  before each verification run of a phase that declares a `command` check (a
+  candidate's checks are a run of their own) and before every approval poll
+  (§2), whether or not the polled phase declares one, and only when its bytes
+  differ from the payload's, so a copy that was edited or deleted is put back
+  before the next run or poll — after a restart too, because the checks of an
+  interrupted verification run again. Nothing puts it back during a run: a
+  check that runs repository code, such as `npm test`, gets the variable and
+  can change the copy for the checks listed after it, and for any other phase
+  or candidate of the instance verifying or polling at the same time, since
+  they share the one copy. List a check that judges the work against the
+  payload before any check that runs repository code. The copy is pruned with
+  the instance (§5). A payload is set by a webhook start (the request body),
+  by a chained start (`{ sourceInstanceId, sourcePipelineId, status }`) and by
+  a spawned start (its `SpawnTriggerPayload`,
+  `{ task, key, base?, include?, parent }`, §20); a manual or scheduled start
+  has none.
+- **A file, not a variable.** A webhook body can be 64 KiB, and a Windows
+  environment value is capped at 32,767 characters. A copy, never the instance
+  record: the record also holds the definition snapshot and its `hookToken`.
+- **Reserved names.** All six are per-invocation identifiers (§4): never
+  inherited from Argus's own environment, and kept under `inherit: "minimal"`
+  and any `deny`, because Argus adds them after the policy's `inherit`, `allow`
+  and `deny` filters. `env.set` is applied after them, so a pipeline that names
+  one there is refused when it is saved. A pipeline that named
+  `ARGUS_PHASE_ATTEMPT` or `ARGUS_TRIGGER_PAYLOAD_FILE` in `env.set` before
+  they were reserved keeps its own value until it is next saved, and an
+  instance started before then keeps it for its whole run.
+- **Agent steps.** A step gets the same identity variables,
+  `ARGUS_PHASE_ATTEMPT` included, but not `ARGUS_TRIGGER_PAYLOAD_FILE`: a
+  prompt reads the payload through `{{trigger.payload}}` (§13).
+- **`run` is never interpolated.** A webhook body pasted into a shell command
+  line is an injection; read the file instead. A payload value a script passes
+  to a program as an argument needs the same care without a shell: one that
+  starts with `-` is read as an option (`git diff "--output=<path>...HEAD"`
+  writes a file), so put it after `--end-of-options` or refuse it.
+- **No base ref on `changed-files`.** It compares against the attempt's
+  baseline (above). To compare a branch with the commit its task started from,
+  use a `command` check, such as
+  `git rev-list --count --end-of-options <base>..HEAD` or
+  `git diff --name-only --end-of-options <base>...HEAD` with the base read from
+  the payload file.
+
+The [pipelines guide](guides/pipelines.md#check-work-against-the-task-it-was-started-for)
+has a worked task-scope check.
+
+An approval poll ([Approval conditions](#approval-conditions), §2) runs through
+the same command runner and is told the same six variables.
 
 ## 7. Timeouts
 
@@ -1654,11 +1865,11 @@ the work a **git worktree** of its own:
 }
 ```
 
-| Field   | Meaning                                                                                                                                                                                                                                                          |
-| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scope` | `"instance"` — one worktree per pipeline instance, shared by every phase that opts in. `"attempt"` — a fresh worktree per phase attempt. `"none"` — this phase opts _out_ of a policy it would otherwise inherit and runs in its own `cwd`, no worktree created. |
-| `base`  | The ref the worktree is cut from. Default: `HEAD` of the repository at the phase's `cwd`. Validated as a ref: no whitespace, no leading `-`.                                                                                                                     |
-| `keep`  | Keep the directory after the instance ends. Default `false` — the directory is removed, the branch is kept.                                                                                                                                                      |
+| Field   | Meaning                                                                                                                                                                                                                                                                                            |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scope` | `"instance"` — one worktree per pipeline instance, shared by every phase that opts in. `"attempt"` — a fresh worktree per phase attempt. `"none"` — this phase opts _out_ of a policy it would otherwise inherit and runs in its own `cwd`, no worktree created.                                   |
+| `base`  | The ref the worktree is cut from. Default: `HEAD` of the repository at the phase's `cwd`. Validated as a ref: no whitespace, no leading `-`. A spawned child's trees are cut from its `workspaceBase` (its parent's `spawn.base`, §20) instead. Argus never fetches: the child's first phase does. |
+| `keep`  | Keep the directory after the instance ends. Default `false` — the directory is removed, the branch is kept.                                                                                                                                                                                        |
 
 Narrowest wins, as everywhere else: `phase.workspace ?? pipeline.workspace`.
 Absent at both levels, nothing changes — the phase runs in its own `cwd`
@@ -1678,12 +1889,12 @@ directory outside the worktrees root or a branch git refuses.
 
 **What runs there.** Everything about the attempt: each step's `cwd` and the
 `project` its transcript is filed under, `ARGUS_WORKSPACE` in the child
-environment (a per-invocation identifier, so it is never inherited from the
-parent — §4), the `changed-files` baseline snapshot, and the phase's `checks`
-— a `command` check is the repository's own script and must see what the agent
-saw. The invocation record and `PhaseProgress.workspace` both carry the
-`WorkspaceRecord` (`path`, `branch`, `base`, resolved `baseHead`), and the
-step drawer shows the branch.
+environment and in the phase's `command` checks (a per-invocation identifier,
+so it is never inherited from the parent — §4, §6), the `changed-files`
+baseline snapshot, and the phase's `checks` — a `command` check is the
+repository's own script and must see what the agent saw. The invocation record
+and `PhaseProgress.workspace` both carry the `WorkspaceRecord` (`path`,
+`branch`, `base`, resolved `baseHead`), and the step drawer shows the branch.
 
 **The deliverable is the branch; uncommitted changes are discarded.** When the
 instance settles — succeeded, failed or aborted — Argus runs
@@ -1791,14 +2002,14 @@ pipeline-wide workspace under a phase that relies on it is refused too:
 
 Everything that could otherwise be shared, isn't:
 
-| Per candidate `i`        | Value                                                                                                    |
-| ------------------------ | -------------------------------------------------------------------------------------------------------- |
-| worktree                 | `.../worktrees/<instanceId>/<phaseId>-attempt<N>-c<i>`, branch `argus/<instanceId>/<phaseId>/<N>-c<i>`   |
-| artifact directory       | `<phaseArtifactDir>/c<i>` — also what `ARGUS_ARTIFACT_DIR` and `{{artifactDir}}` point at                |
-| `changed-files` baseline | `<phaseId>.<attempt>.c<i>.baseline.json`                                                                 |
-| verification report      | `StepProgress.verification` — the phase's `checks`, run in **that** worktree                             |
-| result file              | the run's own `ARGUS_RESULT_FILE`; nothing is shared, so nothing races                                   |
-| knowledge delta file     | the run's own `ARGUS_KNOWLEDGE_DELTA_FILE`; a losing candidate's staged delta is superseded at selection |
+| Per candidate `i`        | Value                                                                                                                                                                  |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| worktree                 | `.../worktrees/<instanceId>/<phaseId>-attempt<N>-c<i>`, branch `argus/<instanceId>/<phaseId>/<N>-c<i>`                                                                 |
+| artifact directory       | `<phaseArtifactDir>/c<i>` — also what `ARGUS_ARTIFACT_DIR` and `{{artifactDir}}` point at, for the run and for its checks                                              |
+| `changed-files` baseline | `<phaseId>.<attempt>.c<i>.baseline.json`                                                                                                                               |
+| verification report      | `StepProgress.verification` — the phase's `checks`, run in **that** worktree; a `command` check's `ARGUS_WORKSPACE` and `ARGUS_ARTIFACT_DIR` name that tree and folder |
+| result file              | the run's own `ARGUS_RESULT_FILE`; nothing is shared, so nothing races                                                                                                 |
+| knowledge delta file     | the run's own `ARGUS_KNOWLEDGE_DELTA_FILE`; a losing candidate's staged delta is superseded at selection                                                               |
 
 The candidate index rides on the _attempt_ component of the branch
 (`…/impl/0-c1`, not `…/impl/0/c1`) because git's ref namespace is a
@@ -1954,10 +2165,12 @@ run long, so they are never capped.
 **Placement.** A step's prompt is the agent's own words, first. Everything
 Argus injects rides _after_ it, in a fixed order, short: the result
 instruction (§ pipelineEngine.ts `resultInstruction`), the artifact
-instruction (`artifactInstruction`), the memory instruction (below), then
-the channel paths (§3a), the phase's revision notes (§ Revision notes, below),
-and last — because recency is what a model weighs most, and a retry note is
-the part most worth remembering — the retry note (§ Retry feedback, below). None
+instruction (`artifactInstruction`), the children instruction
+(`childrenContextInstruction`, on a phase that declares `childrenContext`,
+§20), the memory instruction (below), then the channel paths (§3a), the
+phase's revision notes (§ Revision notes, below), and last — because recency
+is what a model weighs most, and a retry note is the part most worth
+remembering — the retry note (§ Retry feedback, below). None
 of this reorders the `OUTCOME_CONTRACT` system-prompt mechanism (§1), which is
 a pure constant carried separately so the prompt cache prefix holds across
 every run.
@@ -2538,6 +2751,8 @@ cleared on dispose.
 It is used by:
 
 - **Verification command checks** (§6).
+- **Approval polls** (§2, Approval conditions): a timeout or a shutdown ends
+  the tree the same way.
 - **The AnalysisRunner's spawn** (`spawnAnalysisProcess` in
   `sources/analysis.ts`). A timeout, the output cap (overflow), and an error
   from a still-running process now all end the tree, and `done` always
@@ -2646,7 +2861,9 @@ this is what it means for someone running pipelines.
 Each instance has `~/.claude/argus/transitions/<instanceId>.jsonl`: a numbered
 record for every save of the instance, saying which pure transitions ran
 (`events`), what they changed, and a summary of the side effects the saved
-state owes (`effects`: launches, checks, stops, knowledge commits). It supports
+state owes (`effects`: launches, checks, stops, knowledge commits, and a spawn
+phase's `spawn` work: `plan` its task list or its next tasks, `start` a planned
+child, `revive` a failed one). It supports
 **replay and integrity diagnosis, not authority**. The saved instance is what
 Argus acts on, and a record is never executed on its own word. The `effects`
 field in particular is a diagnostic snapshot, written for a reader. Nothing in
@@ -2761,6 +2978,28 @@ and it is at-least-once. "Exactly once" is not claimed for effects in general.
     stops healing there, and the siblings are healed after the decision.
   - Every recovered effect acts only on phases that are themselves `running`.
     Recovery never touches, approves or resumes the paused phase.
+- **Approval polls are gate decisions, not recovery.** Reconcile never polls;
+  the scheduler tick queues polls after it ([Approval conditions](#approval-conditions)).
+  An approval a poll made is an ordinary approval: interrupted after its link,
+  it is completed by gate recovery like any other. A poll in flight at a crash
+  or a shutdown is lost and runs again on the new process's first tick;
+  nothing about a poll is stored on the instance. A condition failure is one
+  transition save, so there is nothing to recover.
+- **An owed spawn** (§20). Every live parent's spawn phases are re-driven
+  under the parent's lock: a task list a crash left unbuilt is built, every
+  `planned` child is started under the id the parent saved (an existing record
+  is found, never created twice; one Argus cannot read is waited for, never
+  overwritten), and every `reviving` child is revived, once: whether its revise
+  happened is asked of the child's own linked decisions.
+- **A child that ended while Argus was down.** The same pass reads every child
+  the saved parent names and mirrors it: the spawn phase joins, pauses at
+  `children`, or plans its next task. A `children` pause is not a gate here:
+  an observation of a child is what ends it.
+- **A child its parent no longer waits for.** A live child of a parent that
+  ended before its abort cascade ran, whose spawn phase joined or was accepted,
+  or whose task now names a fresh child, is aborted (`parent-aborted`). The
+  candidates come from the saved parent (`decidedChildren` in
+  `transitionLog/effects.ts`), never from `effects`.
 
 The tests for all of this simulate recovery — they discard an engine and build a
 fresh one over the same files — and do not establish power-loss durability.
@@ -2768,16 +3007,18 @@ fresh one over the same files — and do not establish power-loss durability.
 ### For contributors: forgotten transitions
 
 At each commit, every pipeline status change (the instance's status, a phase's
-status, attempt, pause or retry time, a step's run id or status, the pending gate
-operation — not run records, verification reports or Verdicts) must be
+status, attempt, pause or retry time, a step's run id or status, a spawn task's
+child id or state, keyed `child:<phaseId>#<i>`, the pending gate operation — not
+run records, verification reports or Verdicts) must be
 accounted for by an event about that phase. One that is not is written on the
 record as `unattributed` and logged as a warning in production. The test
 preload sets `ARGUS_STRICT_TRANSITIONS=1`, which makes it throw, so a status
 write that bypasses a pure transition fails the suite. The engine no longer
 writes those fields itself: launch planning, retry scheduling, failure
-classification, gate link/complete and candidate tree cleanup are pure
-transitions in `pipelineTransitions.ts`, and a targeted static test bans direct
-writes of them in engine modules.
+classification, gate link/complete, candidate tree cleanup and every change to
+a spawn phase's tasks are pure transitions in `pipelineTransitions.ts`, and a
+targeted static test bans direct writes of them, of a phase's `children` and of
+a task's fields, in engine modules.
 
 ## 19. Trajectory signals and judging
 
@@ -3166,3 +3407,539 @@ v2 digest names a digest no registered definition has: it is **never re-read**
 under the current v2 (the report selects captures by exact digest, so it is in
 no Verdict row set), and the qualification definition row reports
 `digest-mismatch` while a recorded configuration carries an unregistered digest.
+
+## 20. Spawn phases
+
+A **spawn phase** works through a list of tasks with one pipeline instance per
+task. Instead of running steps, it reads a task list from an earlier phase's
+validated `result`, starts one instance of another pipeline (a _child_) per
+task, in dependency order, and succeeds once every child has succeeded. It runs
+no agent of its own, so it has no steps, checks, gate, retry or worktree: each
+task's work, and its review, happen in its child, at the child's own gates.
+
+The pure half (the limits, the item check, the order, the payload, the summary)
+is `server/src/sources/children.ts`; the engine half (the starts, the mirror,
+the abort cascade, recovery) is `engine/children.ts`. Every change to the
+parent is a pure transition in `pipelineTransitions.ts` (§18). The pipeline
+form edits a spawn phase (**What this phase does** → **Spawns children**: a
+child-pipeline select and the rest of `spawn` as JSON); the task list's result
+schema on the source phase is authored through the API. The worked recipe is
+[Spawn child instances](guides/pipelines.md#spawn-child-instances).
+
+### What a spawn phase is
+
+```jsonc
+{
+  "id": "tasks",
+  "name": "Tasks",
+  "cwd": "/src/app", // must exist, although nothing runs there
+  "needs": ["plan"],
+  "produces": "tasks-summary", // publishes the children summary
+  "spawn": {
+    "pipelineId": "task-loop", // the pipeline every child runs
+    "items": { "phase": "plan", "path": ["tasks"] }, // the task list in plan's result
+    "key": "id", // names each task
+    "dependsOn": "after", // optional: the keys a task waits for
+    "title": "title", // optional: shown for the task
+    "maxParallel": 1, // optional: default 1, and 1 is the most for now
+    "maxItems": 20, // optional: default 20, at most 50
+    "base": "origin/main", // optional: every child's worktrees are cut from it
+    "include": { "spec": { "phase": "plan", "path": ["spec"] } }, // optional
+  },
+}
+```
+
+| Field         | Meaning                                                                                                                                                                                                                                          |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pipelineId`  | The pipeline every child runs (the _task pipeline_). See [Targets](#targets).                                                                                                                                                                    |
+| `items`       | `{ phase, path }`: the task list is the array at `path` (property names; `[]` is the whole result) in `phase`'s result.                                                                                                                          |
+| `key`         | The task property that names each task. Each value must be unique and 1-64 letters, digits, `.`, `-` or `_`, starting with a letter or digit: it is safe in a label, a path segment or a branch name.                                            |
+| `dependsOn`   | The task property listing the keys of the tasks it waits for. A task starts only when every task it names has succeeded. Absent: no order beyond `maxParallel`.                                                                                  |
+| `title`       | The task property shown as its title, clipped to 60 characters on the parent. Absent: the key is the title.                                                                                                                                      |
+| `maxParallel` | How many children may be live at once. Default 1. Above 1 is refused until parallel Claude sessions are safe (reliability WS13); it is a constant, not a setting, so one machine never runs what another refuses to save.                        |
+| `maxItems`    | The most tasks the list may hold. Default 20, at most 50.                                                                                                                                                                                        |
+| `base`        | The git ref every child's worktrees are cut from, instead of the task pipeline's own `workspace.base` (§11). Also in each child's payload. Validated like `workspace.base`.                                                                      |
+| `include`     | Named values from earlier phases' results, copied into every child's payload under `include.<name>`: the approved spec's path and commit, say. Up to 16 names of 1-40 letters, digits, `-` or `_`; each `{ phase, path }`, the path of any type. |
+
+A spawn phase declares only `id`, `name`, `cwd`, `needs`, `produces` and
+`spawn`. It is stored with `steps: []` and `gated: false`, and accepts those two
+values back, so a `GET` → `PUT` round trip saves. Anything else is a `400`: a
+`retry` or `checks` that looks meaningful but would be ignored is worse than a
+refusal. The checks made when the pipeline is saved
+(`validateSpawnPhases` in `sources/pipelines.ts`):
+
+- `items.phase` and every `include` source is another phase that is a
+  transitive `needs` dependency of the spawn phase (so its result exists before
+  any child starts) and declares a `result` whose schema declares the path.
+  A path is at most 8 property names.
+- The schema at `items.path` is an array of objects; each task declares `key`
+  as a required string, `dependsOn` as an array of strings and `title` as a
+  string.
+- A spawn phase may not sit between an implementation phase and its acceptance
+  verifier (§16): a remediation re-runs exactly those phases to re-verify an
+  implementation, and re-running children is not what it means.
+
+The exact messages are in [API.md § Phase fields](API.md#phase-fields).
+
+**The item check.** The task list is checked again, against the result itself,
+when the source phase submits it (`readSpawnItems`, from
+`resolvePhaseResult`): before the source phase's own checks and gate, so nobody
+approves a plan that could not run. The source phase fails, classed `signal`,
+when the list is missing, is not a list, is empty, holds more than `maxItems`
+tasks, or holds a task that is not an object, has no `key` string, has a key
+outside the alphabet above or one another task already has, is over 16 KiB as
+JSON, has a `dependsOn` that is not a list of strings, or depends on itself, on
+a key not in the list, or through a cycle. The reason reads
+`the task list for spawn phase "tasks" is not usable: …` and counts tasks from 1.
+A key listed twice in one `dependsOn` counts once. `signal` is not in the default
+`retryOn` (§2): add it to the source phase's `retry.retryOn` to give its agent
+another attempt with the reason in its retry note (§13).
+
+| Limit                    | Value                                 | Enforced                                       |
+| ------------------------ | ------------------------------------- | ---------------------------------------------- |
+| Children live at once    | 1 (`maxParallel`), until WS13         | at save                                        |
+| Tasks in the list        | default 20 (`maxItems`), at most 50   | `maxItems` at save; the list by the item check |
+| Task key                 | 1-64 characters, unique               | the item check                                 |
+| Task title on the parent | 60 characters (the child gets it all) | clipped when the list is built                 |
+| One task as JSON         | 16 KiB                                | the item check                                 |
+| A child's whole payload  | 64 KiB, the webhook body cap          | when the list is built (see below)             |
+| `include` names          | 16                                    | at save                                        |
+| A source `path`          | 8 property names                      | at save                                        |
+
+### The payload
+
+Each child starts with `trigger: "spawned"`, `parent` (which parent instance,
+spawn phase, task position and key it runs) and this
+`triggerPayload` (`SpawnTriggerPayload`):
+
+```jsonc
+{
+  "task": { "id": "auth", "title": "Add sign-in", "after": ["schema"] }, // as the result held it
+  "key": "auth",
+  "base": "origin/main", // when spawn.base is set
+  "include": { "spec": "docs/specs/auth.md" }, // when spawn.include is set
+  "parent": {
+    "instanceId": "…",
+    "pipelineId": "delivery",
+    "phaseId": "tasks",
+    "index": 1,
+    "key": "auth",
+  },
+}
+```
+
+The child's prompts read it as `{{trigger.payload}}`, capped like any
+placeholder (16 KiB by default, §13), and its `command` checks read a copy at
+`ARGUS_TRIGGER_PAYLOAD_FILE` (§6). An `include` path the result does not hold
+is copied as `null`.
+
+Every task's payload is built and measured when the list is built, before any
+child starts, and built again, identically, when each child starts. A task
+alone is at most 16 KiB, so only `include` can push a payload over 64 KiB; one
+that does is a definition problem, and the spawn phase fails under
+`configuration` (never retried), naming the largest `include` value. A
+source phase with no result to read when the spawn phase starts (one reached
+through an `allowSkipped` edge, say) fails it the same way.
+
+`base` is recorded on the child as `workspaceBase`, and its worktrees are cut
+from it instead of its definition's `workspace.base` (§11). Argus never fetches
+it: the tree is cut from wherever that ref points in the local repository, so
+the child's first phase should fetch and reset to the remote ref. A task
+pipeline with no workspace policy only sees `base` in its payload.
+
+### How a child starts: exactly once, by identity
+
+1. **Plan, under the parent's lock.** The tasks that are ready (every
+   dependency succeeded, and a slot free under `maxParallel`) each get a newly
+   minted instance id, saved on the parent with the task `planned`. That save is
+   the commit point.
+2. **Start, off the parent's lock**, under the task pipeline's start lock. The
+   id is looked up first. A record with that id is returned as it is. A file
+   Argus cannot read for any reason but "file not found" is never overwritten:
+   the start waits and is asked again on the next tick. Only a missing record is
+   created, after asking again whether the parent still waits for that id; then
+   it starts like any instance, from the task pipeline's definition as it is
+   now, through its `overlapPolicy`, the preflight, the first save and the
+   first launches. A record under that id whose `parent` names another instance
+   is never adopted: the task fails, and a revise of the spawn phase gives it a
+   fresh id.
+3. **Mirror, under the parent's lock.** Every save of a child queues its
+   parent's sync, which reads the child's record (without its lock) and updates
+   the task.
+
+A crash after step 1 repeats step 2 with the same id; a crash after step 2
+finds the child. Reconcile repeats steps 1 to 3 for every live parent on every
+tick, from the saved parent alone (§18).
+
+| Argus stopped after                                    | The saved parent says           | Recovery                                                     |
+| ------------------------------------------------------ | ------------------------------- | ------------------------------------------------------------ |
+| the spawn phase started, before its list was built     | the phase runs, no task list    | builds the list (the same one: the source result is settled) |
+| the plan save, before the start                        | task `planned`, no child        | starts the child under that id, once                         |
+| the child's first save, before the parent mirrored it  | task `planned`, the child runs  | the start finds the child and mirrors it                     |
+| a child's record was damaged or locked                 | task `planned`, unreadable      | waits (`deferred`), asks each tick, never re-creates it      |
+| a child ended while Argus was down                     | task `running`, the child ended | mirrors it: the join, the pause, or the next task            |
+| the parent's abort, before its children were aborted   | parent `aborted`, children live | the sweep aborts each child (`parent-aborted`)               |
+| a revise of the spawn phase, before the child's revise | task `reviving`, child `failed` | revives the child once                                       |
+| the child's revise link, before the revise completed   | task `reviving`, child `failed` | gate recovery completes it; no second revise                 |
+| the child's revise, before the parent mirrored it      | task `reviving`, child running  | mirrors it; no second revise                                 |
+
+A revive is a revise of the child, and whether it happened is asked of the
+child alone: some decision it links, and has finished applying, carries the
+parent's decision id (`parentDecisionId`). So an interrupted revive is carried
+out exactly once. While the child's revise is still being applied (it carries
+`pendingGateOperation`, §18), its `failed` is the failure being revived: the
+task stays `reviving`, and the revise's last save mirrors the child.
+
+### Lock order
+
+A parent's lock is never held while waiting for a child's lock or for a
+pipeline's start lock, and a child's lock never waits for its parent's.
+Anything one locked section needs from another lock (a start, a revive, the
+abort cascade, the parent's sync after a child's save) is queued, and starts
+with no lock held; children are read from disk, never locked, from the parent's
+side, and the parent is read, never locked, from a child's. A start lock may be
+followed by one instance lock (a start, the cascade, `DELETE` of the pipeline),
+never by another start lock.
+
+### Order, the join and the children pause
+
+- **Order.** Tasks start in list order as their dependencies succeed, at most
+  `maxParallel` live at a time. "Succeeded" is the child instance succeeding,
+  through whatever gates its own pipeline has.
+- **The join.** When every task has succeeded, the spawn phase succeeds. Its
+  payload, published under `produces`, is the children summary
+  (`SpawnChildrenSummary`: every task's key, title, state and child, counts by
+  state, and `notSucceeded`), and the phases that need it start. Journal
+  `children.joined`.
+- **A child that fails or is aborted** stops new starts. Waiting tasks that
+  depend on it, directly or through others, become `blocked`, and running
+  children finish. Once no child is live, the spawn phase pauses:
+  `awaiting-approval` with `pause: "children"` and the summary as its payload,
+  so the parent reads `awaiting-approval`. Journal `children.halted`.
+
+At a `children` pause a person chooses one of four actions. Each is a state
+change; a re-run child runs its pipeline's agents again, and an approval starts
+the phases after the spawn phase:
+
+- **Accept the rest: approve the spawn phase.** It succeeds with the summary,
+  whose `notSucceeded` lists the tasks it drops, and the phases after it start.
+  It takes no `answers` (`400 answers-not-accepted`), and is refused
+  `409 children-running` while a child a person re-ran is live again, or its
+  revise is still being applied.
+- **Re-run every task that did not succeed: revise the spawn phase.** A failed
+  child is revived in place: Argus revises the child's failed phase with a
+  decision whose mechanism is `parent-decision`, principal
+  `{ kind: "system", component: "spawn" }`, `parentDecisionId` the parent's
+  revise and `note` the parent's note, which the child's next attempt reads
+  like any revise note (§13). An aborted, refused or never-started task gets a
+  fresh child (the old id moves to `previousInstanceIds`), and blocked tasks
+  wait again. Tasks that succeeded stay; the task list is never rebuilt.
+- **Re-run one child: revise that child's failed phase**, on the child. The
+  task runs again, the spawn phase resumes (`children-resumed`), and once the
+  child succeeds the tasks it blocked continue.
+- **Abort** the parent (below).
+
+Rewinding to the phase that wrote the task list is deferred: accept the rest
+and start a follow-up instance instead. A `children` pause is never opened by
+an automated rule: auto-approval (§19) and its qualification treat it as
+ineligible, as they do a `needs-input` pause, and an approval condition (§2)
+never polls it; a spawn phase cannot declare `approveWhen` or `autoApprove`.
+
+### Abort, delete, edit and retention
+
+- **Aborting the parent aborts its children.** Its live tasks are recorded
+  `aborted` in the same save, and each child is then aborted with
+  `abortCause: "parent-aborted"`, recorded as carrying out the parent's abort
+  (mechanism `parent-decision`, principal `spawn`, `parentDecisionId`). No
+  `after` chain fires for those children.
+- **The sweep.** A live child its parent no longer waits for (the parent ended
+  before the cascade reached it, its spawn phase joined or was accepted, or a
+  fresh child replaced it) is aborted by reconcile the same way, with no
+  `parentDecisionId`: it acts on the parent's state, not on one decision.
+- **Aborting a child** always works. Its task becomes `aborted`; the parent
+  lets its running children finish, then pauses at `children`.
+- **Deciding on a child its parent no longer waits for.** Approve and revise,
+  and an automated decision (a Verdict auto-approval, or an approval
+  condition's exit 0 or `failOnExit`), are refused with `409 parent-decided`:
+  its outcome would count for nothing. A refused poll is journalled once as
+  "not applied", and the sweep aborts the child. The parent waits for a child
+  while the parent is live, its spawn phase runs or waits at `children`, and
+  the task still names that child. A child whose parent's record is gone is the
+  operator's alone; a parent record Argus cannot read refuses the decision
+  until it can.
+- **Deleting the task pipeline** aborts its live instances, the children among
+  them (`pipeline-deleted`). A start still owed then finds no pipeline and fails
+  its task for good, and each parent pauses at `children` once its running
+  children finish. A recreated pipeline has a new id, and a parent's task list
+  keeps naming the old one: accept the rest, or abort.
+- **Deleting the parent's pipeline** aborts the parents (`pipeline-deleted`), and
+  each parent's abort aborts its children (`parent-aborted`).
+- **Editing the task pipeline.** Each child reads the task pipeline's
+  definition when it starts. So an execution edit is held with
+  `409 instances-running`, as under the pipeline's own live instances, while a
+  live instance of another pipeline has a spawn phase that targets it and has
+  not succeeded or been skipped; `?force=1` saves it anyway.
+- **Retention.** A child is kept past its pipeline's window of 50 instances
+  while its parent's record exists, or cannot be read right now; only a parent
+  record that is provably gone releases it, at the task pipeline's next start.
+  Kept children still count toward the window. Pruning a parent does not prune
+  its children.
+
+### Status
+
+The parent's spawn phase stays `running` while its children run or wait at
+their own gates: a child's gate belongs to the child, and never makes its parent
+`awaiting-approval`. Only the `children` pause does. `inFlight`
+(`sources/instanceStatus.ts`) reads the spawn phase's tasks: a parent whose live
+children all wait at their own gates is not in flight, so
+`argus tail --until-idle` returns; a planned child whose start waits (a budget
+hold, a busy task pipeline) keeps it in flight. Each child is an instance of the
+task pipeline: its gates are its own, and `argus tail` names it
+`<pipeline> [<key>]`.
+
+### Budget
+
+While the spend budget's hard stop is on (`isSpendBlocked`, the authority
+scheduled firings obey: the ladder's `stop` step, or an exceeded limit with
+`blockScheduled`), no new child is planned, and a planned child's start waits
+with `deferred.reason` "the spend budget is exceeded". The parent's journal gets
+`children.held` when a hold begins and `children.released` when it lifts. A
+budget that cannot be read holds too. A revive is not held (it is a person's
+decision), and a running child is never stopped. Spend multiplies with the task
+count: every child runs its own pipeline's agents.
+
+### Targets
+
+- **Trigger none or webhook.** A spawned pipeline is started by its parent; a
+  schedule or `after` trigger would start it without one.
+- **One level deep.** The task pipeline may not have a spawn phase of its own,
+  and a pipeline may not spawn itself.
+- **Both directions.** Checked when the parent is saved (it names a pipeline
+  that exists and qualifies) and when the task pipeline is saved (it may gain
+  neither such a trigger nor a spawn phase while any pipeline spawns it). It is
+  validation, a `400`, so `?force=1` does not bypass it.
+- **`overlapPolicy: "skip"`** on the task pipeline is honoured: while one of its
+  instances is live, the next child waits (`deferred`). With `maxParallel: 1` a
+  parent's previous child has ended before the next is planned, so it only
+  waits on another parent's child or a manual start; set the task pipeline's
+  `overlapPolicy` to `"allow"` to avoid that.
+- **`enabled`** on the task pipeline is not consulted.
+
+### The parent's view of its children
+
+A phase after the spawn phase (a retrospective, a ship step) reads every
+child's results, decisions and cost by declaring `childrenContext`. Every step
+of the phase then gets a read-only **children manifest** at
+`ARGUS_CHILDREN_FILE`, and each child's artifact folder as a read channel. The
+worked recipe is
+[Read the children from a later phase](guides/pipelines.md#read-the-children-from-a-later-phase).
+
+```jsonc
+{
+  "id": "learn",
+  "name": "Learn",
+  "cwd": "/src/app",
+  "gated": true,
+  "needs": ["tasks"],
+  "childrenContext": { "fromPhase": "tasks" }, // the spawn phase whose children it reads
+  "steps": [{ "name": "learn", "prompt": "Read the children manifest, then …" }],
+}
+```
+
+- **The save rules** (`validateChildrenContextSelectors` in
+  `sources/pipelines.ts`). `fromPhase` names another phase of the same
+  pipeline that declares `spawn` and that this phase depends on through
+  `needs`, directly or through other phases (in a pipeline with no `needs`,
+  any earlier phase): a spawn phase beside this one could still be starting
+  children while it reads them. A spawn phase cannot declare `childrenContext`,
+  and a task pipeline has no spawn phase to name. The messages are in
+  [API.md § Phase fields](API.md#phase-fields).
+- **Built once per attempt.** `startPhase` builds it right after the ledger
+  snapshot, before any run is planned (`planChildrenManifest` in
+  `sources/childrenManifest.ts`): one read of each child's record, of the
+  gate-decisions log and of the run records. Every run of the attempt gets the
+  same bytes, and a retry or a revise builds a fresh one, so the next attempt
+  reads the children (and its own phase's runs and decisions) as they are then.
+  Child records are read from disk without their locks (§ Lock order).
+- **Written per run** at `invocations/<runId>/children/children-manifest.json`,
+  mode `0444`, before the process starts, in a folder of its own so the read
+  rule covers nothing else. Its SHA-256 goes into the invocation record's
+  `suppliedInputs`, and the completion re-hashes it: a manifest changed or
+  removed while the run worked fails the step as `change-context-integrity`
+  (`… run <id>'s children-manifest file changed during execution at …`), as a
+  change context does (§16). The record names it as `childrenFile`.
+- **The prompt** says which spawn phase, how its tasks ended
+  (`ran 3 tasks as child instances (2 succeeded, 1 failed)`), where the
+  manifest is, what it holds, and that neither it nor a child's folder is to
+  be modified. It comes after the acceptance instruction and before the
+  memory instruction (§13, Placement); a run under a capability profile also
+  finds the path among its channel paths.
+
+An abbreviated manifest:
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-22T12:00:00.000Z",
+  "for": { "instanceId": "…", "phaseId": "learn", "attempt": 0 },
+  "spawnPhase": {
+    "id": "tasks",
+    "name": "Tasks",
+    "status": "succeeded",
+    "attempt": 0,
+    "childPipelineId": "task-loop",
+    "counts": { "succeeded": 2 },
+  },
+  "tasks": [
+    {
+      "index": 1,
+      "key": "auth",
+      "title": "Add sign-in",
+      "dependsOn": ["schema"],
+      "state": "succeeded",
+      "task": { "id": "auth", "title": "Add sign-in", "after": ["schema"] }, // as the child got it
+      "child": {
+        "instanceId": "…",
+        "status": "succeeded",
+        "pipelineId": "task-loop",
+        "createdAt": "…",
+        "endedAt": "…",
+        "artifactsDir": "/home/you/.claude-argus/artifacts/<child id>",
+        "phases": [
+          {
+            "id": "implement",
+            "name": "Implement",
+            "status": "succeeded",
+            "attempt": 1,
+            "gated": true,
+            "result": { "prId": 42 },
+            "artifactDir": "/home/you/.claude-argus/artifacts/<child id>/implement",
+            "workspace": { "branch": "argus/…", "base": "origin/main", "baseHead": "…" },
+            "runs": [
+              {
+                "runId": "…",
+                "status": "succeeded",
+                "queuedAt": "…",
+                "startedAt": "…",
+                "endedAt": "…",
+                "durationMs": 410000,
+                "costUsd": 0.41,
+                "tokens": 18000,
+                "model": "…",
+                "runtime": "claude",
+                "outcome": "succeeded",
+              },
+            ],
+            "cost": {
+              "runs": 2,
+              "costUsd": 0.83,
+              "tokens": 35000,
+              "unpricedRuns": 0,
+              "durationMs": 912000,
+            },
+          },
+        ],
+        "decisions": [
+          {
+            "id": "GD-…",
+            "decision": "revise",
+            "mechanism": "operator",
+            "phases": [{ "phaseId": "implement", "attempt": 0 }],
+            "note": "use the existing session helper",
+            "recordedAt": "…",
+            "effect": "applied",
+          },
+        ],
+        "cost": {
+          "runs": 2,
+          "costUsd": 0.83,
+          "tokens": 35000,
+          "unpricedRuns": 0,
+          "durationMs": 912000,
+        },
+      },
+    },
+  ],
+  "parent": { "instanceId": "…", "status": "running" }, // and its phases, decisions and cost
+  "childrenCost": {
+    "runs": 3,
+    "costUsd": 1.2,
+    "tokens": 51000,
+    "unpricedRuns": 0,
+    "durationMs": 1400000,
+  },
+  "warnings": [],
+}
+```
+
+| Field                                  | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `for`                                  | The phase attempt it was built for.                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `spawnPhase`                           | The spawn phase `fromPhase`: its status and attempt, the pipeline its children run (`null` when it never built a task list, as when it was skipped through an `allowSkipped` edge) and its tasks counted by state.                                                                                                                                                                                                                                        |
+| `tasks[]`                              | Every task, in list order: `index` (its position, as the child's `parent.index`), `key`, `title` (clipped to 60 characters), `dependsOn` (keys), `state`, `reason`, `task` (the task object the current child received), `child` and `earlierChildren` (children a fresh one replaced, oldest first).                                                                                                                                                     |
+| `child`, `earlierChildren[]`, `parent` | One instance: `status` (`null` when its record could not be read, and then nothing else), `pipelineId`, `createdAt`, `endedAt`, `abortCause`, `artifactsDir` (a child whose folder is offered), `phases[]`, `decisions[]`, `cost`. `parent` is this instance itself.                                                                                                                                                                                      |
+| `phases[]`                             | `id`, `name`, `status`, `attempt`, `gated`, `pause`, `retries`, `result`, `failure` (`failureClass`, `reason` clipped to 2,000 characters), `verification`, `artifactDir` (a child whose folder is offered), `workspace` (`branch`, `base`, `baseHead`), `runs[]` and `cost`.                                                                                                                                                                             |
+| `runs[]`                               | Every run of the phase, oldest first, superseded attempts included: `runId`, `status`, `queuedAt`, `startedAt`, `endedAt`, `durationMs`, `costUsd`, `tokens`, `model`, `runtime`, `outcome`, `termination`, `error` (clipped to 500 characters).                                                                                                                                                                                                          |
+| `decisions[]`                          | The gate decisions that took effect, oldest first: `id`, `decision`, `mechanism` (a person, an automated rule, or `parent-decision`), `phases`, `note`, `recordedAt`, `effect` (`applied`, or `incomplete` while its effects are being applied), `parentDecisionId`. A decision recorded but never linked is left out.                                                                                                                                    |
+| `cost`, `childrenCost`, `parent.cost`  | The run records' `Run.costUsd` and `Run.tokens` as recorded, summed: `runs`, `costUsd` (4 decimals; `null` when no run recorded one), `tokens` (likewise), `unpricedRuns`, `durationMs`. The manifest adds no estimate of its own, but for a supported Codex model `Run.costUsd` is itself Argus's public token-price estimate (API.md, `GET /api/runtimes`), summed like any other. `childrenCost` covers every child's runs, earlier children included. |
+| `warnings`                             | What Argus could not read or offer while building it, one line each.                                                                                                                                                                                                                                                                                                                                                                                      |
+
+- **What it never carries.** It is an explicit projection, never a copy of a
+  record: no signal token, no definition (it holds the pipeline's
+  `hookToken`), no prompt, and no decision's `principal` or `channel`. The
+  agent's environment has no Argus token (§4), so this file is all it learns
+  of the decisions and the cost, and who made a decision is not part of it:
+  the `mechanism` says whether a person, a rule or the parent did.
+- **The channels** (§3a). The manifest is a required read channel
+  (`children-manifest`). Each child whose folder exists gets an optional read
+  channel (`child-artifacts`) on `artifacts/<childInstanceId>/`, every phase
+  folder of that child, named in the manifest (`artifactsDir`) rather than in a
+  variable of its own. So a step under a capability profile, even
+  `filesystem: "read-only"` or scoped `Read` rules, can open it. A child that
+  never started a phase has no folder and gets no channel. At most 100 folders
+  are offered per run (`CHILD_ARTIFACT_CHANNELS_MAX`): each adds an `--add-dir`
+  and a deny rule to one Claude Code command line, which Windows caps at 32,767
+  characters. Current children come first, then the ones they replaced, and a
+  warning counts any left out. A folder holds each phase's **latest attempt's
+  files only**: a phase's folder is emptied at every attempt (§5).
+- **The parent's own phase folders are not offered.** A read channel over
+  `artifacts/<parentId>/` would put an edit-deny rule over this phase's own
+  artifact directory beneath it, and under Claude Code a deny wins.
+  `{{artifactDir.<phaseId>}}` (§13) still puts an earlier phase's folder in the
+  prompt, and without a capability profile the CLI's own defaults decide
+  whether the agent can open it. Argus does not admit a run under a profile to
+  it, and `additionalDirectories` cannot name it: it takes only folders that
+  exist when the definition is saved, and an instance's folders are made when
+  it starts. Naming the whole artifacts root instead puts, under `read-only`,
+  the same edit-deny rule over this phase's own artifact directory.
+- **Warnings, never refusals.** A child record or the decisions log Argus
+  cannot read becomes a line in `warnings` (and in the server log), and the
+  child is listed by id with `status: null`. Only a `fromPhase` the instance
+  does not have (an instance running against a definition it predates) fails
+  the phase, as `configuration`, before any run is planned.
+- **Retention.** A child and its folder are kept while the parent's record
+  exists (§ Abort, delete, edit and retention); a run's copy of the manifest
+  lives as long as its invocation folder.
+- **Command checks** of the phase are not given `ARGUS_CHILDREN_FILE`; only its
+  agent steps are.
+
+### Known limits
+
+- **One child at a time** until reliability WS13 makes parallel Claude sessions
+  safe.
+- **A revive can race its child's worktree cleanup.** A failed child's worktree
+  removal starts when it fails; a revive soon after reuses the tree or checks
+  the branch out again (§11), and the race between the two is the reliability
+  plan's WS5. Not fixed here.
+- **A stale base.** Argus does not fetch `spawn.base`; a child whose first
+  phase does not fetch works from an old commit.
+- **`after` chains of the task pipeline fire once per child** that ends on its
+  own. Only children stopped by their parent (`parent-aborted`) or by a deleted
+  pipeline fire none.
+- **`{{previous.instance}}` in a child** names the last settled instance of the
+  task pipeline: usually another task's child.
+- **The record bound.** The parent's transition log records the task list in
+  full (§18), one line at most 16 KiB. The records a spawn phase writes fit at
+  50 tasks, but a baseline record, which carries the whole instance, of a parent
+  with many phases and 50 tasks with long keys and titles can exceed it. That
+  parent's log then reads `partial`; recovery never reads the log.

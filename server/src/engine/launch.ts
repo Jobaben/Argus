@@ -85,7 +85,14 @@ import {
 import { acceptanceInstruction } from "../knowledge/acceptance.js";
 import { acceptanceVerificationFile, ensureAcceptanceDir } from "../knowledge/acceptanceStaging.js";
 import { markPipelineStarted } from "../sources/pipelines.js";
-import { INSTANCE_KEEP, pruneInstances, readInstances } from "../sources/instances.js";
+import { childrenManifestFile, planChildrenManifest } from "../sources/childrenManifest.js";
+import type { ChildrenManifestPlan } from "../sources/childrenManifest.js";
+import {
+  INSTANCE_KEEP,
+  probeInstance,
+  pruneInstances,
+  readInstances,
+} from "../sources/instances.js";
 import { initInstance, applyLaunchPlan } from "../pipelineTransitions.js";
 import { interpolate, previousPayloadFor, resultStepName } from "../sources/dag.js";
 import { journal } from "../sources/journal.js";
@@ -110,6 +117,8 @@ import type {
   PlannedKnowledgeContext,
   PlannedRun,
   SpawnUnit,
+  StartFiring,
+  StartOutcome,
 } from "./types.js";
 import { PreflightError } from "./spawn.js";
 import { revisionHistory, revisionNotes, revisionNotesFile } from "./outcome.js";
@@ -118,6 +127,7 @@ import {
   STEP_CONTRACT,
   artifactInstruction,
   channelInstruction,
+  childrenContextInstruction,
   knowledgeContextInstruction,
   memoryInstruction,
   resultInstruction,
@@ -144,6 +154,8 @@ export function createLaunch(core: EngineCore) {
   const saveInstance: EngineFns["saveInstance"] = (...args) => core.fns.saveInstance(...args);
   const settleCandidates: EngineFns["settleCandidates"] = (...args) =>
     core.fns.settleCandidates(...args);
+  const startSpawnPhase: EngineFns["startSpawnPhase"] = (...args) =>
+    core.fns.startSpawnPhase(...args);
   const trackStep: EngineFns["trackStep"] = (...args) => core.fns.trackStep(...args);
 
   /**
@@ -156,6 +168,9 @@ export function createLaunch(core: EngineCore) {
    * one it was cut from however many phases reuse it. `scope: "attempt"` gives
    * each attempt its own, and the superseded attempt's tree is removed as the
    * new one is created unless the policy says to keep it.
+   *
+   * The base is the instance's `workspaceBase` when it has one (a spawned
+   * child), else the policy's.
    *
    * Throws {@link WorkspaceError} (with git's own words) when the repository,
    * the base ref or git itself is not what the definition assumed: the caller
@@ -186,11 +201,15 @@ export function createLaunch(core: EngineCore) {
     // branch already there without it (checked out again, keeping its commits).
     const shared =
       policy.scope === "instance" && inst.workspace?.path === target.path ? inst.workspace : null;
+    // A spawned child's worktrees are cut from the ref its parent named
+    // (`spawn.base`), whatever its own definition says. Argus does not fetch
+    // it: the child's first phase fetches and resets to the remote ref.
+    const base = inst.workspaceBase ?? policy.base;
     const created = await createWorktree({
       repoCwd: phaseDef.cwd,
       path: target.path,
       branch: target.branch,
-      ...(policy.base ? { base: policy.base } : {}),
+      ...(base ? { base } : {}),
     });
     const record = shared ?? created;
     if (policy.scope === "instance") inst.workspace = record;
@@ -259,6 +278,13 @@ export function createLaunch(core: EngineCore) {
     const phaseDef = def.phases.find((p) => p.id === progress.id);
     if (!phaseDef) {
       await failUnlaunchable(def, inst, progress.id);
+      return;
+    }
+    // A spawn phase runs no agent: its "launch" is building the task list,
+    // mirroring the children and planning the next ones (engine/children.ts).
+    // Before workspaces, artifacts and the folder wipe, none of which it has.
+    if (phaseDef.spawn) {
+      await startSpawnPhase(def, inst, phaseDef.id);
       return;
     }
     // "Previous" is the phase's own dependency, which for a linear pipeline is
@@ -367,6 +393,24 @@ export function createLaunch(core: EngineCore) {
       phaseDef.changeIntent !== undefined ||
       phaseDef.changeContext !== undefined;
     const ledgerSnapshot = needsLedger ? await readLedger() : null;
+    // The children manifest (DL-A2b), read once per attempt like the ledger
+    // snapshot above: every run of the attempt is told the same children, and
+    // a retry or a revise reads them again. Before any realization opens or
+    // run is planned, so a manifest that cannot be built fails the phase as a
+    // definition Argus cannot honour.
+    let childrenPlan: Exclude<ChildrenManifestPlan, { error: string }> | null = null;
+    if (phaseDef.childrenContext) {
+      const built = await planChildrenManifest(inst, phaseDef.childrenContext, {
+        phaseId: phaseDef.id,
+        attempt: progress.attempt,
+        generatedAt: startedAt,
+      });
+      if ("error" in built) {
+        await failPhaseConfiguration(def, inst, phaseDef.id, built.error);
+        return;
+      }
+      childrenPlan = built;
+    }
     // The repository revision a change-intent phase's conformance projection is
     // scoped to: the phase's own tree, read once. A change phase reads no code,
     // so this is only the commit the answer is *about* — never evidence.
@@ -511,6 +555,7 @@ export function createLaunch(core: EngineCore) {
           ? candidates.variants[candidate % candidates.variants.length]
           : undefined;
       const runId = deps.newId();
+      const childrenFile = childrenPlan ? childrenManifestFile(runId) : null;
       const publishes = stepDef.name === publishingStep;
       // This run's semantic context, frozen now. A selector the snapshot
       // cannot resolve is carried to the launch as the reason the step will
@@ -659,6 +704,7 @@ export function createLaunch(core: EngineCore) {
             plannedAcceptance?.proposalId ?? null,
             plannedAcceptance?.required ?? [],
           ) +
+          childrenContextInstruction(childrenPlan?.manifest ?? null, childrenFile) +
           memoryInstruction(memoryPolicy) +
           (knowledgeContext && "resolved" in knowledgeContext
             ? knowledgeContextInstruction(knowledgeContext.resolved.supplied)
@@ -722,6 +768,14 @@ export function createLaunch(core: EngineCore) {
           text: notes.text,
           file: notes.full === null ? null : { path: notesFile, contents: notes.full },
         },
+        childrenManifest:
+          childrenPlan && childrenFile
+            ? {
+                path: childrenFile,
+                contents: childrenPlan.contents,
+                artifactDirs: childrenPlan.artifactDirs,
+              }
+            : null,
       });
     }
     // Record the runIds on the instance up front, then persist once (no write races).
@@ -826,6 +880,7 @@ export function createLaunch(core: EngineCore) {
           signalToken: unit.signalToken,
           noteSuffix: unit.revisionNotes.text + noteSuffix,
           revisionNotesFile: unit.revisionNotes.file,
+          childrenManifest: unit.childrenManifest,
         },
       });
     }
@@ -1088,10 +1143,14 @@ export function createLaunch(core: EngineCore) {
    * its author declared.
    */
   async function launchStep(run: Run, ctx: LaunchContext): Promise<Launched> {
+    const attempt = ctx.inst.phases.find((p) => p.id === ctx.phaseDef.id)?.attempt ?? 0;
     const env: Record<string, string> = {
       ARGUS_SIGNAL_URL: `${deps.signalUrlBase}/api/instances/${ctx.inst.id}/signal`,
       ARGUS_INSTANCE_ID: ctx.inst.id,
       ARGUS_PHASE_ID: ctx.phaseDef.id,
+      // Which attempt of the phase this run belongs to (0-based): the same name
+      // a command check gets, so one script reads it in both places.
+      ARGUS_PHASE_ATTEMPT: String(attempt),
       ARGUS_RUN_ID: run.id,
       ARGUS_STEP_NAME: run.scheduleName,
       // Which CLI the hook is running under. One hook file serves both, and the
@@ -1183,6 +1242,9 @@ export function createLaunch(core: EngineCore) {
     // Every revise note in full, only when the prompt's block left some out:
     // an optional read channel, so a profiled run can open it.
     if (ctx.revisionNotesFile) env.ARGUS_REVISION_NOTES_FILE = ctx.revisionNotesFile.path;
+    // The children manifest (DL-A2b): a required read channel, and every
+    // child's artifact folder an optional one, named inside the manifest.
+    if (ctx.childrenManifest) env.ARGUS_CHILDREN_FILE = ctx.childrenManifest.path;
     // The channel paths, now that every one is known, then the retry note —
     // still last, after everything Argus says about this run. Only a run with
     // a capability profile is told the paths: a profile is what can deny the
@@ -1229,6 +1291,14 @@ export function createLaunch(core: EngineCore) {
           sha256: sha256Hex(plannedRealization.remediation.text),
         });
       }
+      if (ctx.childrenManifest) {
+        await writeReadOnlyInput(ctx.childrenManifest.path, ctx.childrenManifest.contents);
+        suppliedInputs.push({
+          kind: "children-manifest",
+          path: ctx.childrenManifest.path,
+          sha256: sha256Hex(ctx.childrenManifest.contents),
+        });
+      }
       // The clock the deadline runs from: now, with the slot held and the
       // process about to start.
       run.startedAt = nowISO();
@@ -1238,7 +1308,7 @@ export function createLaunch(core: EngineCore) {
         phaseDef: ctx.phaseDef,
         stepDef: ctx.stepDef,
         instanceId: ctx.inst.id,
-        attempt: ctx.inst.phases.find((p) => p.id === ctx.phaseDef.id)?.attempt ?? 0,
+        attempt,
         systemPrompt: STEP_CONTRACT,
         argusEnv: env,
         invocationDir,
@@ -1255,6 +1325,8 @@ export function createLaunch(core: EngineCore) {
         remediationContextFile: remediationFile,
         acceptanceVerificationFile: acceptanceFile,
         revisionNotesFile: ctx.revisionNotesFile?.path ?? null,
+        childrenFile: ctx.childrenManifest?.path ?? null,
+        childArtifacts: ctx.childrenManifest?.artifactDirs ?? [],
         suppliedInputs,
         knowledgeContext:
           contextFile && resolvedContext
@@ -1361,20 +1433,47 @@ export function createLaunch(core: EngineCore) {
     return locks.withLock(startsOf(pipelineId), work);
   }
 
-  async function start(
+  /**
+   * Create an instance or, given `firing.instanceId`, return the one that
+   * already has that id. Under the pipeline's start lock, in this order:
+   *  1. by id: an existing instance is returned as it is (`existing`); a file
+   *     Argus cannot read is reported (`unreadable`) and never overwritten.
+   *     Before the overlap guard: a child restarted after a crash *is* the
+   *     pipeline's live instance;
+   *  2. `stillWanted` (a spawned child: does its parent still wait for this
+   *     id?), asked here so a cascade holding this lock is ordered against it;
+   *  3. the definition, the overlap guard, the preflight, the first save and
+   *     the first launches, as for any new instance.
+   */
+  async function startInstance(
     pipelineId: string,
     trigger: PipelineInstance["trigger"] = "manual",
-    firing?: { triggerPayload?: unknown; chainedFrom?: string },
-  ) {
+    firing: StartFiring = {},
+    opts: { stillWanted?: () => Promise<boolean> } = {},
+  ): Promise<StartOutcome> {
     // From reading the definition until the first phases are launched, so a
     // delete holding the pipeline's starts finds every instance it has to
     // stop, and never stops one whose launch is still to come.
-    const instance = await withStartsHeld(pipelineId, async () => {
+    const out = await withStartsHeld(pipelineId, async (): Promise<StartOutcome> => {
+      if (firing.instanceId !== undefined) {
+        const found = await probeInstance(firing.instanceId);
+        if (found.kind === "unreadable") return { kind: "unreadable", reason: found.reason };
+        if (found.kind === "present") {
+          return found.instance.pipelineId === pipelineId
+            ? { kind: "existing", instance: found.instance }
+            : {
+                kind: "unreadable",
+                reason:
+                  `instance ${firing.instanceId} belongs to pipeline ` + found.instance.pipelineId,
+              };
+        }
+        if (opts.stillWanted && !(await opts.stillWanted())) return { kind: "not-wanted" };
+      }
       const def = await loadDef(pipelineId);
-      if (!def) throw new Error("pipeline not found");
+      if (!def) return { kind: "no-pipeline" };
       if (def.overlapPolicy === "skip") {
         const busy = (await readInstances({ pipelineId })).some((i) => resumable(i.status));
-        if (busy) return null;
+        if (busy) return { kind: "busy" };
       }
       if (deps.preflight) {
         const pf = await deps.preflight();
@@ -1383,7 +1482,8 @@ export function createLaunch(core: EngineCore) {
       const init = initInstance(
         def,
         trigger,
-        { instanceId: deps.newId(), token: deps.newId() },
+        // Instance id first, then token: tests with id counters depend on the order.
+        { instanceId: firing.instanceId ?? deps.newId(), token: deps.newId() },
         nowISO(),
         firing,
       );
@@ -1401,12 +1501,38 @@ export function createLaunch(core: EngineCore) {
       // whose launch was lost. Runs past the concurrency cap are left queued
       // for a slot, off the lock; this returns without waiting for them.
       await locks.withLock(instance.id, () => startPhases(def, instance, ready));
-      return instance;
+      return { kind: "started", instance };
     });
-    if (!instance) return null;
-    await pruneInstances(pipelineId, INSTANCE_KEEP);
-    deps.onChange?.();
-    return instance;
+    if (out.kind === "started") {
+      await pruneInstances(pipelineId, INSTANCE_KEEP);
+      deps.onChange?.();
+    }
+    return out;
+  }
+
+  /**
+   * {@link startInstance} for the callers that want an instance or nothing:
+   * `null` when the overlap guard (or `stillWanted`) declined, a throw when
+   * the pipeline does not exist or the id names a file that cannot be read.
+   */
+  async function start(
+    pipelineId: string,
+    trigger: PipelineInstance["trigger"] = "manual",
+    firing?: StartFiring,
+  ): Promise<PipelineInstance | null> {
+    const out = await startInstance(pipelineId, trigger, firing);
+    switch (out.kind) {
+      case "started":
+      case "existing":
+        return out.instance;
+      case "busy":
+      case "not-wanted":
+        return null;
+      case "no-pipeline":
+        throw new Error("pipeline not found");
+      case "unreadable":
+        throw new Error(`instance ${firing?.instanceId} exists but cannot be read: ${out.reason}`);
+    }
   }
 
   /**
@@ -1459,6 +1585,7 @@ export function createLaunch(core: EngineCore) {
     startPhase,
     resolveChangeRequest,
     launchStep,
+    startInstance,
     start,
     withStartsHeld,
     queueReadyPhases,

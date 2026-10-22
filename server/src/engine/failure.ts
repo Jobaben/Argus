@@ -120,7 +120,9 @@ export function createFailure(core: EngineCore) {
     const phase = res.instance.phases.find((p) => p.id === phaseId);
     if (phase?.status === "failed") {
       T(classifyFailure(res.instance, phaseId, failureClass));
-      if (failureClass !== "configuration") {
+      // The never-retried classes (`configuration`; `approval-condition`,
+      // which no step failure carries) are journalled here, not retried.
+      if (failureClass !== "configuration" && failureClass !== "approval-condition") {
         noteFailure(def, res.instance, phaseId, failureClass, reason);
       } else {
         void journal(inst.id, {
@@ -128,7 +130,7 @@ export function createFailure(core: EngineCore) {
           kind: "phase.failed",
           phaseId,
           attempt: phase.attempt,
-          detail: `configuration: ${reason}`,
+          detail: `${failureClass}: ${reason}`,
         });
       }
     }

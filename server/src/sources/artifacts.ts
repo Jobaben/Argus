@@ -4,7 +4,8 @@
  * A gated phase parks at `awaiting-approval` with whatever files its agent left
  * in the attempt's artifact directory (`PhaseProgress.artifactDir`). Nothing
  * here is stored: the review is derived, per read, from the instance record and
- * a directory listing, so there is no second copy of the gate to drift.
+ * a directory listing (for a spawn phase, also its children's records), so
+ * there is no second copy of the gate to drift.
  *
  * Every read is defensive. The directory is agent-writable and may hold
  * anything — thousands of files, symlinks out of the tree, binaries, a path
@@ -26,10 +27,12 @@ import type {
 import type {
   PhaseArtifact,
   PhaseArtifactContent,
+  PhaseChildrenReview,
   PhaseProgress,
   PhaseReview,
   PipelineDefinition,
   PipelineInstance,
+  SpawnTaskReview,
 } from "./pipelineTypes.js";
 import { readDeltaRecord } from "../knowledge/staging.js";
 import { readProposalRecord } from "../knowledge/changeStaging.js";
@@ -41,6 +44,8 @@ import { previewRuleVerification } from "../knowledge/ruleVerification.js";
 import { readLedger } from "../knowledge/store.js";
 import { checkDiscoveryDelta, previewKnowledgeDelta } from "../knowledge/discovery.js";
 import { readInvocation } from "./runs.js";
+import { readInstances } from "./instances.js";
+import { childDecisionPhase } from "./children.js";
 
 /** Most files one review lists; past this the listing is `truncated`. */
 export const ARTIFACT_LIST_CAP = 200;
@@ -222,6 +227,7 @@ export async function buildPhaseReview(
   const ruleVerifications = await previewStagedVerifications(phase);
   const changeProposals = await previewStagedChangeProposals(phase, phaseDef);
   const acceptanceVerifications = await previewStagedAcceptance(phase);
+  const children = await reviewChildren(inst, phase);
   const review: PhaseReview = {
     instanceId: inst.id,
     phaseId,
@@ -247,8 +253,39 @@ export async function buildPhaseReview(
       ? { acceptanceVerification: phase.acceptanceVerification }
       : {}),
     ...(phase.realization ? { realization: phase.realization } : {}),
+    ...(children ? { children } : {}),
   };
   return { ok: true, review };
+}
+
+/**
+ * A spawn phase's tasks as the gate shows them: the phase's record of each
+ * task, plus each child's status and the phase a person would act on, read
+ * now. One scan filtered to this parent; a child whose record is gone simply
+ * has no `child`.
+ */
+async function reviewChildren(
+  inst: PipelineInstance,
+  phase: PhaseProgress,
+): Promise<PhaseChildrenReview | null> {
+  const children = phase.children;
+  if (!children) return null;
+  const spawned = await readInstances({ pipelineId: children.pipelineId, parentId: inst.id });
+  const records = new Map(spawned.map((c) => [c.id, c]));
+  const tasks = children.tasks.map((task): SpawnTaskReview => {
+    const record = task.instanceId ? records.get(task.instanceId) : undefined;
+    if (!record) return { ...task };
+    const decisionPhase = childDecisionPhase(record);
+    return {
+      ...task,
+      child: { status: record.status, ...(decisionPhase ? { decisionPhase } : {}) },
+    };
+  });
+  return {
+    ...children,
+    tasks,
+    notSucceeded: tasks.filter((t) => t.state !== "succeeded").map((t) => t.key),
+  };
 }
 
 /**

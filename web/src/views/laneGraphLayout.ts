@@ -43,6 +43,8 @@ export interface LanePhase {
   attempt?: number;
   steps?: readonly unknown[];
   candidates?: { total: number; verified: number; selected: number | null } | null;
+  /** A spawn phase's glyph and `done/total`, for sizing the node. */
+  spawn?: { tasks: readonly unknown[]; succeeded: number } | null;
 }
 
 /** The geometry every measurement is derived from, in CSS px. */
@@ -114,6 +116,12 @@ export function markerWidth(p: LanePhase): number {
   for (const word of words) if (word) w += word.length * MARKER_CHAR + MARKER_GAP;
   // A dot per step, 4px with 3px between, when there are few enough to count.
   if (!c && steps > 1 && steps <= 6) w += steps * 7 - 3 + MARKER_GAP;
+  // The spawn glyph (12px and its gap), then "2/5" once there is a list.
+  const s = p.spawn;
+  if (s) {
+    const count = s.tasks.length > 0 ? `${s.succeeded}/${s.tasks.length}`.length : 0;
+    w += 14 + count * MARKER_CHAR + MARKER_GAP;
+  }
   return w;
 }
 

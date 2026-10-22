@@ -31,8 +31,10 @@ export function useOverview() {
         body: body ? JSON.stringify(body) : undefined,
       });
       if (!res.ok) {
-        const msg = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(msg.error ?? `HTTP ${res.status}`);
+        const msg = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
+        // `code` names the refusals a client acts on (`GateActionRefusal`):
+        // the review drawer says what each means beside the server's words.
+        throw Object.assign(new Error(msg.error ?? `HTTP ${res.status}`), { code: msg.code });
       }
       return res;
     },

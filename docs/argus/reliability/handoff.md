@@ -8,6 +8,7 @@
 
 **Repo:** `C:\GIT\argus`. The remote `origin` is GitHub (`Jobaben/Argus`), not Azure DevOps. A plain `git push` works. Never use `gh`.
 **Updated:** 2026-10-15 (`v1.0.0` is `f09bdf1`, tagged and pushed; WS3 is merged to `main` as `6ce0dbe` and pushed). Lives in the repo so any session or machine can continue; update it in place at the end of each session rather than creating a new file.
+**Order (D13, 2026-10-21):** the [delivery-loop plan](../delivery-loop/handoff.md)'s Argus workstreams (DL-A1 to DL-A4) come first, each released, before WS4–WS12 resume; WS13 comes before any `maxParallel` above 1. Don't start WS4 before them.
 
 ## Where things stand
 

@@ -17,7 +17,7 @@ import { failureClassOfRecord, recoverRunOutcome } from "./outcome.js";
 import { appliesResults, resumable } from "../sources/instanceStatus.js";
 import type { EngineCore, EngineFns } from "./context.js";
 
-/** The reconcile tick: gate recovery, adopted runs, due retries, stalls, healing, owed launches and the decided-run sweep. Moved verbatim from `createEngine`. */
+/** The reconcile tick: gate recovery, adopted runs, due retries, stalls, healing, owed launches, spawn phases, the stray-child sweep and the decided-run sweep. Moved verbatim from `createEngine`. */
 export function createReconcile(core: EngineCore) {
   const {
     deps,
@@ -48,6 +48,8 @@ export function createReconcile(core: EngineCore) {
   const queueVerifications: EngineFns["queueVerifications"] = (...args) =>
     core.fns.queueVerifications(...args);
   const readLive: EngineFns["readLive"] = (...args) => core.fns.readLive(...args);
+  const reconcileChildren: EngineFns["reconcileChildren"] = (...args) =>
+    core.fns.reconcileChildren(...args);
   const runDueRetries: EngineFns["runDueRetries"] = (...args) => core.fns.runDueRetries(...args);
   const saveInstance: EngineFns["saveInstance"] = (...args) => core.fns.saveInstance(...args);
   const settleCandidates: EngineFns["settleCandidates"] = (...args) =>
@@ -59,6 +61,8 @@ export function createReconcile(core: EngineCore) {
   const start: EngineFns["start"] = (...args) => core.fns.start(...args);
   const sweepDecidedRuns: EngineFns["sweepDecidedRuns"] = (...args) =>
     core.fns.sweepDecidedRuns(...args);
+  const sweepStrayChildren: EngineFns["sweepStrayChildren"] = (...args) =>
+    core.fns.sweepStrayChildren(...args);
   const terminateRun: EngineFns["terminateRun"] = (...args) => core.fns.terminateRun(...args);
 
   async function reconcile() {
@@ -553,6 +557,17 @@ export function createReconcile(core: EngineCore) {
         }
       });
     }
+
+    // 3b. Spawn phases. Each live parent, under its lock: the task list a
+    //     crash left unbuilt, every child mirrored (one that ended while Argus
+    //     was down joins here), the next tasks planned, and the starts and
+    //     revives its saved state owes queued, off every child's lock.
+    await reconcileChildren();
+
+    // 3c. A live child its parent no longer waits for (the parent was aborted
+    //     before the cascade reached it, or decided its spawn phase) is
+    //     aborted, as a decided run is stopped below.
+    await sweepStrayChildren();
 
     // 4. The same sweep over instances that are no longer running, but
     //    recently were: a failure or an abort settles the instance in the

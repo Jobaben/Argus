@@ -181,7 +181,8 @@ export function createKnowledgeIntake(core: EngineCore) {
   /**
    * The same gate for the Argus-owned read-only inputs Phase 8 added: the
    * ChangeContext, the ImplementationScope and the RemediationContext
-   * (docs/KNOWLEDGE-LEDGER.md §Phase 8, context integrity).
+   * (docs/KNOWLEDGE-LEDGER.md §Phase 8, context integrity), and, since
+   * DL-A2b, the children manifest (HARNESS.md §20).
    *
    * Phase 7 materialized the ChangeContext read-only but never checked it
    * again, so an implementation could have been driven by bytes nobody could

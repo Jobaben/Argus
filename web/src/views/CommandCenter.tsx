@@ -30,10 +30,12 @@ import {
   Handoff,
   Icon,
   IconButton,
+  instanceSectionId,
   IrisMark,
   Meter,
   Page,
   RAIL,
+  rowTitle,
   Skeleton,
   SkeletonBoardCard,
   staggerDelay,
@@ -70,6 +72,14 @@ const GateDrawer = lazy(() => loadGateDrawer().then((m) => ({ default: m.GateDra
 const OrphanStop = lazy(() => import("./OrphanStop").then((m) => ({ default: m.OrphanStop })));
 const PeerControls = lazy(() => import("./PeerBoard").then((m) => ({ default: m.PeerControls })));
 const PeerBoard = lazy(() => import("./PeerBoard").then((m) => ({ default: m.PeerBoard })));
+
+// A spawn phase's task tile and a spawned child's parent chip (DL-A2) are a
+// chunk of their own: most boards have neither, and the board is the first
+// paint. The review drawer imports the same module for its task list, so the
+// drawer's idle prefetch fetches it too.
+const loadSpawnBoard = () => import("./SpawnBoard");
+const SpawnChildren = lazy(() => loadSpawnBoard().then((m) => ({ default: m.SpawnChildren })));
+const ParentChip = lazy(() => loadSpawnBoard().then((m) => ({ default: m.ParentChip })));
 
 /**
  * A drawer opener's click, as a transition. Opened urgently, a first open with
@@ -109,10 +119,11 @@ function useBoardAnnouncer(rows: OverviewRow[]): string {
     for (const r of rows) {
       const before = seen.badges.get(rowKey(r));
       if (before === undefined || before === r.badge) continue;
-      if (r.badge === "await") msgs.push(`${r.name} needs approval`);
-      else if (r.badge === "failed") msgs.push(`${r.name} failed`);
-      else if (r.badge === "done") msgs.push(`${r.name} completed`);
-      else if (before === "await" && r.badge === "working") msgs.push(`${r.name} resumed`);
+      const name = rowTitle(r);
+      if (r.badge === "await") msgs.push(`${name} needs approval`);
+      else if (r.badge === "failed") msgs.push(`${name} failed`);
+      else if (r.badge === "done") msgs.push(`${name} completed`);
+      else if (before === "await" && r.badge === "working") msgs.push(`${name} resumed`);
     }
     setSeen({ badges, message: msgs.length > 0 ? msgs.join(". ") : seen.message });
   }
@@ -407,8 +418,10 @@ function PhaseFocus({
   reviseLabel,
   liveActivity,
   rowModel,
+  board,
   onOpenStep,
   onOpenGate,
+  onOpenChildGate,
 }: {
   pill: PhasePill;
   index: number;
@@ -423,8 +436,12 @@ function PhaseFocus({
   liveActivity: Map<string, LiveActivity>;
   rowModel: string | null;
   onOpenStep: (step: StepPill, phaseName: string, reason: string | null, originY: number) => void;
+  /** Every row on the board, for a spawn phase's tasks to find their children. */
+  board: OverviewRow[];
   /** Open the review drawer — the only place Approve and Revise live. */
   onOpenGate: (originY: number) => void;
+  /** Open a gate other than this phase's own: a task's child's. */
+  onOpenChildGate: (selection: GateSelection) => void;
 }) {
   const [opening, openGate] = useOpener(onOpenGate);
   const name = (id: string) => phaseNames.get(id) ?? id;
@@ -460,10 +477,15 @@ function PhaseFocus({
         </span>
         <span className="min-w-0 break-words text-heading font-semibold text-ink">{pill.name}</span>
         <span
-          title={`${pill.steps.length} ${pill.steps.length === 1 ? "step" : "steps"}`}
+          title={
+            pill.spawn
+              ? "One child instance per task"
+              : `${pill.steps.length} ${pill.steps.length === 1 ? "step" : "steps"}`
+          }
           className={chipClass("neutral")}
         >
-          {pill.steps.length}
+          {pill.spawn && <Icon name="spawn" size={11} />}
+          {pill.spawn ? pill.spawn.tasks.length || null : pill.steps.length}
         </span>
         {(pill.attempt ?? 0) > 0 && (
           <span className={chipClass("neutral")}>Attempt {pill.attempt + 1}</span>
@@ -534,8 +556,9 @@ function PhaseFocus({
       {/* One opener, no decision here: the artifacts this phase produced are
           what is being approved, and they live in the review drawer. It leads
           the panel rather than trailing the step grid — it is the reason this
-          phase is in focus, and below six tiles it was below the fold. */}
-      {instanceId && gate?.phaseId === pill.id && (
+          phase is in focus, and below six tiles it was below the fold. A
+          spawn phase's `children` pause is led by its task tile instead. */}
+      {instanceId && gate?.phaseId === pill.id && !gate.children && (
         // Sized by the panel, not the screen: beside the graph the panel can be
         // narrow at any viewport. Narrow, the button goes under the sentence,
         // lined up with it; it used to stay beside and squeeze the sentence
@@ -573,29 +596,46 @@ function PhaseFocus({
           </div>
         </div>
       )}
-      <ol
-        aria-label={`Steps of phase ${pill.name}`}
-        data-testid="phase-grid"
-        className="grid min-w-0 gap-x-3.5 gap-y-2.5"
-        style={{
-          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
-        }}
-      >
-        {pill.steps.map((step, i) => {
-          const reason = step.status === "failed" ? failReason : null;
-          return (
-            <li key={`${step.name}-${i}`} className="min-w-0">
-              <StepTile
-                step={step}
-                reason={reason}
-                live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
-                rowModel={rowModel}
-                onOpen={(originY) => onOpenStep(step, pill.name, reason, originY)}
-              />
-            </li>
-          );
-        })}
-      </ol>
+      {pill.spawn ? (
+        // A spawn phase runs no step: its tasks take the grid's place. Its own
+        // chunk; the fallback holds the tile's place so the panel does not jump.
+        <Suspense fallback={<Skeleton className="h-28 w-full rounded-tile" />}>
+          <SpawnChildren
+            spawn={pill.spawn}
+            phaseName={pill.name}
+            status={pill.status}
+            board={board}
+            gate={instanceId && gate?.phaseId === pill.id ? gate : null}
+            opening={opening}
+            onReview={openGate}
+            onOpenGate={onOpenChildGate}
+          />
+        </Suspense>
+      ) : (
+        <ol
+          aria-label={`Steps of phase ${pill.name}`}
+          data-testid="phase-grid"
+          className="grid min-w-0 gap-x-3.5 gap-y-2.5"
+          style={{
+            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
+          }}
+        >
+          {pill.steps.map((step, i) => {
+            const reason = step.status === "failed" ? failReason : null;
+            return (
+              <li key={`${step.name}-${i}`} className="min-w-0">
+                <StepTile
+                  step={step}
+                  reason={reason}
+                  live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
+                  rowModel={rowModel}
+                  onOpen={(originY) => onOpenStep(step, pill.name, reason, originY)}
+                />
+              </li>
+            );
+          })}
+        </ol>
+      )}
     </div>
   );
 }
@@ -612,11 +652,14 @@ function PhaseFocus({
  */
 function InstanceBoard({
   row,
+  board,
   liveActivity,
   onOpenStep,
   onOpenGate,
 }: {
   row: OverviewRow;
+  /** Every row on the board, for a spawn phase's tasks to find their children. */
+  board: OverviewRow[];
   liveActivity: Map<string, LiveActivity>;
   onOpenStep: (selection: StepSelection) => void;
   onOpenGate: (selection: GateSelection) => void;
@@ -681,19 +724,21 @@ function InstanceBoard({
           reviseLabel={row.failure?.kind === "restarted" ? "Retry" : "Revise"}
           liveActivity={liveActivity}
           rowModel={row.model}
+          board={board}
           onOpenStep={(step, phaseName, reason, originY) =>
-            onOpenStep({ step, pipelineName: row.name, phaseName, reason, originY })
+            onOpenStep({ step, pipelineName: rowTitle(row), phaseName, reason, originY })
           }
           onOpenGate={(originY) => {
             if (row.instanceId) {
               onOpenGate({
                 instanceId: row.instanceId,
                 phaseId: selected.id,
-                pipelineName: row.name,
+                pipelineName: rowTitle(row),
                 originY,
               });
             }
           }}
+          onOpenChildGate={onOpenGate}
         />
       )}
     </div>
@@ -731,6 +776,7 @@ const FACT =
  */
 function Row({
   rows,
+  board,
   liveActivity,
   index,
   onOpenStep,
@@ -739,6 +785,8 @@ function Row({
   ref,
 }: {
   rows: OverviewRow[];
+  /** Every row on the board: a spawned child's chip finds its parent there. */
+  board: OverviewRow[];
   liveActivity: Map<string, LiveActivity>;
   /** Position in the board, for the entrance stagger. */
   index: number;
@@ -821,7 +869,11 @@ function Row({
         {rows.map((row, rowIndex) => (
           <section
             key={row.instanceId ?? row.pipelineId}
-            className={`min-w-0 ${rowIndex > 0 ? "border-t border-line pt-3.5" : ""}`}
+            // Where "Show" and a child's parent chip land: focusable, never in
+            // the tab order.
+            id={row.instanceId ? instanceSectionId(row.instanceId) : undefined}
+            tabIndex={row.instanceId ? -1 : undefined}
+            className={`min-w-0 scroll-mt-20 outline-none ${rowIndex > 0 ? "border-t border-line pt-3.5" : ""}`}
           >
             {multi && (
               <div className="mb-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -842,6 +894,13 @@ function Row({
                 </span>
               </div>
             )}
+            {row.parent && (
+              // Its own chunk; the fallback is the chip's height so the graph
+              // does not move when it lands.
+              <Suspense fallback={<div className="mb-3 h-7" />}>
+                <ParentChip parent={row.parent} board={board} />
+              </Suspense>
+            )}
             {row.orphaned && onAbort && row.instanceId && (
               <Suspense fallback={null}>
                 <OrphanStop
@@ -857,6 +916,7 @@ function Row({
                 action unless a node is pinned. */}
             <InstanceBoard
               row={row}
+              board={board}
               liveActivity={liveActivity}
               onOpenStep={onOpenStep}
               onOpenGate={onOpenGate}
@@ -1104,6 +1164,7 @@ function elsewhereItems(
   board: AttentionItem[],
 ): ElsewhereItem[] {
   if (!briefing) return [];
+  // The issue's text names the pipeline, never a task: match the bare name.
   const failed = new Set(
     board.filter((i) => !i.gate.canApprove).map((i) => `${i.row.name} · ${i.phaseName}`),
   );
@@ -1245,17 +1306,21 @@ function AttentionQueue({
                     decision", not two facts to scan. */}
                 <p
                   id={titleId}
-                  title={`${item.row.name} · ${item.phaseName}`}
+                  title={`${rowTitle(item.row)} · ${item.phaseName}`}
                   className={NEEDS_TITLE}
                 >
-                  {`${item.row.name} · ${item.phaseName}`}
+                  {`${rowTitle(item.row)} · ${item.phaseName}`}
                 </p>
                 {/* Two lines on a phone rather than one cut short: the end of a
                     failure reason is usually the error code, the part worth
                     reading. */}
                 <p className="text-caption text-ink-dim max-sm:line-clamp-2 sm:truncate">
                   {approve ? (
-                    "Needs approval"
+                    item.gate.children ? (
+                      "Tasks need a decision"
+                    ) : (
+                      "Needs approval"
+                    )
                   ) : (
                     <span className="text-fail-ink">{item.reason ?? "This phase failed"}</span>
                   )}
@@ -1477,7 +1542,7 @@ export default function CommandCenter({
     const row = rows.find((r) => r.instanceId === instanceId);
     if (!row || row.orphaned) return null;
     const target = phaseId ? row.gates.find((g) => g.phaseId === phaseId) : row.gates[0];
-    return target ? { instanceId, phaseId: target.phaseId, pipelineName: row.name } : null;
+    return target ? { instanceId, phaseId: target.phaseId, pipelineName: rowTitle(row) } : null;
   }, [segments, rows, facet.peer]);
   const gate = pickedGate ?? linkedGate;
   // Once a gate has been opened the drawer stays mounted (closed), so its exit
@@ -1600,7 +1665,7 @@ export default function CommandCenter({
                   setPickedGate({
                     instanceId: item.row.instanceId!,
                     phaseId: item.gate.phaseId,
-                    pipelineName: item.row.name,
+                    pipelineName: rowTitle(item.row),
                     originY,
                   })
                 }
@@ -1618,6 +1683,7 @@ export default function CommandCenter({
                     ref={flip(group[0].pipelineId)}
                     index={i}
                     rows={group}
+                    board={rows}
                     liveActivity={liveActivity}
                     onOpenStep={setSelected}
                     onOpenGate={setPickedGate}
@@ -1655,7 +1721,15 @@ export default function CommandCenter({
       </Suspense>
       <Suspense fallback={null}>
         {everOpened && (
-          <GateDrawer selection={gate} onClose={closeGate} approve={approve} revise={revise} />
+          <GateDrawer
+            selection={gate}
+            onClose={closeGate}
+            approve={approve}
+            revise={revise}
+            abort={abort}
+            onOpen={setPickedGate}
+            board={rows}
+          />
         )}
       </Suspense>
     </Page>

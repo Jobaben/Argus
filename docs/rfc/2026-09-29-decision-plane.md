@@ -2404,6 +2404,8 @@ id and attempt with `status: "awaiting-approval"`. Their effect comes from
 | ----------------------------------------------------- | ------------------------------------------------------------------- |
 | exactly one `applied` record, `mechanism: "operator"` | **labeled**: approve → `not-sent-back`; revise, abort → `sent-back` |
 | an `applied` `verdict-auto-approve` record            | unlabeled `automated-approval` (never a reference)                  |
+| an `applied` `approval-condition` record              | unlabeled `automated-approval` (never a reference)                  |
+| an `applied` `parent-decision` record                 | unlabeled `parent-decision` (a spawn parent's abort of its child)   |
 | an `applied` `unspecified` record                     | unlabeled `unattributed`                                            |
 | more than one `applied` record                        | unlabeled `conflicting-records`                                     |
 | an `incomplete` record                                | waits, up to 60 minutes; then unlabeled `effect-incomplete`         |

@@ -157,9 +157,11 @@ factories over one shared context (`engine/context.ts`): `store` (saving an
 instance and its housekeeping), `persistence` (the transition commit),
 `launch`, `lifecycle` (a run's exit, deadlines, stalls and `terminateRun`),
 `failure` (failure classes and retries), `verification`, `knowledgeIntake`,
-`knowledgeCommit`, `realization`, `candidates`, `signals`, `gates` and
-`reconcile`, with pure leaves for `types`, `prompts`, `outcome`, `spawn` and
-`constants`. The split was mechanical — every function body moved byte for
+`knowledgeCommit`, `realization`, `candidates`, `signals`, `gates`,
+`reconcile`, `gatePolls` (approval conditions) and `children` (spawn phases:
+each child's start, the mirror into its parent, the abort cascade and the
+sweep), with pure leaves for
+`types`, `prompts`, `outcome`, `spawn` and `constants`. The split was mechanical — every function body moved byte for
 byte — and its rules are a test (`engine/boundaries.test.ts`): a module calls
 another's functions only through the late-bound, typed `core.fns`, never by
 importing it; nothing outside `engine/` but the façade imports an engine
@@ -479,6 +481,13 @@ and a hung analysis pass cannot wedge a pipeline.
 
 The same reasoning applies to Autopsy: the postmortem never runs in the run
 completion handler, only in a watcher afterwards.
+
+Approval conditions (`approveWhen`, HARNESS §2) are engine work for the same
+reason in reverse: they run no model, but a poll is a shell command that may
+take a minute. `engine/gatePolls.ts` is queued on the scheduler tick right after
+`reconcile`, runs each poll off the instance lock and is never awaited by the
+tick; what a poll saw is decided again under the lock by the same gate boundary
+a Verdict auto-approval goes through (`engine/gates.ts`).
 
 Trajectory judging follows the same rule and adds three modules beside
 `sources/verdict.ts`. `sources/trajectory.ts` holds the deterministic
