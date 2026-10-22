@@ -112,7 +112,12 @@ directly, so run it on a clean branch. Use (f) to isolate the work.
         }
       ],
       "checks": [
-        { "kind": "command", "run": "npm run typecheck", "label": "typecheck", "timeoutSeconds": 600 },
+        {
+          "kind": "command",
+          "run": "npm run typecheck",
+          "label": "typecheck",
+          "timeoutSeconds": 600
+        },
         { "kind": "command", "run": "npm test", "label": "tests", "timeoutSeconds": 1200 },
         {
           "kind": "changed-files",
@@ -444,7 +449,12 @@ comments on a real issue: ask the person before enabling it.
       "capabilities": {
         "filesystem": "read-only",
         "tools": {
-          "allow": ["Bash(gh issue view:*)", "Bash(gh issue edit:*)", "Bash(gh issue comment:*)", "Bash(git log:*)"]
+          "allow": [
+            "Bash(gh issue view:*)",
+            "Bash(gh issue edit:*)",
+            "Bash(gh issue comment:*)",
+            "Bash(git log:*)"
+          ]
         }
       },
       "steps": [
@@ -501,7 +511,11 @@ running it.
       "checks": [
         { "kind": "command", "run": "npm run lint", "label": "lint", "timeoutSeconds": 600 },
         { "kind": "command", "run": "npm test", "label": "tests", "timeoutSeconds": 1200 },
-        { "kind": "command", "run": "git diff --quiet HEAD", "label": "no uncommitted tracked changes" },
+        {
+          "kind": "command",
+          "run": "git diff --quiet HEAD",
+          "label": "no uncommitted tracked changes"
+        },
         { "kind": "changed-files", "requireChanges": true }
       ],
       "approveWhen": {
@@ -576,7 +590,11 @@ Child (create it, note the id it prints):
       ],
       "checks": [
         { "kind": "command", "run": "npm test", "label": "tests", "timeoutSeconds": 1200 },
-        { "kind": "command", "run": "git diff --quiet HEAD", "label": "no uncommitted tracked changes" },
+        {
+          "kind": "command",
+          "run": "git diff --quiet HEAD",
+          "label": "no uncommitted tracked changes"
+        },
         { "kind": "changed-files", "requireChanges": true }
       ]
     }

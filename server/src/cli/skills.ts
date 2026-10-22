@@ -342,7 +342,7 @@ export function staleSkillsNotice(statuses: readonly SkillStatus[]): string | nu
   const stale = statuses.filter((s) => s.state !== "missing" && s.state !== "current");
   if (stale.length === 0) return null;
   const which = stale.map((s) => `${s.skill} (${RUNTIMES[s.runtime].label})`).join(", ");
-  return `installed agent skills are older than this build: ${which} — run \`argus skills install\` to update them`;
+  return `installed agent skills do not match this build: ${which} — run \`argus skills install\` to update them`;
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────

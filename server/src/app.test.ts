@@ -1832,6 +1832,22 @@ test("POST /api/pipelines/validate answers like a save would, and saves nothing"
   assert.equal(bad.status, 400);
   assert.match(((await bad.json()) as { error: string }).error, /nowhere/);
 
+  // A malformed trigger is the author's mistake like any other: a 400 that
+  // says what is wrong, from validate and from a save alike.
+  for (const route of ["/api/pipelines/validate", "/api/pipelines"]) {
+    const res = await app.request(route, {
+      method: "POST",
+      headers: sameOrigin,
+      body: JSON.stringify({
+        name: "P",
+        trigger: { kind: "daily", time: "25:00" },
+        phases: [dagPhase("plan")],
+      }),
+    });
+    assert.equal(res.status, 400, route);
+    assert.match(((await res.json()) as { error: string }).error, /time/, route);
+  }
+
   const list = (await (await app.request("/api/pipelines", { headers: loopback })).json()) as {
     pipelines: unknown[];
   };

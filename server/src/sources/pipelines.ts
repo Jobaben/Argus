@@ -2,7 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { argusWorkRoot, claudeHome, paths } from "../claudeHome.js";
-import { mintHookToken, validateTrigger } from "./schedules.js";
+import { ScheduleValidationError, mintHookToken, validateTrigger } from "./schedules.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
 import type {
   ChildrenContextSpec,
@@ -2511,6 +2511,20 @@ function validateProducedByPhaseSelectors(phases: PhaseDef[]): void {
   }
 }
 
+/**
+ * The shared trigger validator throws the schedules' error type, which the
+ * pipeline routes do not map: a malformed pipeline trigger was a 500 with the
+ * right message. Rethrown as this module's own, it is the 400 it always was.
+ */
+function validatePipelineTrigger(raw: unknown): Trigger {
+  try {
+    return validateTrigger(raw, { allowWindowed: true });
+  } catch (e) {
+    if (e instanceof ScheduleValidationError) throw new PipelineValidationError(e.message);
+    throw e;
+  }
+}
+
 export function validatePipelineInput(raw: unknown): PipelineInput {
   if (!raw || typeof raw !== "object") throw new PipelineValidationError("body required");
   const r = raw as Record<string, unknown>;
@@ -2524,7 +2538,7 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
   // an instance that starts and then simply never finishes, which is how a DAG
   // executor fails when nobody checks.
   validateGraph(phases);
-  const trigger = r.trigger == null ? null : validateTrigger(r.trigger, { allowWindowed: true });
+  const trigger = r.trigger == null ? null : validatePipelineTrigger(r.trigger);
   const overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
   const enabled = r.enabled === undefined ? true : Boolean(r.enabled);
   const input: PipelineInput = { name: r.name.trim(), phases, trigger, enabled, overlapPolicy };
@@ -2572,8 +2586,7 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
     // graph's checks — otherwise routing could only be broken by PUT.
     validateGraph(patch.phases);
   }
-  if ("trigger" in r)
-    patch.trigger = r.trigger == null ? null : validateTrigger(r.trigger, { allowWindowed: true });
+  if ("trigger" in r) patch.trigger = r.trigger == null ? null : validatePipelineTrigger(r.trigger);
   if ("enabled" in r) patch.enabled = Boolean(r.enabled);
   if ("overlapPolicy" in r) patch.overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
   if ("model" in r) patch.model = r.model == null ? undefined : validateModel(r.model, "pipeline");
