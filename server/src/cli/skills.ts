@@ -11,12 +11,14 @@
  * honoured), so pointing Argus at a relocated CLI points the install there too.
  *
  * An update replaces the whole folder, so a file an older skill had and this
- * one dropped does not linger and mislead. It is written beside the old one
- * first and swapped in, and a copy with edits of its own is saved first.
+ * one dropped does not linger and mislead. It is written to a scratch folder
+ * outside `skills/` first and swapped in, and a copy with edits of its own is
+ * saved first. The scratch folder is removed once the swap is done.
  */
 
-import { cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { AgentSkillsResponse } from "@argus/contracts";
 import { RUNTIMES } from "../runtimes/index.js";
@@ -197,6 +199,42 @@ function writeManifest(dir: string, manifest: SkillManifest): Promise<void> {
   return writeFile(path.join(dir, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
+const LOCKED = new Set(["EPERM", "EACCES", "EBUSY"]);
+
+/** About five seconds in all: long enough for a CLI or a virus scanner to let go. */
+export const LOCK_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1200, 2000];
+
+/**
+ * Runs `op` again while Windows reports a file in the folder open elsewhere —
+ * a CLI loading a skill it just noticed, a virus scanner reading new files.
+ */
+export async function retryWhileLocked<T>(
+  op: () => Promise<T>,
+  delays: readonly number[] = LOCK_RETRY_DELAYS_MS,
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await op();
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (attempt >= delays.length || !code || !LOCKED.has(code)) throw e;
+      await sleep(delays[attempt]);
+    }
+  }
+}
+
+function removeTree(dir: string): Promise<void> {
+  return rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+}
+
+/**
+ * Scratch space for one home's installs: outside its `skills/` tree, which the
+ * CLIs watch and load skills from, but on the same volume, so a swap is a rename.
+ */
+function stagingRoot(skillsDir: string): string {
+  return path.join(path.dirname(skillsDir), "argus", "skill-staging");
+}
+
 /** Writes `tree` (plus its manifest) to `dir`, replacing whatever was there. */
 async function writeSkill(
   name: BundledSkill,
@@ -206,19 +244,43 @@ async function writeSkill(
   hadOne: boolean,
 ): Promise<void> {
   const parent = path.dirname(dir);
+  const scratch = stagingRoot(parent);
+  const fresh = path.join(scratch, name);
+  const old = path.join(scratch, `${name}.old`);
   await mkdir(parent, { recursive: true });
-  // A dot-folder beside the target: on the same volume, so the swap is a
-  // rename, and ignored by the CLIs, which only read `<name>/SKILL.md`.
-  const staging = path.join(parent, `.${name}.argus-staging`);
-  await rm(staging, { recursive: true, force: true });
+  // Older builds staged beside the skill, where Claude Code loaded it as one.
+  await removeTree(path.join(parent, `.${name}.argus-staging`));
+  await removeTree(fresh);
+  await removeTree(old);
   for (const [rel, bytes] of tree) {
-    const file = path.join(staging, ...rel.split("/"));
+    const file = path.join(fresh, ...rel.split("/"));
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, bytes);
   }
-  await writeManifest(staging, manifest);
-  if (hadOne) await rm(dir, { recursive: true, force: true });
-  await rename(staging, dir);
+  await writeManifest(fresh, manifest);
+
+  // The old copy is moved aside rather than deleted, so a failed swap can put it back.
+  let oldIsSpare = hadOne;
+  try {
+    if (hadOne) await retryWhileLocked(() => rename(dir, old));
+    try {
+      await retryWhileLocked(() => rename(fresh, dir));
+    } catch (e) {
+      if (hadOne) {
+        oldIsSpare = false;
+        await retryWhileLocked(() => rename(old, dir)).catch(() => {
+          throw new Error(
+            `${e instanceof Error ? e.message : String(e)} — the previous copy is at ${old}`,
+          );
+        });
+      }
+      throw e;
+    }
+  } finally {
+    await removeTree(fresh).catch(() => {});
+    if (oldIsSpare) await removeTree(old).catch(() => {});
+    for (const empty of [scratch, path.dirname(scratch)]) await rmdir(empty).catch(() => {});
+  }
 }
 
 /** Installs or updates each named skill in each target home. Never throws. */

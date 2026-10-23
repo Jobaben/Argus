@@ -23,6 +23,7 @@ import {
   installSkills,
   installedSkillDir,
   resolveSkillTargets,
+  retryWhileLocked,
   runSkills,
   skillBackupRoot,
   skillStatuses,
@@ -119,10 +120,11 @@ describe("argus skills install", () => {
       const manifest = JSON.parse(readFileSync(path.join(dir, MANIFEST_FILE), "utf8"));
       assert.equal(manifest.skill, "argus-pipeline");
       assert.equal(manifest.argusRoot, root);
-      assert.equal(
-        existsSync(path.join(homes.claude, "skills", ".argus-pipeline.argus-staging")),
-        false,
-      );
+      assert.deepEqual(readdirSync(path.join(homes.claude, "skills")).sort(), [
+        "argus-pipeline",
+        "argus-tail",
+      ]);
+      assert.equal(existsSync(path.join(homes.claude, "argus")), false, "no scratch left behind");
       assert.equal(existsSync(pipelineSkill(homes.codex)), false, "codex was not asked for");
 
       const again = await installSkills(BUNDLED_SKILLS, "claude", io({ root }));
@@ -157,6 +159,19 @@ describe("argus skills install", () => {
       assert.match(readFileSync(path.join(dir, "SKILL.md"), "utf8"), /description: v2/);
       assert.equal(existsSync(path.join(dir, "reference", "old.md")), false);
       assert.equal(existsSync(skillBackupRoot()), false);
+      assert.equal(existsSync(path.join(homes.claude, "argus")), false, "no scratch left behind");
+    });
+  });
+
+  it("clears staging an older build left inside skills/, where Claude Code loads it", async () => {
+    await withHomes(async (homes) => {
+      const root = fakeBuild();
+      const leftover = path.join(homes.claude, "skills", ".argus-pipeline.argus-staging");
+      write(path.join(leftover, "SKILL.md"), "half-installed\n");
+
+      const [r] = await installSkills(["argus-pipeline"], "claude", io({ root }));
+      assert.equal(r.action, "installed");
+      assert.equal(existsSync(leftover), false);
     });
   });
 
@@ -267,6 +282,43 @@ describe("argus skills install", () => {
       assert.equal(await runSkills(argv, o), 2, argv.join(" "));
       assert.equal(o.errors.length, 1);
     }
+  });
+});
+
+describe("retryWhileLocked", () => {
+  const fail = (code: string) => Object.assign(new Error(code), { code });
+
+  it("tries again while a file is held open, then succeeds", async () => {
+    let calls = 0;
+    const result = await retryWhileLocked(async () => {
+      calls++;
+      if (calls < 3) throw fail(calls === 1 ? "EPERM" : "EBUSY");
+      return "swapped";
+    }, [0, 0, 0]);
+    assert.equal(result, "swapped");
+    assert.equal(calls, 3);
+  });
+
+  it("gives up once the waits run out, and never retries other errors", async () => {
+    let calls = 0;
+    await assert.rejects(
+      retryWhileLocked(async () => {
+        calls++;
+        throw fail("EACCES");
+      }, [0, 0]),
+      /EACCES/,
+    );
+    assert.equal(calls, 3);
+
+    calls = 0;
+    await assert.rejects(
+      retryWhileLocked(async () => {
+        calls++;
+        throw fail("ENOENT");
+      }, [0, 0]),
+      /ENOENT/,
+    );
+    assert.equal(calls, 1);
   });
 });
 
