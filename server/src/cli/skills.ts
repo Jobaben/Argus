@@ -10,13 +10,12 @@
  * the runtime registry (`ARGUS_CLAUDE_HOME`, `ARGUS_CODEX_HOME` / `CODEX_HOME`
  * honoured), so pointing Argus at a relocated CLI points the install there too.
  *
- * An update replaces the whole folder, so a file an older skill had and this
- * one dropped does not linger and mislead. It is written to a scratch folder
- * outside `skills/` first and swapped in, and a copy with edits of its own is
- * saved first. The scratch folder is removed once the swap is done.
+ * An update rewrites the folder in place and removes what the new copy no
+ * longer has, so a file an older skill had and this one dropped does not
+ * linger and mislead. A copy with edits of its own is saved first.
  */
 
-import { cp, mkdir, readdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -227,60 +226,62 @@ function removeTree(dir: string): Promise<void> {
   return rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
-/**
- * Scratch space for one home's installs: outside its `skills/` tree, which the
- * CLIs watch and load skills from, but on the same volume, so a swap is a rename.
- */
-function stagingRoot(skillsDir: string): string {
-  return path.join(path.dirname(skillsDir), "argus", "skill-staging");
+/** Scratch folders older builds swapped skills through; removed when found. */
+async function removeLegacyStaging(name: BundledSkill, skillsDir: string): Promise<void> {
+  await removeTree(path.join(skillsDir, `.${name}.argus-staging`));
+  const staging = path.join(path.dirname(skillsDir), "argus", "skill-staging");
+  await removeTree(staging);
+  await rmdir(path.dirname(staging)).catch(() => {});
 }
 
-/** Writes `tree` (plus its manifest) to `dir`, replacing whatever was there. */
+/** Every file and folder under `dir`, as POSIX paths relative to it, deepest last. */
+async function listTree(dir: string): Promise<{ files: string[]; dirs: string[] }> {
+  const files: string[] = [];
+  const dirs: string[] = [];
+  async function walk(rel: string): Promise<void> {
+    for (const e of await readdir(path.join(dir, rel), { withFileTypes: true })) {
+      const child = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        dirs.push(child);
+        await walk(child);
+      } else files.push(child);
+    }
+  }
+  await walk("");
+  return { files, dirs };
+}
+
+/**
+ * Writes `tree` (plus its manifest) into `dir` file by file, removing what the
+ * new copy no longer has. Folders are never renamed: the Argus server watches
+ * every folder under `skills/`, and Windows refuses to rename a folder while a
+ * folder inside it is watched. The manifest goes first and comes back last, so
+ * a copy left half-written reads as unmanaged and is backed up by the next install.
+ */
 async function writeSkill(
   name: BundledSkill,
   dir: string,
   tree: SkillTree,
   manifest: SkillManifest,
-  hadOne: boolean,
 ): Promise<void> {
-  const parent = path.dirname(dir);
-  const scratch = stagingRoot(parent);
-  const fresh = path.join(scratch, name);
-  const old = path.join(scratch, `${name}.old`);
-  await mkdir(parent, { recursive: true });
-  // Older builds staged beside the skill, where Claude Code loaded it as one.
-  await removeTree(path.join(parent, `.${name}.argus-staging`));
-  await removeTree(fresh);
-  await removeTree(old);
-  for (const [rel, bytes] of tree) {
-    const file = path.join(fresh, ...rel.split("/"));
-    await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, bytes);
-  }
-  await writeManifest(fresh, manifest);
+  await mkdir(dir, { recursive: true });
+  await removeLegacyStaging(name, path.dirname(dir));
+  await retryWhileLocked(() => rm(path.join(dir, MANIFEST_FILE), { force: true }));
 
-  // The old copy is moved aside rather than deleted, so a failed swap can put it back.
-  let oldIsSpare = hadOne;
-  try {
-    if (hadOne) await retryWhileLocked(() => rename(dir, old));
-    try {
-      await retryWhileLocked(() => rename(fresh, dir));
-    } catch (e) {
-      if (hadOne) {
-        oldIsSpare = false;
-        await retryWhileLocked(() => rename(old, dir)).catch(() => {
-          throw new Error(
-            `${e instanceof Error ? e.message : String(e)} — the previous copy is at ${old}`,
-          );
-        });
-      }
-      throw e;
-    }
-  } finally {
-    await removeTree(fresh).catch(() => {});
-    if (oldIsSpare) await removeTree(old).catch(() => {});
-    for (const empty of [scratch, path.dirname(scratch)]) await rmdir(empty).catch(() => {});
+  const existing = await listTree(dir);
+  for (const rel of existing.files) {
+    if (!tree.has(rel)) await retryWhileLocked(() => rm(path.join(dir, ...rel.split("/"))));
   }
+  for (const rel of existing.dirs.reverse()) {
+    const keep = [...tree.keys()].some((f) => f.startsWith(`${rel}/`));
+    if (!keep) await retryWhileLocked(() => rmdir(path.join(dir, ...rel.split("/"))));
+  }
+  for (const [rel, bytes] of tree) {
+    const file = path.join(dir, ...rel.split("/"));
+    await mkdir(path.dirname(file), { recursive: true });
+    await retryWhileLocked(() => writeFile(file, bytes));
+  }
+  await writeManifest(dir, manifest);
 }
 
 /** Installs or updates each named skill in each target home. Never throws. */
@@ -337,7 +338,7 @@ export async function installSkills(
           await cp(dir, backup, { recursive: true });
           result.backup = backup;
         }
-        await writeSkill(name, dir, tree, manifest, state !== "missing");
+        await writeSkill(name, dir, tree, manifest);
       } catch (e) {
         result.action = "failed";
         result.error = e instanceof Error ? e.message : String(e);

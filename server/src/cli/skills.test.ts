@@ -17,6 +17,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import chokidar from "chokidar";
 import {
   argusRoot,
   bundledSkillDir,
@@ -163,15 +164,48 @@ describe("argus skills install", () => {
     });
   });
 
-  it("clears staging an older build left inside skills/, where Claude Code loads it", async () => {
+  it("clears staging older builds left, inside skills/ and beside it", async () => {
     await withHomes(async (homes) => {
       const root = fakeBuild();
-      const leftover = path.join(homes.claude, "skills", ".argus-pipeline.argus-staging");
-      write(path.join(leftover, "SKILL.md"), "half-installed\n");
+      const leftovers = [
+        path.join(homes.claude, "skills", ".argus-pipeline.argus-staging"),
+        path.join(homes.claude, "argus", "skill-staging", "argus-pipeline.old"),
+      ];
+      for (const dir of leftovers) write(path.join(dir, "SKILL.md"), "half-installed\n");
 
       const [r] = await installSkills(["argus-pipeline"], "claude", io({ root }));
       assert.equal(r.action, "installed");
-      assert.equal(existsSync(leftover), false);
+      for (const dir of leftovers) assert.equal(existsSync(dir), false, dir);
+      assert.equal(existsSync(path.join(homes.claude, "argus")), false);
+    });
+  });
+
+  it("installs and updates a skill while the Argus server watches the home", async () => {
+    await withHomes(async (homes) => {
+      const root = fakeBuild();
+      // The server's watchers (watch.ts) hold every folder under skills/ and
+      // argus/ open; on Windows a folder whose child is held cannot be renamed.
+      const watched = ["skills", "argus"].map((d) => path.join(homes.claude, d));
+      for (const dir of watched) mkdirSync(dir, { recursive: true });
+      const watcher = chokidar.watch(watched, { depth: 3 });
+      await new Promise<void>((resolve) => watcher.once("ready", () => resolve()));
+      try {
+        const [first] = await installSkills(["argus-pipeline"], "claude", io({ root }));
+        assert.equal(first.error, undefined);
+        assert.equal(first.action, "installed");
+        write(
+          path.join(bundledSkillDir("argus-pipeline", root), "SKILL.md"),
+          "---\nname: argus-pipeline\ndescription: v2\n---\n",
+        );
+        const [r] = await installSkills(["argus-pipeline"], "claude", io({ root }));
+        assert.equal(r.error, undefined);
+        assert.equal(r.action, "updated");
+        const dir = pipelineSkill(homes.claude);
+        assert.match(readFileSync(path.join(dir, "SKILL.md"), "utf8"), /description: v2/);
+        assert.equal(readFileSync(path.join(dir, "reference", "a.md"), "utf8"), "A\n");
+      } finally {
+        await watcher.close();
+      }
     });
   });
 
