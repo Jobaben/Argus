@@ -1,6 +1,6 @@
 # Plan: Delivery loop with per-task autonomy
 
-**Written:** 2026-10-21, against `main` = `15a6fd5` (build `1.0.0-15a6fd5`). **Updated:** 2026-10-22: DL-A2, DL-A3 and DL-A4 are built and committed on `claude/cool-goldberg-325t64`, not merged and not released (see [Order](#order)). **Handoff:** [`handoff.md`](handoff.md) (same folder).
+**Written:** 2026-10-21, against `main` = `15a6fd5` (build `1.0.0-15a6fd5`). **Updated:** 2026-10-26: DL-A1 to DL-A4 are merged and the server runs them from the pinned build `1.0.0-7165940`; no version is tagged yet (see [Order](#order)). **Handoff:** [`handoff.md`](handoff.md) (same folder).
 
 This plan closes every gap between the delivery-loop pipeline and the pod working model it implements ("AI-Augmented Product Pods", v1.0). It has three tracks: Argus features first (**DL-A**), then the pipeline (**DL-P**), and the working model itself (**DL-M**). Pilot-specific details (repository, instance, names) are kept out of this repository, in the pipeline's own notes.
 
@@ -47,17 +47,22 @@ A seven-step loop: Discover, Define, Plan, Build, Verify, Ship, Learn. Four huma
 
 ## Decisions already made
 
-| Date       | Decision                                                                                                                                                                                                                                                    |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-10-19 | Learnings reach the target repository's context (root CLAUDE.md, AGENTS.md, `.claude/skills/`) only through a reviewed PR. L4 finishes as a PR with auto-complete. The PR body follows the working model (spec link, session link, level, verification).    |
-| 2026-10-20 | Each pipeline runs on its own Claude setup folder (`claudeConfigDir`, HARNESS.md §3b).                                                                                                                                                                      |
-| 2026-10-21 | Work enters through the pipeline's webhook (the intake skill).                                                                                                                                                                                              |
-| 2026-10-21 | One person holds every pod role. One approval covers every role a gate names.                                                                                                                                                                               |
-| 2026-10-21 | **Autonomy levels contain no human authoring or pairing.** Levels differ in tooling and permission settings. People act at the gates.                                                                                                                       |
-| 2026-10-21 | **The flow:** the person starts the loop; the pipeline specifies, plans, fans the work out, opens PRs from the fanned-out work, ships after all PRs are approved, then runs Learn over the whole instance and improves the pipeline for the next iteration. |
-| 2026-10-21 | **Argus first, then the pipeline.** Close every gap in this plan.                                                                                                                                                                                           |
+| Date       | Decision                                                                                                                                                                                                                                                                                                                                                                          |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-19 | Learnings reach the target repository's context (root CLAUDE.md, AGENTS.md, `.claude/skills/`) only through a reviewed PR. L4 finishes as a PR with auto-complete. The PR body follows the working model (spec link, session link, level, verification).                                                                                                                          |
+| 2026-10-20 | Each pipeline runs on its own Claude setup folder (`claudeConfigDir`, HARNESS.md §3b).                                                                                                                                                                                                                                                                                            |
+| 2026-10-21 | Work enters through the pipeline's webhook (the intake skill).                                                                                                                                                                                                                                                                                                                    |
+| 2026-10-21 | One person holds every pod role. One approval covers every role a gate names.                                                                                                                                                                                                                                                                                                     |
+| 2026-10-21 | **Autonomy levels contain no human authoring or pairing.** Levels differ in tooling and permission settings. People act at the gates.                                                                                                                                                                                                                                             |
+| 2026-10-21 | **The flow:** the person starts the loop; the pipeline specifies, plans, fans the work out, opens PRs from the fanned-out work, ships after all PRs are approved, then runs Learn over the whole instance and improves the pipeline for the next iteration.                                                                                                                       |
+| 2026-10-21 | **Argus first, then the pipeline.** Close every gap in this plan.                                                                                                                                                                                                                                                                                                                 |
+| 2026-10-26 | **One person, no approval gates** (supersedes the morning's D5 and D8). The loop takes any idea for one project and runs Discover, Define, Plan, the tasks, Ship and Learn without approvals. The person's only acts are reviewing and merging PRs; the loop waits only for those merges. D6 and D7 as proposed, except that L1's ADR is decided by merging or abandoning its PR. |
+| 2026-10-26 | **Ask only when unsure.** Discover, Define, Plan and an L1 decision may stop for the person, but only on an ambiguity they cannot settle themselves. Built in the pipeline with `approveWhen`, not in Argus: an Argus feature waits until the pilot shows how often agents ask.                                                                                                   |
+| 2026-10-26 | D3: **one feature branch per idea**, cut from the branch the idea names (or the project's default) and merged back into it. Each task's PR merges into the feature branch; Ship opens the feature branch's PR.                                                                                                                                                                    |
+| 2026-10-26 | D9: **a local git repository**, no remote until you add one. Learn's changes to the loop become a `proposal/<slug>` branch there; merging it applies it to Argus before the next idea.                                                                                                                                                                                            |
+| 2026-10-26 | **Ideas queue** and run one at a time (`overlapPolicy: "skip"`). Each starts only after the previous loop's learnings are merged or declined, so it runs on the improved loop.                                                                                                                                                                                                    |
 
-Everything else in this plan is a proposed default, listed under [Open decisions](#open-decisions-defaults-proposed-the-user-confirms). On 2026-10-21 you asked to proceed with everything, so DL-A2 to DL-A4 were built on the proposed defaults of D1–D4, D12 and D13. They stay yours to change; nothing built so far settles D5–D11.
+Everything else in this plan is a proposed default, listed under [Open decisions](#open-decisions-defaults-proposed-the-user-confirms). On 2026-10-21 you asked to proceed with everything, so DL-A2 to DL-A4 were built on the proposed defaults of D1–D4, D12 and D13. They stay yours to change. D10 and D11 are still open.
 
 ## Target design
 
@@ -118,35 +123,35 @@ Claude Code permission rules are not a sandbox (HARNESS.md §10). What holds a t
 
 Status legend: ⬜ not started · 🟡 in progress · 🔵 staged for review · ✅ merged · ⏸ blocked
 
-| Status | #             | Workstream                                                                   | Branch / home                                        | Why here                                                                  | Depends on                                              |
-| ------ | ------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------- |
-| 🟡     | DL-A0         | Close out the setup-folder feature (#94): Windows done gate, probes, release | – (probes on this machine; `argus release`)          | Merged but not verified on Windows; the pipeline moves onto it            | – (can run alongside)                                   |
-| ✅     | DL-A1         | Revise notes accumulate                                                      | `fix/revise-notes-accumulate`                        | Gates are the human control in this model; a lost note is a lost decision | –                                                       |
-| 🔵     | DL-A2a        | Spawn phases                                                                 | `claude/cool-goldberg-325t64` (`46cdb73`)            | The core gap: one lane, branch and PR per task                            | –                                                       |
-| 🔵     | DL-A2b        | The parent's view of its children                                            | `claude/cool-goldberg-325t64` (`94e4e6e`)            | Learn over the whole instance                                             | DL-A2a                                                  |
-| 🔵     | DL-A2c        | Spawn phases on the board                                                    | `claude/cool-goldberg-325t64` (`01c3a53`)            | Seeing children, deciding at the `children` pause                         | DL-A2a (contracts)                                      |
-| 🔵     | DL-A4 + DL-A3 | Task inputs for checks, then gates a polled command approves                 | `claude/cool-goldberg-325t64` (`9355865`, `ee56f8a`) | G1 and G3 advance on a merge; task-scope checks                           | –                                                       |
-| ⬜     | WS13          | (reliability) the `.claude.json` race                                        | `fix/claude-config-race`                             | Before any `maxParallel` above 1                                          | DL-A0 (where `.claude.json` lives under a setup folder) |
-| ⬜     | DL-P0         | Hygiene on the current pipeline                                              | API (admin session)                                  | Only if the current pipeline runs before DL-P4                            | –                                                       |
-| ⬜     | DL-P1         | A versioned home for the pipeline                                            | a new private repository                             | Learn needs somewhere to propose pipeline changes                         | D9                                                      |
-| ⬜     | DL-P2         | Autonomy policy v2 and lane profiles                                         | pipeline home                                        | Levels as profiles; no clamp                                              | DL-P1; D6, D7                                           |
-| ⬜     | DL-P3         | The task-loop pipeline (child)                                               | pipeline home                                        | One task, agent, branch and PR                                            | DL-A2a, DL-A3, DL-A4 released; DL-P1, DL-P2             |
-| ⬜     | DL-P4         | Rework the delivery-loop pipeline (parent)                                   | pipeline home                                        | Spec PR, Plan per task, the `tasks` spawn phase, Ship after the join      | DL-A2a, DL-A3 released; DL-P3                           |
-| ⬜     | DL-P5         | Learn over the whole instance                                                | pipeline home                                        | Two proposal PRs                                                          | DL-A2b released; DL-P4                                  |
-| ⬜     | DL-P6         | G4 evidence: feature flag and monitoring                                     | pilot repository and pipeline home                   | G4 decided on data                                                        | D11                                                     |
-| ⬜     | DL-P7         | The Agent Ops Review report                                                  | pipeline home and an Argus schedule                  | Metrics for promotions and demotions                                      | DL-P1                                                   |
-| ⬜     | DL-M1         | Working model v1.1                                                           | the published working model; the setup folder        | The document and the agents must say the same                             | your go                                                 |
-| ⬜     | DL-V          | The pilot re-run                                                             | –                                                    | End-to-end verification; counts towards the soak                          | everything above                                        |
+| Status | #             | Workstream                                                                   | Branch / home                                 | Why here                                                                  | Depends on                                              |
+| ------ | ------------- | ---------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------- |
+| 🟡     | DL-A0         | Close out the setup-folder feature (#94): Windows done gate, probes, release | – (probes on this machine; `argus release`)   | Merged but not verified on Windows; the pipeline moves onto it            | – (can run alongside)                                   |
+| ✅     | DL-A1         | Revise notes accumulate                                                      | `fix/revise-notes-accumulate`                 | Gates are the human control in this model; a lost note is a lost decision | –                                                       |
+| ✅     | DL-A2a        | Spawn phases                                                                 | `main` (`c1a634e`, #96)                       | The core gap: one lane, branch and PR per task                            | –                                                       |
+| ✅     | DL-A2b        | The parent's view of its children                                            | `main` (`c1a634e`, #96)                       | Learn over the whole instance                                             | DL-A2a                                                  |
+| ✅     | DL-A2c        | Spawn phases on the board                                                    | `main` (`c1a634e`, #96)                       | Seeing children, deciding at the `children` pause                         | DL-A2a (contracts)                                      |
+| ✅     | DL-A4 + DL-A3 | Task inputs for checks, then gates a polled command approves                 | `main` (`c1a634e`, #96)                       | G1 and G3 advance on a merge; task-scope checks                           | –                                                       |
+| ⬜     | WS13          | (reliability) the `.claude.json` race                                        | `fix/claude-config-race`                      | Before any `maxParallel` above 1                                          | DL-A0 (where `.claude.json` lives under a setup folder) |
+| ⬜     | DL-P0         | Hygiene on the current pipeline                                              | API (admin session)                           | Only if the current pipeline runs before DL-P4                            | –                                                       |
+| 🔵     | DL-P1         | A versioned home for the pipeline                                            | a local git repository (D9)                   | Learn needs somewhere to propose pipeline changes                         | D9                                                      |
+| 🔵     | DL-P2         | Autonomy policy v2 and lane profiles                                         | pipeline home                                 | Levels as profiles; no clamp                                              | DL-P1; D6, D7                                           |
+| 🔵     | DL-P3         | The task-loop pipeline (child)                                               | pipeline home                                 | One task, agent, branch and PR                                            | DL-A2a, DL-A3, DL-A4 released; DL-P1, DL-P2             |
+| 🔵     | DL-P4         | Rework the delivery-loop pipeline (parent)                                   | pipeline home                                 | Spec PR, Plan per task, the `tasks` spawn phase, Ship after the join      | DL-A2a, DL-A3 released; DL-P3                           |
+| 🔵     | DL-P5         | Learn over the whole instance                                                | pipeline home                                 | A context PR and a pipeline proposal branch                               | DL-A2b released; DL-P4                                  |
+| ⬜     | DL-P6         | G4 evidence: feature flag and monitoring                                     | pilot repository and pipeline home            | G4 decided on data                                                        | D11                                                     |
+| ⬜     | DL-P7         | The Agent Ops Review report                                                  | pipeline home and an Argus schedule           | Metrics for promotions and demotions                                      | DL-P1                                                   |
+| ⬜     | DL-M1         | Working model v1.1                                                           | the published working model; the setup folder | The document and the agents must say the same                             | your go                                                 |
+| ⬜     | DL-V          | The pilot re-run                                                             | –                                             | End-to-end verification; counts towards the soak                          | everything above                                        |
 
 Release after each merged DL-A workstream, as the reliability plan does. DL-A1, DL-A2a and DL-A4 + DL-A3 are independent and can be built in any order; this table's order is the proposed one (D13).
 
-**How DL-A2 to DL-A4 were built (2026-10-22).** A cloud session built them. It could not leave work staged on one branch per workstream, so each workstream is one commit on `claude/cool-goldberg-325t64`, on top of DL-A1 (`0017d3f`), in this order: DL-A4 `9355865`, DL-A3 `ee56f8a`, DL-A2a `46cdb73`, DL-A2b `94e4e6e`, DL-A2c `01c3a53`. A last commit, `6075d3b`, adds an offline end-to-end test of the loop and the fixes from a review of the whole branch. Each commit passed the done gate on Linux and a review whose findings independent checks confirmed before they were fixed. 🔵 here means committed on that branch: not merged to `main`, not released, and not run on Windows.
+**How DL-A2 to DL-A4 were built (2026-10-22).** A cloud session built them. It could not leave work staged on one branch per workstream, so each workstream is one commit on `claude/cool-goldberg-325t64`, on top of DL-A1 (`0017d3f`), in this order: DL-A4 `9355865`, DL-A3 `ee56f8a`, DL-A2a `46cdb73`, DL-A2b `94e4e6e`, DL-A2c `01c3a53`. A last commit, `6075d3b`, adds an offline end-to-end test of the loop and the fixes from a review of the whole branch. Each commit passed the done gate on Linux and a review whose findings independent checks confirmed before they were fixed. The branch was then squash-merged into `main` as `c1a634e` (#96) on 2026-10-22, so those commit ids no longer exist. `argus pipeline` and `argus skills` (#97) followed. The server runs all of it from the pinned build `1.0.0-7165940` (restarted 2026-10-26). No version is tagged yet: `[Unreleased]` still holds the work, and the version number is your call (`docs/RELEASING.md`).
 
 ## Argus workstreams
 
 ### DL-A0 — Close out the setup-folder feature (#94)
 
-**Status:** 🟡 Merged as `6e26d87` and running in the pinned build `1.0.0-15a6fd5`; still under `[Unreleased]`. Carried over on 2026-10-21 from the retired headless-isolation handoff (deleted; it stays in git history).
+**Status:** 🟡 Merged as `6e26d87` and running in the pinned build `1.0.0-7165940`; still under `[Unreleased]`. Carried over on 2026-10-21 from the retired headless-isolation handoff (deleted; it stays in git history).
 
 - **The Windows done gate.** CI's `windows` job ran only the server suite on the PR's first push; the web tests and the checks after them did not run. Run the full done gate on Windows against the reliability baseline.
 - **Probes, one at a time** (real-CLI probes race on `.claude.json`). Use a scratch setup folder signed in with the existing token, and a scratch repository with marker files, `.claude/agents`, `.claude/commands` and a `.mcp.json`:
@@ -165,7 +170,7 @@ Release after each merged DL-A workstream, as the reliability plan does. DL-A1, 
 
 ### DL-A1 — Revise notes accumulate
 
-**Status:** ✅ Merged to `main` on 2026-10-21; not released yet, so the pinned server still runs without it · **Branch:** `fix/revise-notes-accumulate` · **Size:** S–M (about a day) · **Behaviour change.**
+**Status:** ✅ Merged to `main` on 2026-10-21; in the pinned build `1.0.0-7165940` · **Branch:** `fix/revise-notes-accumulate` · **Size:** S–M (about a day) · **Behaviour change.**
 
 **Today:**
 
@@ -241,7 +246,7 @@ Release after each merged DL-A workstream, as the reliability plan does. DL-A1, 
 
 ### DL-A2 — Spawn phases: one child instance per task, joined
 
-**Status:** 🔵 Committed on 2026-10-22 on `claude/cool-goldberg-325t64`: DL-A2a `46cdb73`, DL-A2b `94e4e6e`, DL-A2c `01c3a53` (see the outcome at the end of this section). Not merged, not released; Windows is ready for verification · **Branches (as planned):** `feat/spawn-phases` (DL-A2a, size L) first; then `feat/spawn-children-context` (DL-A2b, M) and `feat/spawn-board` (DL-A2c, M), which can run in parallel. Designed against `15a6fd5` by a read-only pass; line anchors are at that commit.
+**Status:** ✅ Merged to `main` as part of `c1a634e` (#96) on 2026-10-22 (see the outcome at the end of this section); in the pinned build `1.0.0-7165940` · **Branches (as planned):** `feat/spawn-phases` (DL-A2a, size L) first; then `feat/spawn-children-context` (DL-A2b, M) and `feat/spawn-board` (DL-A2c, M), which can run in parallel. Designed against `15a6fd5` by a read-only pass; line anchors are at that commit.
 
 **Verified facts that shape it**
 
@@ -358,7 +363,7 @@ Follow-ups, not done:
 
 ### DL-A4 and DL-A3 — Task inputs for checks, then gates a polled command can approve
 
-**Status:** 🔵 Committed on 2026-10-22 on `claude/cool-goldberg-325t64`: DL-A4 `9355865`, then DL-A3 `ee56f8a` (see the outcome at the end of this section). Not merged, not released; Windows is ready for verification · **Branch (as planned):** `feat/approval-conditions`, with DL-A4 as the first commit and DL-A3 after it, because DL-A3 uses DL-A4's inputs · **Size:** S (DL-A4, half a day) + M (DL-A3, 2–3 days).
+**Status:** ✅ Merged to `main` as part of `c1a634e` (#96) on 2026-10-22 (see the outcome at the end of this section); in the pinned build `1.0.0-7165940` · **Branch (as planned):** `feat/approval-conditions`, with DL-A4 as the first commit and DL-A3 after it, because DL-A3 uses DL-A4's inputs · **Size:** S (DL-A4, half a day) + M (DL-A3, 2–3 days).
 
 #### DL-A4 — Per-instance inputs for command checks
 
@@ -499,6 +504,28 @@ Follow-ups, not done:
 
 The pipeline workstreams change the pipeline's definitions, prompts and pack (templates, autonomy policy, check scripts), not Argus. Each lands as a PR in the pipeline's versioned home (DL-P1) and is applied by a person.
 
+**Outcome (2026-10-26): a one-person loop, drafted, not applied.** The DL-P workstreams below were written for a pod with four gates. On 2026-10-26 the target became a one-person loop with no approval gates, so the drafts in the pipeline's repository implement that loop rather than the sections below. Where a section and this block disagree, this block is the current design.
+
+- **The pipeline's home** is a local git repository with no remote; its README describes the loop. Its index holds a baseline (today's pack and definition, unchanged); the rework is unstaged on top. The baseline renders back with no diff, which meets DL-P1's done-when.
+- **The loop:** an idea queue → Discover → Define (the spec is the first commit on `feature/<slug>`, cut from the idea's base branch) → Plan (at most 10 tasks, each with its own type, risk class and level) → one task loop per task (L1 ADR, L2 guarded, L3 or L4 build, then verify and a PR into the feature branch) → Ship (the feature branch's PR into its base) → Learn → Apply learnings. It waits only for merges: each task PR, the feature PR, and Learn's context PR and loop proposal.
+- **What replaces the gates.** Without G2 nobody reads a plan, so nothing a plan says can choose what runs or how freely:
+  - the verification commands live in the project's config, which Learn may not change;
+  - `guarded.mjs` fails any task above L2 that changed a file the config guards (authentication, security, migrations), whatever task type the plan gave it;
+  - `lane.mjs` holds each lane to the spawned task's level and the policy.
+  - `plan.mjs` checks Plan's task list before any task starts: the cap, the ids and dependencies, each level against the policy, and guarded files at most L2. A failure retries Plan with the reasons.
+- **Nothing a check judges by comes from git config,** which every agent with git access can rewrite. Bases and targets come from the trigger payload, or from the config. Every check and poll starts `git` and `az` from the pack's folder, with `git -C`.
+- **Push rules.** Each phase may push one branch family with a bare `*` (`Bash(git push -u origin task/*)`), because `:*` means a space and then anything. A second argument is denied. Two headless probes confirmed both rules.
+- **Learn improves the loop.** `proposal.mjs` commits Learn's staged changes onto `proposal/<slug>` in the pipeline's repository. It refuses any change to a definition beyond prompts, names and added checks, and any change to the checks, the policy, the config or the scripts. The last phase, `apply-learnings`, waits (`settle.mjs`) until the context PR is merged or abandoned and the proposal is merged or deleted.
+- **The queue and the apply are one person-side script,** `scripts/pump.mjs`. Run on a schedule as the person, it applies a new `main` of the pipeline's repository to Argus, then starts the oldest queued idea when the loop is idle. A git hook for the apply was refused by the session's permission rules, so the pump does both.
+- **`enabled` is the person's switch.** The templates leave it out; an apply keeps what Argus holds, so an auto-applied learning never switches the loop off.
+- **Questions, only when needed.** Discover, Define, Plan and an L1 decision are gated, but `ask.mjs` opens the gate (`approveWhen`, every 30 s) unless the step left a question open in `questions.json`. The step finishes with its recommended option either way: approving takes the recommendations, a revise note answers, and the answers land under `answered` for Learn. A native Argus feature (no poll delay, a question form) waits until the pilot shows it is needed.
+- **The one stop that is not a merge:** a failed task, or an abandoned task PR, pauses the spawn phase until the person re-runs the task, accepts the rest or aborts. Argus refuses `approveWhen` on a spawn phase. While that pause lasts, the queue waits.
+- **Verified:** both definitions pass Argus's validator, and it drops none of their fields (the parent was validated with a stand-in spawn target). Smoke runs against scratch repositories passed 57 cases; the suites live in the pipeline's repository (`tests/`). **Not verified:** any run of the loop itself.
+- **Open:**
+  - the pilot repository has no branch policies, so a direct push would bypass the merge waits. The policy should require a PR without a second reviewer, because every PR is opened under the person's own sign-in;
+  - set a spend budget, because spawning holds while over budget;
+  - the agents' working model in the pipeline's repository is rewritten for one person. The published working model is unchanged (DL-M1).
+
 ### DL-P0 — Hygiene on the current pipeline
 
 **Status:** ⬜ · **Needs:** nothing new in Argus · **Only if** the current pipeline runs again before DL-P4. Otherwise DL-P1 carries the fixes and DL-P3 replaces the L1/L2 path.
@@ -511,17 +538,18 @@ The pipeline workstreams change the pipeline's definitions, prompts and pack (te
 
 ### DL-P1 — A versioned home for the pipeline
 
-**Status:** ⬜ · **Needs:** decision D9.
+**Status:** 🔵 Baseline staged in a local repository (D9, 2026-10-26); see the outcome above.
 
-- A private repository (default, D9) holding:
+- A local git repository (D9) holding:
   - `pack/`: the templates (SPEC, PR, ADR), `autonomy-policy.json` and `checks/*.mjs`;
   - `setup/CLAUDE.md`: the working model the agents load, copied into the setup folder by the sync script;
   - `definitions/`: the parent and child definitions as templates, with placeholders for machine paths and no `hookToken`;
-  - `scripts/sync.mjs`: renders the templates, shows the diff against the live definitions (`GET /api/pipelines`) and applies them with `PUT /api/pipelines/:id` through an admin session. A person runs it. It stops when an instance is running or waiting, unless forced;
+  - `scripts/sync.mjs`: renders the templates, shows the diff against the live definitions and applies them. A person runs it. It stops when an instance is running or waiting, unless forced. Since #97 it can drive `argus pipeline show`, `validate` and `update` instead of calling the routes itself, so every apply is validated before it saves and the login stays per call;
   - `notes/`: the pilot-specific notes.
 - `.gitignore` and the sync script exclude `settings.json`, `.credentials.json`, `.claude.json`, `projects/` and everything else the CLI writes into the setup folder.
 - The definitions read the pack from the clone (`additionalDirectories` and the check commands point there), so a merged change is live after the next sync. The templates carry the `cwd` and `claudeConfigDir` fixes (gaps 12 and 13).
 - **Done when** exporting today's definition and rendering it back gives no diff except machine paths, and a dry-run sync reports no change.
+- **Two commits, so the round trip stays checkable:** first the faithful templates (the done-when above), then the `cwd` and `claudeConfigDir` fixes as their own reviewed diff, applied by a sync.
 
 ### DL-P2 — Autonomy policy v2 and lane profiles
 
