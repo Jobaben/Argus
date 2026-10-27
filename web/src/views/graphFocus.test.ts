@@ -123,7 +123,7 @@ describe("followScroll", () => {
     expect(onScreen("docs").right).toBeGreaterThan(872);
   });
 
-  it("never scrolls into the runway of a much wider graph to follow", () => {
+  it("centres the running phase of a much wider graph, using the runway at its start", () => {
     const chain = Array.from({ length: 30 }, (_, i) =>
       p(`c${i}`, i === 1 ? "working" : i < 1 ? "done" : "idle", i === 0 ? [] : [`c${i - 1}`]),
     );
@@ -132,21 +132,19 @@ describe("followScroll", () => {
     const runway = { x: 0, y: runwayFor(layout.height, viewport.h, 12) };
     expect(runway.y).toBeGreaterThan(0);
     const frame = { scale: 1, runway };
-    // Near the top, the graph's own start: the runway above stays out of view.
-    expect(followScroll(chain, layout, viewport, frame)).toEqual({ left: 0, top: runway.y });
-    // Further down, just enough to bring the running phase in.
+    /** How far the phase's middle is from the tile's middle. */
+    const offCentre = (phases: typeof chain, id: string) => {
+      const n = layout.nodes.find((q) => q.id === id)!;
+      const { top } = followScroll(phases, layout, viewport, frame)!;
+      return n.y + layout.nodeH / 2 + runway.y - top - viewport.h / 2;
+    };
+    // Near the start the runway above it lets the second phase reach the middle.
+    expect(Math.abs(offCentre(chain, "c1"))).toBeLessThanOrEqual(1);
     const later = chain.map((q, i) => ({
       ...q,
       status: i < 20 ? ("done" as const) : i === 20 ? ("working" as const) : ("idle" as const),
     }));
-    const node = layout.nodes.find((n) => n.id === "c20")!;
-    const next = layout.nodes.find((n) => n.id === "c21")!;
-    const top = followScroll(later, layout, viewport, frame)!.top;
-    // The running phase clear of the edge, and the one after it in view too,
-    // so the run moves on onto something already showing.
-    expect(node.y + runway.y - top).toBeGreaterThanOrEqual(FOLLOW_MARGIN_PX - 0.5);
-    expect(next.y + layout.nodeH + runway.y - top).toBeLessThanOrEqual(viewport.h + 0.5);
-    expect(next.y + runway.y - top).toBeGreaterThanOrEqual(0);
+    expect(Math.abs(offCentre(later, "c20"))).toBeLessThanOrEqual(1);
   });
 
   it("centres phases that fit only without the margin", () => {

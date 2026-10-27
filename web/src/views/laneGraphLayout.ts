@@ -136,24 +136,6 @@ export function nodeWidthFor(names: string[], extras: number[] = []): number {
   return Math.round(Math.min(NODE_MAX_W, Math.max(NODE_MIN_W, widest + 64)));
 }
 
-/**
- * Top-down when that fits, left-to-right when only that fits, otherwise
- * whichever overflows less. A wide fan-out is the case this exists for: eight
- * parallel phases are a long row top-down and a short column left-to-right.
- * Unmeasured (first paint, jsdom) means unknown, and gets top-down.
- */
-export function chooseOrientation(
-  tb: { width: number; height: number },
-  lr: { width: number; height: number },
-  availW: number,
-): Orientation {
-  if (availW <= 0 || tb.width <= availW) return "TB";
-  if (lr.width <= availW) return "LR";
-  const overflow = (l: { width: number; height: number }) =>
-    Math.max(0, l.width - availW) * l.height;
-  return overflow(lr) < overflow(tb) ? "LR" : "TB";
-}
-
 export interface LaneNode {
   id: string;
   stage: number;

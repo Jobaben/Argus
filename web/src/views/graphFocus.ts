@@ -59,17 +59,15 @@ export function activePhases(phases: readonly FocusPhase[]): string[] {
 export const FOLLOW_MARGIN_PX = 32;
 
 /**
- * Where following scrolls: the least scroll from the graph's own start that
- * shows every phase the run is on, a margin inside the tile's edge — so while
- * they fit where the graph starts, it stays there with its root in view.
+ * Where following scrolls: the middle of the phases the run is on, in the
+ * middle of the tile. When they are wider than the tile, the view starts where
+ * the work starts instead, a margin inside the edge.
  *
- * Per axis, in scroll offsets. It used to centre the middle of the active
- * phases, which on a graph only a little wider than its tile scrolled several
- * hundred pixels into the runway and pushed the root, the join and the chain
- * after it out of view, to show phases that were already in view. Centring is
- * now what is left when the phases fit but the margin does not; when they don't
- * fit at all, the view starts where the work starts. Never into the runway —
- * that is for centring an end on request, not for following.
+ * Per axis, in scroll offsets, and never past the scroll range: on a graph only
+ * a little wider than its tile there is no runway, so the view stops at the
+ * graph's own end rather than scrolling into empty space and pushing the root
+ * out of view. On a long graph the runway lets the first and last phase reach
+ * the centre too.
  */
 export function followScroll(
   phases: readonly FocusPhase[],
@@ -84,17 +82,9 @@ export function followScroll(
   const axis = (starts: number[], size: number, extent: number, view: number, runway: number) => {
     const lo = Math.min(...starts) * s;
     const hi = (Math.max(...starts) + size) * s;
-    const span = hi - lo;
-    // One more node's worth past the work where there is room for it, so a
-    // run that moves on lands on what is already showing rather than on the
-    // edge, and the reader sees what comes next.
-    const ahead = Math.min(size * s, Math.max(0, view - span - 2 * FOLLOW_MARGIN_PX));
-    const want =
-      span > view
-        ? lo - FOLLOW_MARGIN_PX
-        : hi + ahead + Math.min(FOLLOW_MARGIN_PX, (view - span - ahead) / 2) - view;
-    const end = Math.max(0, extent * s - view);
-    return Math.round(runway + Math.min(end, Math.max(0, want)));
+    const want = hi - lo > view ? lo - FOLLOW_MARGIN_PX : (lo + hi) / 2 - view / 2;
+    const end = Math.max(0, extent * s - view + 2 * runway);
+    return Math.round(Math.min(end, Math.max(0, runway + want)));
   };
   return {
     left: axis(

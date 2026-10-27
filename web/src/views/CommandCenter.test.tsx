@@ -211,20 +211,22 @@ describe("CommandCenter", () => {
     // The last phase stays reachable as a graph node even though only one
     // phase's steps are in focus.
     expect(screen.getByRole("button", { name: /Phase23/ })).toBeInTheDocument();
+    // Nothing scrolls by itself: the graph tile is the one view that moves,
+    // and it pans by dragging.
     const scrollers = [...container.querySelectorAll(".overflow-auto, .overflow-x-auto")];
-    expect(scrollers).toEqual([screen.getByTestId("phase-graph")]);
+    expect(scrollers).toEqual([]);
+    expect(screen.getByTestId("phase-graph").className).toContain("overflow-hidden");
   });
 
-  it("keeps the focus panel's floor beside the graph and the card inside its column", () => {
+  it("puts the graph above the focus panel and keeps the card inside its column", () => {
     mockOverview.overview = [
       entry("release-train", "running", ["succeeded", "running", "pending"]),
     ];
     render(<CommandCenter />);
 
     const board = screen.getByTestId("instance-board");
-    expect(board.style.gridTemplateColumns).toMatch(
-      /^minmax\(0, \d+(\.\d+)?px\) minmax\(360px, 1fr\)$/,
-    );
+    expect(board.className).toContain("flex-col");
+    expect(board.style.gridTemplateColumns).toBe("");
     expect(board.closest("article")?.className).toContain("overflow-x-clip");
   });
 

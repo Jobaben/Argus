@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import {
-  chooseOrientation,
   edgeState,
   LANE_GEOMETRY,
   laneLayout,
@@ -248,29 +247,5 @@ describe("MIN_SCALE", () => {
   it("keeps the graph's smallest text at 9px or more on screen", () => {
     // Index, "Gate" and route labels are 11px; names are 12px.
     expect(11 * MIN_SCALE).toBeGreaterThanOrEqual(9);
-  });
-});
-
-describe("chooseOrientation", () => {
-  const tb = { width: 2000, height: 120 };
-  const lr = { width: 520, height: 400 };
-
-  it("keeps top-down whenever it fits", () => {
-    expect(chooseOrientation({ width: 600, height: 400 }, lr, 700)).toBe("TB");
-  });
-
-  it("turns a wide fan-out sideways when only that fits", () => {
-    expect(chooseOrientation(tb, lr, 700)).toBe("LR");
-  });
-
-  it("picks whichever overflows less when neither fits", () => {
-    expect(chooseOrientation(tb, lr, 300)).toBe("LR");
-    expect(chooseOrientation({ width: 400, height: 100 }, { width: 900, height: 900 }, 300)).toBe(
-      "TB",
-    );
-  });
-
-  it("treats an unmeasured width as unknown, and stays top-down", () => {
-    expect(chooseOrientation(tb, lr, 0)).toBe("TB");
   });
 });

@@ -8,7 +8,7 @@ import { useRuns } from "../useRuns";
 import { SituationStrip } from "./SituationStrip";
 import { ActivityRail } from "./ActivityRail";
 import { PhaseGraph, RouteCondition } from "./PhaseGraph";
-import { FOCUS_MIN_PX, useBoardArrangement, useElementWidth } from "./useLaneLayout";
+import { useElementWidth, usePhaseLayout } from "./useLaneLayout";
 import { edgeState } from "./laneGraphLayout";
 import { decisionFields, isLongValue } from "./decisionValue";
 import { attentionPhase } from "./phaseAttention";
@@ -672,34 +672,20 @@ function InstanceBoard({
   const selectedIndex = row.phases.findIndex((p) => p.id === selectedId);
   const selected = selectedIndex === -1 ? null : row.phases[selectedIndex];
   const phaseNames = useMemo(() => new Map(row.phases.map((p) => [p.id, p.name])), [row.phases]);
-  // The graph sits beside the focus panel on a wide card and above it on a
-  // narrow one — the step tiles need the horizontal room more than the graph
-  // does, so the graph is what moves. Measured here, not with a viewport
-  // breakpoint: the card's width depends on whether the activity rail is
-  // beside the board, which a media query cannot see.
+  // The graph sits above the focus panel at every width: the step tiles get
+  // the card's full width, and the graph pans inside its own window. Measured
+  // here, not with a viewport breakpoint: the card's width depends on whether
+  // the activity rail is beside the board, which a media query cannot see.
   const [boardRef, width] = useElementWidth<HTMLDivElement>();
-  const { layout, stacked, graphTrackPx } = useBoardArrangement(row.phases, width);
+  const layout = usePhaseLayout(row.phases);
   return (
-    <div
-      ref={boardRef}
-      data-testid="instance-board"
-      className={`min-w-0 ${stacked ? "flex flex-col gap-3" : "grid items-start gap-4"}`}
-      // Neither track can take the other's room: the graph's is capped and
-      // may shrink, the panel's has a floor.
-      style={
-        stacked
-          ? undefined
-          : {
-              gridTemplateColumns: `minmax(0, ${graphTrackPx}px) minmax(${FOCUS_MIN_PX}px, 1fr)`,
-            }
-      }
-    >
-      {/* Stacked, the graph's well is as wide as the graph and sits at the
-          start of the card, where the panel below starts — a 190px chain
-          centred in a full-width well read as a loading placeholder. */}
+    <div ref={boardRef} data-testid="instance-board" className="flex min-w-0 flex-col gap-3">
+      {/* The graph's well is as wide as the graph and sits at the start of
+          the card, where the panel below starts — a 190px chain centred in a
+          full-width well read as a loading placeholder. */}
       <div
         className="min-w-0 max-w-full"
-        style={stacked && width > 0 ? { width: Math.min(layout.width + 2, width) } : undefined}
+        style={width > 0 ? { width: Math.min(layout.width + 2, width) } : undefined}
       >
         <PhaseGraph
           phases={row.phases}

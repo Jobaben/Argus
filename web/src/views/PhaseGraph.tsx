@@ -9,6 +9,7 @@ import {
   type EdgeState,
   type LaneLayout,
 } from "./laneGraphLayout";
+import { useDragPan } from "./useDragPan";
 import { useGraphFocus } from "./useGraphFocus";
 import { reasonText } from "./text";
 import { useElementWidth } from "./useLaneLayout";
@@ -272,18 +273,6 @@ const FADE_MASK = [
   "linear-gradient(to right, transparent 0, #000 var(--fade-l, 0px), #000 calc(100% - var(--fade-r, 0px)), transparent 100%)",
 ].join(", ");
 
-const SCROLL_KEYS = new Set([
-  "ArrowUp",
-  "ArrowDown",
-  "ArrowLeft",
-  "ArrowRight",
-  "PageUp",
-  "PageDown",
-  "Home",
-  "End",
-  " ",
-]);
-
 /** A node's small word — "Gate", "Skipped", "Try 2": readable, not shouted. */
 const MARKER = "shrink-0 text-micro font-semibold leading-none text-ink-faint";
 
@@ -319,8 +308,8 @@ export function PhaseGraph({
 
   const [scrollerRef, viewportW] = useElementWidth<HTMLDivElement>();
   const [zoom, setZoom] = useState<"fit" | "actual">("fit");
-  // Fit the width only: the long axis is what scrolling and following are
-  // for, and shrinking a long chain to fit its height would shrink its text.
+  // Fit the width only, down to the readable floor: past that a long chain
+  // pans rather than shrinking its text further.
   // Unmeasured (first paint, jsdom) draws at full size rather than guessing.
   const fitScale = viewportW > 0 ? Math.min(1, viewportW / layout.width) : 1;
   const scale = zoom === "fit" ? Math.max(MIN_SCALE, fitScale) : 1;
@@ -335,13 +324,15 @@ export function PhaseGraph({
   // before any input.
   const scrolls =
     viewportW > 0 && (overflows(scaledW, viewportW) || overflows(scaledH, MAX_TILE_HEIGHT_PX));
-  const { following, pause, resume, centreOn } = useGraphFocus(
+  const focus = useGraphFocus(
     scrollerRef,
     phases,
     layout,
     { scale, runway, ready: viewportW > 0 },
     selectedId,
   );
+  const { following, tracking, away, resume, stop, centreOn } = focus;
+  const pan = useDragPan(scrollerRef, { enabled: scrolls, onPan: focus.lookAway });
 
   useLayoutEffect(() => {
     const el = scrollerRef.current;
@@ -372,6 +363,9 @@ export function PhaseGraph({
   return (
     <div
       data-orientation={layout.orientation}
+      // The whole tile, toolbar included: reaching for Follow is not leaving.
+      onPointerEnter={focus.onPointerEnter}
+      onPointerLeave={focus.onPointerLeave}
       className="relative w-full min-w-0 max-w-full rounded-tile border border-line bg-ground-2/70 shadow-[inset_0_1px_3px_rgb(0_0_0/0.25)]"
     >
       {toolbar && (
@@ -387,11 +381,13 @@ export function PhaseGraph({
               data-testid="graph-follow"
               aria-pressed={following}
               title={
-                following
-                  ? "Keeping the phase the run is on in view. Press to stop following"
-                  : "Bring the phase the run is on into view, and keep following it"
+                !following
+                  ? "Bring the phase the run is on into view, and keep following it"
+                  : away
+                    ? "Back to the phase the run is on in a moment. Press to go back now"
+                    : "Keeping the phase the run is on in view. Press to stop following"
               }
-              onClick={following ? pause : resume}
+              onClick={following && !away ? stop : resume}
               className="aria-pressed:bg-eye/10 aria-pressed:text-eye"
             >
               Follow
@@ -415,18 +411,11 @@ export function PhaseGraph({
         role="group"
         aria-label="Phases"
         data-testid="phase-graph"
-        data-following={following ? "true" : "false"}
+        data-following={tracking ? "true" : "false"}
         onScroll={(e) => applyFade(e.currentTarget, runway)}
-        onWheel={pause}
-        onTouchStart={pause}
-        onPointerDown={(e) => {
-          // The scrollbar or the canvas takes the view over; a node click
-          // centres that node instead.
-          if (!(e.target as Element).closest("button")) pause();
-        }}
-        onKeyDown={(e) => {
-          if (SCROLL_KEYS.has(e.key)) pause();
-        }}
+        // Dragging is the only way to move the view: the wheel scrolls the
+        // page past the graph, and used to stop following on the way.
+        {...pan}
         style={{
           maxHeight: MAX_TILE_HEIGHT_PX,
           maskImage: FADE_MASK,
@@ -434,7 +423,7 @@ export function PhaseGraph({
           maskComposite: "intersect",
           WebkitMaskComposite: "source-in",
         }}
-        className="overflow-auto"
+        className={`touch-none overflow-hidden ${scrolls ? "cursor-grab active:cursor-grabbing" : ""}`}
       >
         {/* Sized to the scaled graph plus its runway so the scrollbars are
             honest; centred when it is narrower than the tile. */}

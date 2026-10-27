@@ -39,17 +39,24 @@ function nodeCentre(layout: LaneLayout, id: string): Point | null {
   return node ? { x: node.x + layout.nodeW / 2, y: node.y + layout.nodeH / 2 } : null;
 }
 
+/** How long after the pointer leaves the graph a view the user moved returns to the run. */
+export const RETURN_AFTER_MS = 5000;
+
 /**
- * Keeps the phases the run is on in view in a scrolling graph (see
- * {@link followScroll}), moving on as the run does — until the user scrolls it
- * themselves. From then on the view is theirs until they ask to follow again:
- * a board that pulls the view back while someone is reading a branch is worse
- * than one that never moved.
+ * Keeps the phases the run is on centred in a scrolling graph (see
+ * {@link followScroll}), moving on as the run does.
  *
- * Pausing is driven by input (wheel, touch, pointer, keys), never by `scroll`
- * events, which the follow's own smooth scroll fires too. A selection the
- * board makes itself — a gate opening, a failure landing — is still centred
- * once, followed or not, unless following already has it in view.
+ * Following is the user's switch. With it on, a drag or a node click only
+ * looks away: the view is theirs while the pointer is over the graph, and
+ * {@link RETURN_AFTER_MS} after it leaves, the view goes back to the run. The
+ * countdown waits for the pointer to leave, so the graph never moves under
+ * someone still reading a branch. With following off, the view stays where the
+ * user put it.
+ *
+ * Looking away is driven by input, never by `scroll` events, which the
+ * follow's own smooth scroll fires too. A selection the board makes itself — a
+ * gate opening, a failure landing — is still centred once, followed or not,
+ * unless following already has it in view.
  */
 export function useGraphFocus(
   scrollerRef: RefObject<HTMLElement | null>,
@@ -59,6 +66,9 @@ export function useGraphFocus(
   selectedId: string | null,
 ) {
   const [following, setFollowing] = useState(true);
+  const [away, setAway] = useState(false);
+  const returnTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tracking = following && !away;
   const last = useRef<{ left: number; top: number } | null>(null);
   const scrolled = useRef(false);
   const clicked = useRef<string | null>(null);
@@ -69,7 +79,7 @@ export function useGraphFocus(
   useEffect(() => {
     // Unmeasured, the scale and runway are placeholders: a scroll now would
     // land in the wrong place and make the real first placement a glide.
-    if (!following || !ready) return;
+    if (!tracking || !ready) return;
     const el = scrollerRef.current;
     if (!el) return;
     const placed = { scale, runway: { x: runwayX, y: runwayY } };
@@ -86,7 +96,7 @@ export function useGraphFocus(
     // The first placement jumps; every move after it is visible as a move.
     scrollTile(el, target, scrolled.current);
     scrolled.current = true;
-  }, [following, ready, phases, layout, scale, runwayX, runwayY, scrollerRef]);
+  }, [tracking, ready, phases, layout, scale, runwayX, runwayY, scrollerRef]);
 
   useEffect(() => {
     if (!ready) return;
@@ -95,29 +105,58 @@ export function useGraphFocus(
     if (selectedId === null || selectedId === prev || selectedId === clicked.current) return;
     // The board's pick moves with the run, so centring a phase following has
     // just brought into view undid the follow each time the run moved on.
-    if (following && activePhases(phases).includes(selectedId)) return;
+    if (tracking && activePhases(phases).includes(selectedId)) return;
     const el = scrollerRef.current;
     const point = nodeCentre(layout, selectedId);
     if (!el || !point) return;
     const runway = { x: runwayX, y: runwayY };
     scrollTile(el, scrollTargetFor(point, viewportOf(el), { scale, runway }), scrolled.current);
     scrolled.current = true;
-  }, [selectedId, ready, following, phases, layout, scale, runwayX, runwayY, scrollerRef]);
+  }, [selectedId, ready, tracking, phases, layout, scale, runwayX, runwayY, scrollerRef]);
 
-  const pause = () => {
+  const cancelReturn = () => {
+    if (returnTimer.current === null) return;
+    clearTimeout(returnTimer.current);
+    returnTimer.current = null;
+  };
+
+  useEffect(() => cancelReturn, []);
+
+  /** The user moved the view: theirs until the pointer has been gone a while. */
+  const lookAway = () => {
     const el = scrollerRef.current;
-    if (el && overflows(el)) setFollowing(false);
+    if (!el || !overflows(el)) return;
+    cancelReturn();
+    setAway(true);
   };
 
   const resume = () => {
+    cancelReturn();
     last.current = null;
+    setAway(false);
     setFollowing(true);
   };
 
-  /** Centre one phase and stop following: the user picked what to look at. */
+  const stop = () => {
+    cancelReturn();
+    setAway(false);
+    setFollowing(false);
+  };
+
+  const onPointerLeave = () => {
+    if (!following || !away) return;
+    cancelReturn();
+    returnTimer.current = setTimeout(() => {
+      returnTimer.current = null;
+      last.current = null;
+      setAway(false);
+    }, RETURN_AFTER_MS);
+  };
+
+  /** Centre one phase and look away: the user picked what to look at. */
   const centreOn = (id: string) => {
     clicked.current = id;
-    pause();
+    lookAway();
     const el = scrollerRef.current;
     const point = nodeCentre(layout, id);
     if (!el || !point) return;
@@ -125,5 +164,15 @@ export function useGraphFocus(
     scrolled.current = true;
   };
 
-  return { following, pause, resume, centreOn };
+  return {
+    following,
+    tracking,
+    away,
+    lookAway,
+    resume,
+    stop,
+    centreOn,
+    onPointerEnter: cancelReturn,
+    onPointerLeave,
+  };
 }
